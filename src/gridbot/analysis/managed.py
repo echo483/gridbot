@@ -32,7 +32,9 @@ REPO = Path(__file__).resolve().parents[3]
 SESSION_BUDGET_CENTS = "500"  # $5.00 hard cap per session
 WALL_CLOCK_LIMIT_S = 25 * 60
 
-KICKOFF = """Evidence for this run is mounted under /workspace/evidence/:
+KICKOFF = """Evidence for this run is mounted under /workspace/evidence/ (some
+sandboxes surface file mounts at /mnt/session/uploads/workspace/evidence/ —
+check both):
 
 - training_rounds.jsonl — the full training corpus, one JSON object per line.
   Columns: id; row_key "series:map:round" plus ":b<n>" suffix for time-bin
@@ -159,14 +161,19 @@ def main() -> None:
         listed = list(
             client.beta.files.list(scope_id=session.id, betas=["managed-agents-2026-04-01"])
         )
-        if listed:
-            for f in listed:
+        downloaded = 0
+        for f in listed:
+            try:
                 content = client.beta.files.download(f.id)
-                target = out_dir / Path(f.filename).name
-                content.write_to_file(str(target))
-                print(f"output: {target}")
-                if target.name == "telegram.txt":
-                    telegram_text = target.read_text().strip()[:900]
+            except anthropic.BadRequestError:
+                continue  # uploaded evidence is session-scoped but not downloadable
+            target = out_dir / Path(f.filename).name
+            content.write_to_file(str(target))
+            downloaded += 1
+            print(f"output: {target}")
+            if target.name == "telegram.txt":
+                telegram_text = target.read_text().strip()[:900]
+        if downloaded:
             break
         time.sleep(2 + attempt)
     else:

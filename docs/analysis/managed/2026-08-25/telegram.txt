@@ -1,0 +1,9 @@
+gridbot DRAFT deep analysis
+
+Leak filter reproduces exactly (2,898 dropped / 19,326 kept). ECONBUY1 + PISTOLCARRY1 anchors reproduce within ~1pt.
+
+KEY: H-MANADV1's 0.93 anchor is clock-confounded. At man-adv fixed +2, resolution falls 0.961 (20-45s clock) to 0.741 (>=90s); cluster logit clock coef -0.0247/s, p=1.7e-6, holds within every bin. Bar (i) falsifies under 0.85, so a pooled read is decided by the engine's detection-clock mix — risking a false PASS or FAIL.
+
+verdict.json empty: zero instances. Book capture, not instance supply, is the only constraint on all 4 bars.
+
+NEXT: pre-commit to reading bar (i) stratified by entry clock (already a recorded CELLS field).
