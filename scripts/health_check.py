@@ -30,9 +30,12 @@ def _newest_mtime(directory: Path) -> float:
     return newest
 
 
-def _is_active() -> bool:
+SERVICES = ("gridbot-capture.service", "gridbot-shadow.service")
+
+
+def _is_active(service: str) -> bool:
     r = subprocess.run(
-        ["systemctl", "--user", "is-active", "gridbot-capture.service"],
+        ["systemctl", "--user", "is-active", service],
         capture_output=True,
         text=True,
         check=False,
@@ -40,15 +43,15 @@ def _is_active() -> bool:
     return r.stdout.strip() == "active"
 
 
-def _restart() -> bool:
+def _restart(service: str) -> bool:
     r = subprocess.run(
-        ["systemctl", "--user", "restart", "gridbot-capture.service"],
+        ["systemctl", "--user", "restart", service],
         capture_output=True,
         text=True,
         check=False,
     )
     time.sleep(8)
-    return r.returncode == 0 and _is_active()
+    return r.returncode == 0 and _is_active(service)
 
 
 def _send(msg: str) -> None:
@@ -64,12 +67,12 @@ def _send(msg: str) -> None:
 def _problems() -> list[str]:
     problems: list[str] = []
     now = time.time()
-    if not _is_active():
-        healed = _restart()
-        if healed:
-            _send("🩹 gridbot capture was down — auto-restarted OK")
-        else:
-            problems.append("capture service DOWN (auto-restart failed)")
+    for service in SERVICES:
+        if not _is_active(service):
+            if _restart(service):
+                _send(f"🩹 {service} was down — auto-restarted OK")
+            else:
+                problems.append(f"{service} DOWN (auto-restart failed)")
     pm_age = now - _newest_mtime(config.DATA_DIR / "pm")
     if pm_age > PM_FRESH_S:
         problems.append(f"PM data stale ({int(pm_age / 60)}m)")

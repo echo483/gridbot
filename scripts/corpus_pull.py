@@ -41,8 +41,7 @@ def main() -> None:
             if r.status_code >= 300:
                 raise SystemExit(f"pull failed: HTTP {r.status_code} at offset {start}")
             rows = r.json()
-            for row in rows:
-                fh.write(json.dumps(row, sort_keys=True) + "\n")
+            fh.writelines(json.dumps(row, sort_keys=True) + "\n" for row in rows)
             n += len(rows)
             start += PAGE
             if len(rows) < PAGE or (args.limit and n >= args.limit):

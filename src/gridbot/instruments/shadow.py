@@ -22,6 +22,7 @@ from pathlib import Path
 from gridbot import config
 from gridbot.capture.files import DayWriter
 from gridbot.instruments.books import BookTops
+from gridbot.instruments.crossing import load_served
 from gridbot.instruments.detectors import detect
 from gridbot.instruments.market_match import match_market
 
@@ -89,6 +90,13 @@ class ShadowEngine:
         self.include_test = include_test
         self.seen: set[tuple] = set()
         self.counters = {"ss": 0, "book_msgs": 0, "instances": 0, "matched": 0}
+        try:
+            self.crossing = load_served()
+        except Exception as exc:  # noqa: BLE001 — shadow must outlive a bad artifact
+            log.warning("crossing detector disabled: %s", exc)
+            self.crossing = None
+        if self.crossing:
+            log.info("H-MODELENTRY1 crossing detector armed (roundwin-v1)")
 
     def cycle(self) -> bool:
         """One consume pass over all streams; True if anything was read."""
@@ -114,12 +122,16 @@ class ShadowEngine:
             return
         state = (record.get("data") or {}).get("seriesState") or {}
         self.counters["ss"] += 1
-        for instance in detect(state):
+        instances = detect(state)
+        if self.crossing:
+            instances = [*instances, *self.crossing.observe(state)]
+        for instance in instances:
             key = (
                 instance["hypothesis_id"],
                 instance["series_id"],
                 instance["map_number"],
                 instance["round_number"],
+                instance.get("dedup_extra", ""),
             )
             if key in self.seen:
                 continue
