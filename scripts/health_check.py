@@ -101,16 +101,38 @@ def _send(msg: str) -> None:
     )
 
 
-def _problems() -> list[str]:
+def _problems(prev: dict) -> tuple[list[str], dict]:
     problems: list[str] = []
     now = time.time()
+    graphical = _is_active("graphical-session.target")
+    escalated: list[str] = []
+    healed_at: dict[str, float] = {
+        s: t for s, t in (prev.get("healed_at") or {}).items() if now - t < 24 * 3600
+    }
+    prev_escalated = set(prev.get("escalated") or [])
     for service in SERVICES:
-        if not _is_active(service):
-            if _restart(service):
+        if _is_active(service):
+            continue
+        if not graphical:
+            # Keyring-anchored units must NEVER be force-started outside the
+            # graphical session: they would run with a locked keyring and go
+            # silently GRID-dark (review F4). Alert; do not start.
+            problems.append(f"{service} down (no graphical session — log in at console)")
+            continue
+        if service in prev_escalated:
+            # A triage agent owns this outage; don't race it with restarts
+            # or re-escalate every 5 minutes (review F5).
+            problems.append(f"{service} DOWN (escalated; triage in progress)")
+            escalated.append(service)
+            continue
+        if _restart(service):
+            if now - healed_at.get(service, 0) > 3600:
                 _send(f"🩹 {service} was down — auto-restarted OK")
-            else:
-                problems.append(f"{service} DOWN (auto-restart failed)")
-                _escalate(service, "watchdog self-heal failed; unit not active after restart")
+            healed_at[service] = now
+        else:
+            problems.append(f"{service} DOWN (auto-restart failed)")
+            escalated.append(service)
+            _escalate(service, "watchdog self-heal failed; unit not active after restart")
     pm_age = now - _newest_mtime(config.DATA_DIR / "pm")
     if pm_age > PM_FRESH_S:
         problems.append(f"PM data stale ({int(pm_age / 60)}m)")
@@ -122,17 +144,17 @@ def _problems() -> list[str]:
     free_gib = shutil.disk_usage(config.DATA_DIR).free // 2**30
     if free_gib < MIN_FREE_GIB:
         problems.append(f"disk low: {free_gib}GiB free")
-    return problems
+    return problems, {"escalated": escalated, "healed_at": healed_at}
 
 
 def main() -> None:
-    problems = _problems()
     prev = {"ok": True}
     if STATE_FILE.exists():
         try:
             prev = json.loads(STATE_FILE.read_text())
         except json.JSONDecodeError:
             pass
+    problems, flags = _problems(prev)
     ok = not problems
     stamp = datetime.now(UTC).strftime("%H:%M UTC")
     if not ok and prev.get("ok", True):
@@ -140,7 +162,9 @@ def main() -> None:
     elif ok and not prev.get("ok", True):
         _send(f"✅ gridbot health recovered ({stamp})")
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps({"ok": ok, "problems": problems, "checked": stamp}))
+    STATE_FILE.write_text(
+        json.dumps({"ok": ok, "problems": problems, "checked": stamp, **flags})
+    )
 
 
 if __name__ == "__main__":

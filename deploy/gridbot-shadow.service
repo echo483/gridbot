@@ -10,6 +10,7 @@
 Description=gridbot shadow engine (hypothesis instance recorder; no trading)
 After=network-online.target graphical-session.target
 PartOf=graphical-session.target
+Requisite=graphical-session.target
 StartLimitIntervalSec=600
 StartLimitBurst=20
 

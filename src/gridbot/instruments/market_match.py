@@ -1,8 +1,10 @@
 """Match a GRID series (two team names) to a Polymarket catalog market.
 
 Token-set containment over question/title/outcomes. Heuristic by design:
-every instance records the match score so weak matches can be excluded at
-verdict time instead of silently trusted.
+every instance records the match score AND the market kind so wrong matches
+can be excluded at verdict time instead of silently trusted. Kind matters:
+the registered hypotheses settle at ROUND level, so pricing them against a
+match- or map-winner book fabricates edge (tonight-code-review F1).
 """
 
 from __future__ import annotations
@@ -10,6 +12,16 @@ from __future__ import annotations
 import re
 
 _STOP = {"esports", "team", "gaming", "clan", "cs2", "cs", "the"}
+
+
+def market_kind(row: dict) -> str:
+    """"round" / "map" / "match", derived from the market's question text."""
+    text = f"{row.get('question') or ''} {row.get('event_title') or ''}"
+    if re.search(r"\bround\b", text, re.IGNORECASE):
+        return "round"
+    if re.search(r"\bmap\b", text, re.IGNORECASE):
+        return "map"
+    return "match"
 
 
 def _tokens(text: str) -> set[str]:
@@ -36,10 +48,18 @@ def team_outcome_token(market: dict | None, team: str) -> str | None:
     return None
 
 
-def match_market(catalog: dict[str, dict], team_a: str, team_b: str) -> dict | None:
-    """Best catalog row mentioning BOTH teams; None below the 0.6 threshold."""
+def match_market(
+    catalog: dict[str, dict], team_a: str, team_b: str, required_kind: str | None = None
+) -> dict | None:
+    """Best catalog row mentioning BOTH teams; None below the 0.6 threshold.
+
+    With ``required_kind`` set, rows of any other market kind are skipped —
+    an honest "no quotable market" beats a wrong-settlement price.
+    """
     best, best_score = None, 0.0
     for row in catalog.values():
+        if required_kind is not None and market_kind(row) != required_kind:
+            continue
         hay = _tokens(
             " ".join(
                 [str(row.get("question") or ""), str(row.get("event_title") or "")]
@@ -57,4 +77,5 @@ def match_market(catalog: dict[str, dict], team_a: str, team_b: str) -> dict | N
         "outcomes": best.get("outcomes"),
         "clob_token_ids": best.get("clob_token_ids"),
         "match_score": round(best_score, 3),
+        "kind": market_kind(best),
     }

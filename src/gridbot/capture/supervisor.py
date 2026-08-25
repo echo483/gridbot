@@ -119,6 +119,7 @@ def main() -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
     install_log_redaction()
+    config.grid_api_key()  # fail fast on a locked keyring — never run PM-only-dark
     asyncio.run(run(once=args.once))
 
 

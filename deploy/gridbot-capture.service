@@ -16,6 +16,9 @@ Documentation=file:///home/ops/gridbot/SECURITY.md
 After=network-online.target graphical-session.target
 Wants=network-online.target
 PartOf=graphical-session.target
+# Requisite: a direct start outside the graphical session FAILS FAST instead
+# of running with a locked keyring (silent GRID-dark — review F4).
+Requisite=graphical-session.target
 StartLimitIntervalSec=600
 StartLimitBurst=20
 

@@ -86,6 +86,26 @@ def round_winners(game: dict) -> list[str]:
     return winners
 
 
+def round_winners_by_seq(game: dict) -> dict[int, str]:
+    """Winning side keyed by the segment's OWN sequenceNumber.
+
+    Oracles must use this, not the positional list: an unresolvable-winner
+    segment leaves a hole here instead of shifting every later round's label
+    onto the wrong key (tonight-code-review F6 — labels are never fabricated).
+    """
+    out: dict[int, str] = {}
+    for seg in game.get("segments") or []:
+        if str(seg.get("type") or "").lower() != "round" or not seg.get("finished"):
+            continue
+        for team in seg.get("teams") or []:
+            if is_cs_node(team) and team.get("won"):
+                side = side_of(team)
+                if side:
+                    out[int(seg.get("sequenceNumber") or 0)] = side
+                break
+    return out
+
+
 def _has_awp_name(name: str) -> bool:
     n = name.strip().lower()
     return n == "awp" or "awp" in n.split()

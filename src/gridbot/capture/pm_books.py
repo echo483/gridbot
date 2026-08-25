@@ -101,7 +101,10 @@ class BookRecorder:
                     timeout=30.0,
                 )
                 resp.raise_for_status()
-                self.writer.append({"type": "rest_books", "books": resp.json()})
+                books = resp.json()
+                if not isinstance(books, list):
+                    raise ValueError("unexpected /books shape")  # engage per-token fallback
+                self.writer.append({"type": "rest_books", "books": books})
             except Exception:  # noqa: BLE001 — batch shape unverified; fall back to per-token GET
                 # Fallback: one-by-one GET; slower but shape-proof.
                 for t in chunk[:20]:

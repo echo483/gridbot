@@ -20,7 +20,7 @@ from collections import defaultdict
 
 from gridbot import config
 from gridbot.corpus import rows as r
-from gridbot.instruments.market_match import team_outcome_token
+from gridbot.instruments.market_match import market_kind, team_outcome_token
 
 # Frozen entry-price triggers from the registry texts (paper eligibility).
 ENTRY_ASK = {"H-MANADV1": 0.85, "H-ECONBUY1": 0.78, "H-PISTOLCARRY1": 0.80}
@@ -39,12 +39,23 @@ def _iter_jsonl(path):
 def load_instances(replay: bool, include_test: bool) -> list[dict]:
     prefix = "replay" if replay else "instances"
     out: list[dict] = []
+    seen: set[tuple] = set()  # first record wins: immunizes N vs restart duplicates
     for path in sorted((config.DATA_DIR / "shadow").glob(f"{prefix}-*.jsonl")):
         for rec in _iter_jsonl(path):
             if rec.get("type") != "instance":
                 continue
             if not include_test and rec.get("series_id") in config.GRID_TEST_SERIES_IDS:
                 continue
+            key = (
+                rec.get("hypothesis_id"),
+                rec.get("series_id"),
+                rec.get("map_number"),
+                rec.get("round_number"),
+                rec.get("dedup_extra", ""),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
             out.append(rec)
     return out
 
@@ -62,14 +73,27 @@ def build_oracles(series_ids: set[str]) -> dict[str, dict[tuple[int, int], str]]
             state = (rec.get("data") or {}).get("seriesState") or {}
             for game in state.get("games") or []:
                 map_number = int(game.get("sequenceNumber") or 1)
-                for i, side in enumerate(r.round_winners(game)):
-                    oracles[sid].setdefault((map_number, i + 1), side)
+                for round_number, side in r.round_winners_by_seq(game).items():
+                    oracles[sid].setdefault((map_number, round_number), side)
     return oracles
 
 
+def _round_market_token(instance: dict) -> str | None:
+    """Team token, but ONLY when the recorded market is a round book.
+
+    Defense-in-depth for instances recorded before the matcher became
+    kind-aware: a match/map book priced against a round settlement fabricates
+    edge, so such instances count as unquoted (F1, tonight-code-review).
+    """
+    market = instance.get("market")
+    if not market or market_kind(market) != "round":
+        return None
+    return team_outcome_token(market, instance.get("team") or "")
+
+
 def _team_ask(instance: dict) -> float | None:
-    """Recorded ask for the instance's own team outcome, when identifiable."""
-    token = team_outcome_token(instance.get("market"), instance.get("team") or "")
+    """Recorded round-book ask for the instance's own team, when identifiable."""
+    token = _round_market_token(instance)
     if token is None:
         return None
     return ((instance.get("books") or {}).get(token) or {}).get("ask")
@@ -81,7 +105,7 @@ def attach_maker(rows: list[dict]) -> None:
 
     pairs = []
     for row in rows:
-        token = team_outcome_token(row.get("market"), row.get("team") or "")
+        token = _round_market_token(row)
         quote = maker_quote(row, token)
         row["maker_price"] = quote.price if quote else None
         row["maker_filled"] = None

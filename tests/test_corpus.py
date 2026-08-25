@@ -225,3 +225,25 @@ def test_leak_guard_drops_segment_first_transition() -> None:
     rows = build_series_rows("777", states)
     # stale poll would be keyed 777:1:2 with round-1 end-state features — gone
     assert all(r["round_number"] == 1 for r in rows)
+
+
+def test_unresolvable_segment_leaves_oracle_hole_not_shifted_labels() -> None:
+    """Review F6: positional oracles moved round 3's winner onto round 2's key."""
+    polls_round2 = [
+        snap(games=[game(
+            teams=[team("Counter-Terrorists", "A", score=1), team("Terrorists", "B")],
+            segments=[rseg(1, "ct"), rseg(2, None, finished=False)],
+            clock={"currentSeconds": 60},
+        )])
+    ]
+    unresolvable = {"type": "round", "sequenceNumber": 2, "finished": True,
+                    "teams": [{"__typename": "SegmentTeamStateCs2",
+                               "side": "spectator", "won": True}]}
+    resolved3 = game(
+        teams=[team("Counter-Terrorists", "A", score=1), team("Terrorists", "B", score=1)],
+        segments=[rseg(1, "ct"), unresolvable, rseg(3, "t")],
+    )
+    states = [*polls_round2, snap(games=[resolved3])]
+    rows = build_series_rows("777", states)
+    # round 2's winner was never observed -> its polls emit NOTHING
+    assert not [r for r in rows if r["round_number"] == 2]

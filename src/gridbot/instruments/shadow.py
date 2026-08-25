@@ -38,6 +38,7 @@ class Follow:
         self.prefix = prefix
         self.path: Path | None = None
         self.fh = None
+        self._partial = ""  # carry buffer: torn tail of a concurrent append
         self._open_latest(seek_end=not from_start)
 
     def _latest(self) -> Path | None:
@@ -51,6 +52,7 @@ class Follow:
         if self.fh:
             self.fh.close()
         self.path = latest
+        self._partial = ""  # never splice fragments across day files
         self.fh = open(latest)  # noqa: SIM115 — long-lived tail handle
         if seek_end:
             self.fh.seek(0, 2)
@@ -65,11 +67,19 @@ class Follow:
             line = self.fh.readline()
             if not line:
                 break
+            if not line.endswith("\n"):
+                # Torn read: the writer is mid-append (reproduced: ~61/20k
+                # records lost without this). Carry the fragment and finish
+                # the line on a later poll instead of dropping the record.
+                self._partial += line
+                break
+            line = self._partial + line
+            self._partial = ""
             try:
                 out.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
-        if not out:
+        if not out and not self._partial:
             self._open_latest(seek_end=False)  # day rollover, if any
         return out
 
@@ -99,20 +109,37 @@ class ShadowEngine:
             log.info("H-MODELENTRY1 crossing detector armed (roundwin-v1)")
 
     def cycle(self) -> bool:
-        """One consume pass over all streams; True if anything was read."""
+        """One consume pass over all streams; True if anything was read.
+
+        One malformed record costs one record — never the process (and with
+        it the seek-to-EOF backlog and the in-memory dedup state).
+        """
         got = False
         for record in self.catalog_stream.lines():
             got = True
-            if record.get("type") == "catalog" and record.get("condition_id"):
-                self.catalog[record["condition_id"]] = record
+            try:
+                if record.get("type") == "catalog" and record.get("condition_id"):
+                    self.catalog[record["condition_id"]] = record
+            except Exception:  # noqa: BLE001 — skip poison records, keep the daemon
+                self._bad_record("catalog")
         for record in self.book_stream.lines(5000):
             got = True
             self.counters["book_msgs"] += 1
-            self.tops.update(record)
+            try:
+                self.tops.update(record)
+            except Exception:  # noqa: BLE001
+                self._bad_record("books")
         for record in self.grid.lines():
             got = True
-            self._grid_record(record)
+            try:
+                self._grid_record(record)
+            except Exception:  # noqa: BLE001
+                self._bad_record("grid")
         return got
+
+    def _bad_record(self, stream: str) -> None:
+        self.counters["bad_records"] = self.counters.get("bad_records", 0) + 1
+        log.warning("malformed %s record skipped", stream, exc_info=True)
 
     def _grid_record(self, record: dict) -> None:
         if record.get("type") != "ss" or record.get("title") != "cs2":
@@ -136,7 +163,11 @@ class ShadowEngine:
             if key in self.seen:
                 continue
             self.seen.add(key)
-            market = match_market(self.catalog, instance["team"], instance["opponent"])
+            # All registered hypotheses settle at ROUND level: only a round
+            # book may price them (F1: match-book asks fabricate edge).
+            market = match_market(
+                self.catalog, instance["team"], instance["opponent"], required_kind="round"
+            )
             books: dict[str, dict] = {}
             if market:
                 self.counters["matched"] += 1

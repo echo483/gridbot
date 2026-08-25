@@ -30,13 +30,15 @@ def build_series_rows(series_id: str, states: list[dict], n_bins: int = N_BINS) 
         if sid is not None and str(sid) != series_id:
             raise ValueError(f"snapshot for series {sid} in batch for {series_id}")
 
-    # Winner oracle over ALL snapshots in capture order: first observation wins.
+    # Winner oracle over ALL snapshots in capture order: first observation
+    # wins. Keyed by segment sequenceNumber — an unresolvable winner leaves a
+    # hole rather than shifting later labels (F6).
     oracle: dict[tuple[int, int], str] = {}
     for state in states:
         for game in state.get("games") or []:
             map_number = int(game.get("sequenceNumber") or 1)
-            for i, side in enumerate(r.round_winners(game)):
-                oracle.setdefault((map_number, i + 1), side)
+            for round_number, side in r.round_winners_by_seq(game).items():
+                oracle.setdefault((map_number, round_number), side)
 
     # Candidates: one per live poll with a current game, keyed to the round in
     # progress (len(round_winners)+1 — unresolved by construction).

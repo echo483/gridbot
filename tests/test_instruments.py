@@ -191,3 +191,43 @@ def test_market_match_requires_both_teams() -> None:
     match = match_market(catalog, "Beyond Limits", "Xiaoma Gaming")
     assert match and match["condition_id"] == "0x1" and match["match_score"] == 1.0
     assert match_market(catalog, "Beyond Limits", "Team Vitality") is None
+
+
+def test_market_kind_and_required_kind_filter() -> None:
+    from gridbot.instruments.market_match import market_kind
+
+    match_row = {
+        "condition_id": "0xm",
+        "question": "Will Beyond Limits beat Xiaoma Gaming?",
+        "event_title": "ESEA Advanced",
+        "outcomes": ["Beyond Limits", "Xiaoma Gaming"],
+        "clob_token_ids": ["10", "20"],
+    }
+    round_row = {
+        "condition_id": "0xr",
+        "question": "Beyond Limits vs Xiaoma Gaming: round 5 winner?",
+        "event_title": "ESEA Advanced",
+        "outcomes": ["Beyond Limits", "Xiaoma Gaming"],
+        "clob_token_ids": ["30", "40"],
+    }
+    assert market_kind(match_row) == "match"
+    assert market_kind(round_row) == "round"
+    # match-only catalog + round requirement -> honest None, never a match book
+    assert match_market({"0xm": match_row}, "Beyond Limits", "Xiaoma Gaming",
+                        required_kind="round") is None
+    picked = match_market({"0xm": match_row, "0xr": round_row},
+                          "Beyond Limits", "Xiaoma Gaming", required_kind="round")
+    assert picked and picked["condition_id"] == "0xr" and picked["kind"] == "round"
+
+
+def test_follow_carries_torn_lines(tmp_path) -> None:
+    from gridbot.instruments.shadow import Follow
+
+    day = tmp_path / "series_state-20260101.jsonl"
+    day.write_text('{"a": 1}\n{"b": ')
+    follow = Follow(tmp_path, "series_state", from_start=True)
+    assert follow.lines() == [{"a": 1}]  # torn tail carried, not dropped
+    with open(day, "a") as fh:
+        fh.write('2}\n')
+    assert follow.lines() == [{"b": 2}]  # fragment completed on a later poll
+    follow.close()

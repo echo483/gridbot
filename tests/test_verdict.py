@@ -20,7 +20,11 @@ def inst(hyp: str = "H-MANADV1", sid: str = "1", rnd: int = 5, side: str = "ct",
         **extra,
     }
     if ask is not None:
-        record["market"] = {"outcomes": [team, "Beta"], "clob_token_ids": ["10", "20"]}
+        record["market"] = {
+            "question": f"{team} vs Beta round {rnd} winner?",
+            "outcomes": [team, "Beta"],
+            "clob_token_ids": ["10", "20"],
+        }
         record["books"] = {"10": {"ask": ask, "bid": ask - 0.02}}
     return record
 
@@ -58,3 +62,15 @@ def test_summarize_cells_and_paper_pnl() -> None:
     assert "H-ECONBUY1:>=10k" in summary
     assert "H-MODELENTRY1:thr0.75" in summary
     assert summary["H-ECONBUY1:>=10k"]["bar_n"] == 120
+
+
+def test_match_kind_market_never_prices_a_round_settlement() -> None:
+    oracles = {"1": {(1, 5): "ct"}}
+    contaminated = inst(rnd=5, ask=0.30)
+    contaminated["market"]["question"] = "Will Alpha beat Beta?"  # match book
+    rows = resolve_instances([contaminated], oracles)
+    assert rows[0]["team_ask"] is None  # counts as unquoted, no fabricated edge
+    clean = inst(rnd=5, ask=0.80)
+    clean["market"]["question"] = "Alpha vs Beta round 5 winner?"
+    rows = resolve_instances([clean], oracles)
+    assert rows[0]["team_ask"] == 0.80
