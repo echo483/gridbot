@@ -28,7 +28,10 @@ WorkingDirectory=/home/ops/gridbot
 # Non-secret runtime knobs (e.g. GRIDBOT_EXTRA_TITLES after the title probe).
 # NEVER put a secret here — secrets live in the keyring only.
 EnvironmentFile=-/home/ops/gridbot/deploy/capture.env
-ExecStart=/home/ops/.local/bin/uv run python -m gridbot.capture.supervisor
+# systemd-inhibit: while capture runs, block IDLE suspend (KDE's 2h AC
+# auto-suspend put the box to sleep 03:28–14:17 on 2026-08-25 and cost 10.8h
+# of capture). Manual suspend still works — the user sees who blocks and why.
+ExecStart=/usr/bin/systemd-inhibit --what=sleep --who=gridbot-capture "--why=GRID capture continuity (corpus moat)" --mode=block /home/ops/.local/bin/uv run python -m gridbot.capture.supervisor
 # Graceful stop: SIGTERM the supervisor only; it drains and flushes writers.
 KillMode=mixed
 KillSignal=SIGTERM
