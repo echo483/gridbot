@@ -54,6 +54,43 @@ def _restart(service: str) -> bool:
     return r.returncode == 0 and _is_active(service)
 
 
+def _escalate(service: str, detail: str) -> None:
+    """POST the hermes webhook (HMAC-V2) so a triage agent investigates.
+
+    Fires only after deterministic self-heal has already failed; the agent
+    diagnoses and may restart gridbot units, nothing else.
+    """
+    try:
+        import hashlib
+        import hmac
+
+        import httpx
+        import keyring
+
+        from gridbot import config as gconfig
+
+        secret = keyring.get_password(
+            gconfig.KEYRING_SERVICE, "HERMES_WEBHOOK_GRIDBOT_HEALTH_SECRET"
+        )
+        if not secret:
+            return
+        ts = str(int(time.time()))
+        body = json.dumps({"service": service, "detail": detail})
+        sig = hmac.new(secret.encode(), f"{ts}.{body}".encode(), hashlib.sha256).hexdigest()
+        httpx.post(
+            "http://127.0.0.1:8644/webhooks/gridbot-health",
+            content=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Webhook-Timestamp": ts,
+                "X-Webhook-Signature-V2": sig,
+            },
+            timeout=10,
+        )
+    except Exception:  # noqa: BLE001, S110 — best-effort by design: never break the watchdog
+        pass
+
+
 def _send(msg: str) -> None:
     subprocess.run(
         ["/home/ops/.local/bin/hermes", "send", "-t", "telegram", msg],
@@ -73,6 +110,7 @@ def _problems() -> list[str]:
                 _send(f"🩹 {service} was down — auto-restarted OK")
             else:
                 problems.append(f"{service} DOWN (auto-restart failed)")
+                _escalate(service, "watchdog self-heal failed; unit not active after restart")
     pm_age = now - _newest_mtime(config.DATA_DIR / "pm")
     if pm_age > PM_FRESH_S:
         problems.append(f"PM data stale ({int(pm_age / 60)}m)")

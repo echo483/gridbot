@@ -1,0 +1,9 @@
+[Unit]
+Description=Run gridbot raw-capture backup daily at 05:10
+
+[Timer]
+OnCalendar=*-*-* 05:10:00
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,13 @@
+# gridbot daily Claude analysis — oneshot, fired by gridbot-analysis.timer.
+# Slow loop only: drafts a daily analyst read (docs/analysis/) + Telegram
+# digest. Needs the unlocked keyring (ANTHROPIC_API_KEY); fails benignly if
+# locked and the next day's fire retries.
+[Unit]
+Description=gridbot daily Claude analysis (slow loop; drafts only)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ops/gridbot
+ExecStart=/home/ops/.local/bin/uv run python -m gridbot.analysis.daily
+NoNewPrivileges=true
