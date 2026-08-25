@@ -1,0 +1,11 @@
+# gridbot health watchdog — oneshot, fired by gridbot-health.timer.
+# Self-heals (restarts capture once) and alerts Telegram on transitions only.
+[Unit]
+Description=gridbot health check (self-heal + Telegram transition alerts)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ops/gridbot
+ExecStart=/home/ops/.local/bin/uv run python scripts/health_check.py
+NoNewPrivileges=true
