@@ -24,6 +24,18 @@ def _coverage(team: str, hay: set[str]) -> float:
     return len(team_tokens & hay) / len(team_tokens)
 
 
+def team_outcome_token(market: dict | None, team: str) -> str | None:
+    """The clob token whose outcome name matches ``team``; None if ambiguous."""
+    if not market:
+        return None
+    outcomes = market.get("outcomes") or []
+    tokens = market.get("clob_token_ids") or []
+    for outcome, token in zip(outcomes, tokens, strict=False):
+        if _coverage(team, _tokens(str(outcome))) >= 0.6:
+            return str(token)
+    return None
+
+
 def match_market(catalog: dict[str, dict], team_a: str, team_b: str) -> dict | None:
     """Best catalog row mentioning BOTH teams; None below the 0.6 threshold."""
     best, best_score = None, 0.0

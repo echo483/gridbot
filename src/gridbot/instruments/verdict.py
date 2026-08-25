@@ -20,7 +20,7 @@ from collections import defaultdict
 
 from gridbot import config
 from gridbot.corpus import rows as r
-from gridbot.instruments.market_match import _coverage, _tokens
+from gridbot.instruments.market_match import team_outcome_token
 
 # Frozen entry-price triggers from the registry texts (paper eligibility).
 ENTRY_ASK = {"H-MANADV1": 0.85, "H-ECONBUY1": 0.78, "H-PISTOLCARRY1": 0.80}
@@ -69,15 +69,32 @@ def build_oracles(series_ids: set[str]) -> dict[str, dict[tuple[int, int], str]]
 
 def _team_ask(instance: dict) -> float | None:
     """Recorded ask for the instance's own team outcome, when identifiable."""
-    market = instance.get("market") or {}
-    books = instance.get("books") or {}
-    outcomes = market.get("outcomes") or []
-    tokens = market.get("clob_token_ids") or []
-    for outcome, token in zip(outcomes, tokens, strict=False):
-        if _coverage(instance.get("team") or "", _tokens(str(outcome))) >= 0.6:
-            top = books.get(str(token)) or {}
-            return top.get("ask")
-    return None
+    token = team_outcome_token(instance.get("market"), instance.get("team") or "")
+    if token is None:
+        return None
+    return ((instance.get("books") or {}).get(token) or {}).get("ask")
+
+
+def attach_maker(rows: list[dict]) -> None:
+    """Frozen maker accounting: quote at bid+tick, fill inferred from the stream."""
+    from gridbot.instruments.fills import infer_fills, iter_book_records, maker_quote
+
+    pairs = []
+    for row in rows:
+        token = team_outcome_token(row.get("market"), row.get("team") or "")
+        quote = maker_quote(row, token)
+        row["maker_price"] = quote.price if quote else None
+        row["maker_filled"] = None
+        if quote:
+            pairs.append((row, quote))
+    if not pairs:
+        return
+    infer_fills([q for _, q in pairs], iter_book_records(config.DATA_DIR / "pm"))
+    for row, quote in pairs:
+        row["maker_filled"] = quote.filled
+        row["maker_fill_lag_s"] = (
+            round((quote.filled_ns - quote.after_ns) / 1e9, 1) if quote.filled else None
+        )
 
 
 def resolve_instances(
@@ -159,6 +176,15 @@ def summarize(rows: list[dict]) -> list[dict]:
         pnls = [p for ps in pnls_by_series.values() for p in ps]
         lo, hi = _wilson(wins, len(resolved))
         ci = _bootstrap_by_series(pnls_by_series) if pnls else None
+        maker_quoted = [c for c in resolved if c.get("maker_price") is not None]
+        maker_filled = [c for c in maker_quoted if c.get("maker_filled")]
+        maker_by_series: dict[str, list[float]] = defaultdict(list)
+        for c in maker_filled:
+            maker_by_series[c["series_id"]].append(
+                (1.0 if c["won"] else 0.0) - c["maker_price"]
+            )
+        maker_pnls = [p for ps in maker_by_series.values() for p in ps]
+        maker_ci = _bootstrap_by_series(maker_by_series) if maker_pnls else None
         out.append(
             {
                 "cell": cell,
@@ -171,6 +197,14 @@ def summarize(rows: list[dict]) -> list[dict]:
                 "paper_entries": len(pnls),
                 "paper_mean_pnl": round(sum(pnls) / len(pnls), 4) if pnls else None,
                 "paper_pnl_ci": (round(ci[0], 4), round(ci[1], 4)) if ci else None,
+                "maker_quotes": len(maker_quoted),
+                "maker_fills": len(maker_filled),
+                "maker_mean_pnl": (
+                    round(sum(maker_pnls) / len(maker_pnls), 4) if maker_pnls else None
+                ),
+                "maker_pnl_ci": (
+                    (round(maker_ci[0], 4), round(maker_ci[1], 4)) if maker_ci else None
+                ),
                 "bar_n": BAR_N.get(hyp, 0),
             }
         )
@@ -204,19 +238,23 @@ def main() -> None:
         print("no instances recorded yet")
         return
     oracles = build_oracles({i["series_id"] for i in instances})
-    summary = summarize(resolve_instances(instances, oracles))
+    rows = resolve_instances(instances, oracles)
+    attach_maker(rows)
+    summary = summarize(rows)
     if args.json:
         print(json.dumps(summary, indent=1))
         return
     print(f"{'cell':34} {'n':>4} {'ser':>3} {'res':>4} {'win%':>6} {'winCI':>15} "
-          f"{'quoted':>6} {'paper':>5} {'pnl':>7} {'pnlCI':>16} {'barN':>5}")
+          f"{'quoted':>6} {'paper':>5} {'pnl':>7} {'mkQ':>4} {'mkF':>4} {'mkPnl':>7} {'barN':>5}")
     for s in summary:
         print(
             f"{s['cell']:34} {s['n']:>4} {s['series']:>3} {s['resolved']:>4} "
             f"{('' if s['win_rate'] is None else format(s['win_rate'], '.3f')):>6} "
             f"{s['win_ci'] or ''!s:>15} {s['quoted']:>6} {s['paper_entries']:>5} "
             f"{('' if s['paper_mean_pnl'] is None else format(s['paper_mean_pnl'], '+.4f')):>7} "
-            f"{s['paper_pnl_ci'] or ''!s:>16} {s['bar_n']:>5}"
+            f"{s['maker_quotes']:>4} {s['maker_fills']:>4} "
+            f"{('' if s['maker_mean_pnl'] is None else format(s['maker_mean_pnl'], '+.4f')):>7} "
+            f"{s['bar_n']:>5}"
         )
 
 
