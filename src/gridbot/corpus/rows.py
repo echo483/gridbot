@@ -96,7 +96,7 @@ def _player_has_awp(player: dict) -> bool:
     return any(_has_awp_name(str(item.get("name") or "")) for item in items)
 
 
-def _sided_teams(game: dict) -> tuple[dict | None, dict | None]:
+def sided_teams(game: dict) -> tuple[dict | None, dict | None]:
     cs_teams = [t for t in game.get("teams") or [] if is_cs_node(t)]
     ct = next((t for t in cs_teams if side_of(t) == "ct"), None)
     t = next((t for t in cs_teams if side_of(t) == "t"), None)
@@ -104,7 +104,7 @@ def _sided_teams(game: dict) -> tuple[dict | None, dict | None]:
 
 
 def team_names(game: dict) -> tuple[str, str]:
-    ct, t = _sided_teams(game)
+    ct, t = sided_teams(game)
     return str((ct or {}).get("name") or ""), str((t or {}).get("name") or "")
 
 
@@ -115,7 +115,7 @@ def build_features(game: dict) -> dict[str, float]:
     (cs2agent parity). rating/map_rating are 0.0 and prior_round_p 0.5 on the
     ingestion path; bomb state is unobservable on GRID OA (always 0.0).
     """
-    ct, t = _sided_teams(game)
+    ct, t = sided_teams(game)
 
     def alive(team: dict | None) -> int:
         if team is None:

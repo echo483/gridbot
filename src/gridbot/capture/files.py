@@ -35,6 +35,11 @@ class DayWriter:
         self._handle().write(json.dumps(obj, separators=(",", ":"), default=str) + "\n")
         self.written += 1
 
+    def flush(self) -> None:
+        """Force buffered records to disk (rare-event writers, e.g. shadow instances)."""
+        if self._fh:
+            self._fh.flush()
+
     def close(self) -> None:
         if self._fh:
             self._fh.close()
