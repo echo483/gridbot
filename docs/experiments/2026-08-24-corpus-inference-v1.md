@@ -36,7 +36,11 @@ taken after the round resolved):
   5 rounds; label itself never varies within a round.
 - **Round-index offset:** `rounds_played + 1 != features.round_number` flags 2,796 rows
   (12.55%); checked against top-level round_number, 2,891; **union filter: 2,898 rows =
-  13.0%** (b3: 2,564 = 47.2%). Among leaked non-b0 rows, sign(Δscore_lead) == label in
+  13.0%** (b3: 2,581 = 47.5%). [Corrected 2026-08-25: originally misprinted as "2,564 =
+  47.2%", a transcription slip of the score-drift detector's separate b3 count (2,563)
+  above. Caught by the cs2agent session's independent row-exact reproduction; recount
+  against data/analysis/training_rounds.jsonl confirms 2,581/5,429 = 47.54%. The union
+  total 2,898 was always correct.] Among leaked non-b0 rows, sign(Δscore_lead) == label in
   99.8%; man_advantage sign predicts label 97.7%; median time_remaining 18s. The file's
   single physically impossible row (6 CT alive) is in this set.
 
