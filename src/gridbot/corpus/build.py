@@ -52,13 +52,26 @@ def build_series_rows(series_id: str, states: list[dict], n_bins: int = N_BINS) 
         winner = oracle.get((map_number, round_number))
         if winner is None:
             continue  # next round's resolution never observed
+        features = r.build_features(game)
+        # Leak guard (corpus-inference-v1 F1, verified 2026-08-24): GRID updates
+        # scoreboard and segment flags non-atomically at the round boundary, so a
+        # poll can still be keyed to a round whose result the scoreboard already
+        # contains (47% of cs2agent's final-bin rows encoded their own label this
+        # way). Require a coherent in-round snapshot: the scoreboard counts
+        # exactly the resolved rounds, and the current segment IS the labeled
+        # round. Anything else is transition-window state — never a row.
+        if (
+            features["rounds_played"] != round_number - 1
+            or features["round_number"] != round_number
+        ):
+            continue
         ct_team, t_team = r.team_names(game)
         candidates.append(
             {
                 "series_id": series_id,
                 "map_number": map_number,
                 "round_number": round_number,
-                "features": r.build_features(game),
+                "features": features,
                 "label": 1.0 if winner == "ct" else 0.0,
                 "ct_team": ct_team,
                 "t_team": t_team,

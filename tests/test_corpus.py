@@ -193,3 +193,35 @@ def test_mixed_series_ids_rejected() -> None:
     states = [snap(sid="1"), snap(sid="2")]
     with pytest.raises(ValueError, match="series"):
         build_series_rows("1", states)
+
+
+def test_leak_guard_drops_score_first_transition() -> None:
+    """Scoreboard incremented before the segment finished flag: the poll still
+    keys to the ended round while score_lead already contains its result."""
+    states = _live_series(2)
+    leaked = game(
+        # round 1 over: CT score already 1, but segment 1 still unfinished
+        teams=[team("Counter-Terrorists", "A", score=1), team("Terrorists", "B")],
+        segments=[rseg(1, None, finished=False)],
+    )
+    states.insert(2, snap(games=[leaked]))
+    rows = build_series_rows("777", states)
+    assert [r["row_key"] for r in rows] == ["777:1:1", "777:1:1:b2"]  # leaked poll gone
+
+
+def test_leak_guard_drops_segment_first_transition() -> None:
+    """Winners updated before the next round's segment exists: identity says
+    round 2 but the features are the dead end-state of round 1."""
+    states = _live_series(2)
+    stale = game(
+        teams=[team("Counter-Terrorists", "A", score=1), team("Terrorists", "B")],
+        segments=[rseg(1, "ct")],  # finished — identity round is now 2
+    )
+    resolved2 = game(
+        teams=[team("Counter-Terrorists", "A", score=1), team("Terrorists", "B", score=1)],
+        segments=[rseg(1, "ct"), rseg(2, "t")],
+    )
+    states += [snap(games=[stale]), snap(games=[resolved2])]
+    rows = build_series_rows("777", states)
+    # stale poll would be keyed 777:1:2 with round-1 end-state features — gone
+    assert all(r["round_number"] == 1 for r in rows)
