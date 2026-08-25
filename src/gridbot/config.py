@@ -21,6 +21,10 @@ KEYRING_SERVICE = "gridbot"
 GRID_CENTRAL_DATA_URL = "https://api-op.grid.gg/central-data/graphql"
 GRID_SERIES_STATE_URL = "https://api-op.grid.gg/live-data-feed/series-state/graphql"
 
+# Supabase corpus (project cs2agent, shared with the historical record).
+# URL is non-secret infra; the sb_secret write key lives in the keyring.
+SUPABASE_URL = "https://pbwchzjwukxngeptmuju.supabase.co"
+
 # Polymarket public endpoints (no auth needed for market data).
 PM_GAMMA_URL = "https://gamma-api.polymarket.com"
 PM_CLOB_URL = "https://clob.polymarket.com"
