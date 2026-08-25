@@ -13,6 +13,14 @@ def register_secret(value: str) -> None:
         _SECRETS.add(value)
 
 
+def redact_text(text: str) -> str:
+    """Replace every registered secret occurring in ``text`` (longest first)."""
+    for s in sorted(_SECRETS, key=len, reverse=True):
+        if s in text:
+            text = text.replace(s, "«redacted»")
+    return text
+
+
 class _RedactingFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         if _SECRETS:

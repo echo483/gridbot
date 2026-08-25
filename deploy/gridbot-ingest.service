@@ -1,0 +1,14 @@
+# gridbot corpus ingest — oneshot, fired hourly by gridbot-ingest.timer.
+# Walks recent capture day files, builds rows for newly-finished CS2 series,
+# UPSERTs to Supabase (idempotent on row_key). Needs the unlocked keyring for
+# the Supabase key; if the session/keyring is locked it fails benignly and the
+# next hourly fire retries.
+[Unit]
+Description=gridbot corpus ingest (finished series → training_rounds)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ops/gridbot
+ExecStart=/home/ops/.local/bin/uv run python -m gridbot.corpus.ingest
+NoNewPrivileges=true

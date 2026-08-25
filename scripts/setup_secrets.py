@@ -13,6 +13,8 @@ from gridbot.config import KEYRING_SERVICE
 
 SECRETS = {
     "GRID_API_KEY": "GRID Open Access x-api-key",
+    "SUPABASE_SERVICE_ROLE_KEY": "Supabase sb_secret write key (corpus mirror)",
+    "ANTHROPIC_API_KEY": "Claude API key (slow-loop analysis only — never the trade path)",
     # P2 (live arming) only — leave blank to skip:
     "POLYMARKET_PRIVATE_KEY": "Polymarket signing key (P2 only)",
     "POLYMARKET_FUNDER_ADDRESS": "Polymarket funder address (P2 only)",

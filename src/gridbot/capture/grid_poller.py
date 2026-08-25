@@ -67,6 +67,10 @@ class GridCapture:
                     node = edge.get("node") or {}
                     sid = str(node.get("id"))
                     self.discovery_writer.append({"type": "series", "title": title_key, **node})
+                    if sid in config.GRID_TEST_SERIES_IDS or (
+                        (node.get("tournament") or {}).get("name") == "GRID-TEST"
+                    ):
+                        continue  # looping test fixture: recorded, never polled
                     entry = self.tracked.setdefault(
                         sid,
                         {
@@ -95,7 +99,7 @@ class GridCapture:
         - started but frozen >6h: abandoned upstream
         """
         for sid, st in list(self.tracked.items()):
-            drop = st["finished"]
+            drop = st["finished"] or sid in config.GRID_TEST_SERIES_IDS
             if not drop and not st["started"]:
                 sched = st.get("scheduled")
                 try:

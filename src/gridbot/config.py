@@ -52,6 +52,11 @@ for pair in filter(None, _extra.split(",")):
     k, _, v = pair.partition("=")
     TITLE_IDS[k.strip()] = v.strip()
 
+# GRID's permanent looping test fixtures (tournament "GRID-TEST", observed live
+# 2026-08-24: cs2 ids 28/99, dota id 2). They replay synthetic live data forever
+# and never finish — never track, never poll, never ingest.
+GRID_TEST_SERIES_IDS = frozenset({"2", "28", "99"})
+
 DATA_DIR = Path(os.environ.get("GRIDBOT_DATA_DIR", Path(__file__).resolve().parents[2] / "data"))
 
 
