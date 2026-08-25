@@ -87,14 +87,21 @@ def _pm_stats() -> list[str]:
     return lines
 
 
-def _shadow_stats() -> str:
+def _shadow_stats() -> list[str]:
     counts = Counter()
     for row in _iter_jsonl(_day_stem(config.DATA_DIR / "shadow", "instances")):
         if row.get("type") == "instance":
             counts[row.get("hypothesis_id") or "?"] += 1
-    if not counts:
-        return "shadow: 0 instances"
-    return "shadow: " + " ".join(f"{h}={n}" for h, n in sorted(counts.items()))
+    lines = ["shadow today: " + (
+        " ".join(f"{h}={n}" for h, n in sorted(counts.items())) if counts else "0 instances"
+    )]
+    try:
+        from gridbot.instruments.verdict import compact_summary
+
+        lines.extend(compact_summary())
+    except Exception as exc:  # noqa: BLE001 — report must never crash on a probe
+        lines.append(f"  verdict probe failed ({str(exc)[:60]})")
+    return lines
 
 
 def _corpus_counts() -> str:
@@ -127,7 +134,7 @@ def main() -> None:
         f"capture: {state} · disk {du.free // 2**30}GiB free",
         *_grid_stats(),
         *_pm_stats(),
-        _shadow_stats(),
+        *_shadow_stats(),
         _corpus_counts(),
     ]
     print("\n".join(lines))
