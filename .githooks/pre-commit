@@ -1,0 +1,3 @@
+#!/bin/sh
+# gridbot pre-commit: block secrets from entering the repo.
+exec python3 scripts/check_no_secrets.py

@@ -1,0 +1,38 @@
+# gridbot capture — unattended esports data collection (GRID + Polymarket books).
+#
+# READ-ONLY: collects data only. Places NO orders, never arms, has no trading
+# surface, makes no edge/ROI claim.
+#
+# KEYRING ANCHOR (pattern proven in cs2agent, 2026-08-24): GRID_API_KEY is read
+# from the OS keyring (SecretService/KWallet), which unlocks at graphical login.
+# Anchoring to graphical-session.target (NOT default.target) means the unit only
+# starts once the keyring is unlockable, and stops on logout. With linger enabled
+# a default.target anchor would start at boot, find the keyring locked, and
+# retry-loop forever. Do not "simplify" this back to default.target.
+
+[Unit]
+Description=gridbot capture (READ-ONLY GRID + Polymarket data collection; no trading)
+Documentation=file:///home/ops/gridbot/SECURITY.md
+After=network-online.target graphical-session.target
+Wants=network-online.target
+PartOf=graphical-session.target
+StartLimitIntervalSec=600
+StartLimitBurst=20
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ops/gridbot
+# Non-secret runtime knobs (e.g. GRIDBOT_EXTRA_TITLES after the title probe).
+# NEVER put a secret here — secrets live in the keyring only.
+EnvironmentFile=-/home/ops/gridbot/deploy/capture.env
+ExecStart=/home/ops/.local/bin/uv run python -m gridbot.capture.supervisor
+# Graceful stop: SIGTERM the supervisor only; it drains and flushes writers.
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=15
+NoNewPrivileges=true
+
+[Install]
+WantedBy=graphical-session.target
