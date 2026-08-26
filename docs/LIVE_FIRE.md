@@ -68,9 +68,36 @@ exposure from ledger, restart-safe · S4 bid-anchored far-from-touch +
 fill honesty · M1 explicit compliance affirmation · M2 honest gate wording
 · M3 floor price rounding · M4 client timeout · M6 capacity skips retry.
 
-## Deferred until BEFORE scaling past $1 tests (deliberate)
+## Closed pre-live-small gates (2026-08-26)
 
-- **Stale-maker cancel pass** (M5): engine cancels resting GTC quotes after
-  a TTL; today nothing cancels unfilled makers automatically.
-- **Venue-side reconciliation** (S3 residue): on engine start, consult
-  orders.list/positions so ledger and venue agree about open exposure.
+- **Stale-maker cancel pass** (M5): DONE — armed engine cancels its resting
+  quotes after 150s (clean cancel releases the exposure slot; "gone" =
+  likely fill, slot stays held; failed cancel → MANUAL ACTION log + retry).
+- **Venue-side reconciliation** (S3 residue): running skeleton — armed
+  engine diffs ledger vs orders.list every ~60s (gone-from-venue, orphans,
+  partial fills) and writes reconcile rows.
+
+## Arming runbook — live-small session (H-MAPENTRY1 clips)
+
+The systemd executor NEVER arms (its unit sets no GRIDBOT_LIVE). An armed
+session is a foreground terminal the user starts and can Ctrl-C:
+
+```
+systemctl --user stop gridbot-executor      # one engine at a time
+GRIDBOT_LIVE=1 GRIDBOT_MAX_STAKE_USD=3 GRIDBOT_MAX_OPEN=2 \
+  GRIDBOT_MAX_DAILY_LOSS=10 uv run python -m gridbot.executor.engine
+# ... Ctrl-C to disarm ...
+systemctl --user start gridbot-executor     # back to dry-run daemon
+```
+
+Cap rationale at the $26 bankroll: $3/order ≈ quarter-Kelly on the
+strongest calibrated cell; 2 open max ≈ 23% deployed worst-case. Every
+order the armed engine can place is: H-MAPENTRY1 (registered), frozen
+race-formula fair value, price ≥ 4 points below fair AND ≤ ceiling,
+post-only (exchange rejects if it would match), integer contracts, one
+entry per map book, auto-cancelled at 150s if unfilled.
+
+KNOWN OPEN ITEM: settles are not auto-written yet, so the daily-loss cap
+does not bind on realized PnL — total risk is bounded instead by
+stake × max_open (~$6 resting at any moment). Do not raise caps until
+fills→settles reconciliation writes real rows.
