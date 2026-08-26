@@ -1,0 +1,18 @@
+# H-MAPENTRY1 recorder — persistent daemon tailing shadow instances and
+# attaching PMUS map-winner books at detection (frozen mapwin-race-v1).
+# Read-only + record-only: public gateway, no credentials, never places
+# orders. Evidence rows -> data/shadow/mapentry-YYYYMMDD.jsonl.
+[Unit]
+Description=gridbot H-MAPENTRY1 recorder (dry-run evidence, read-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/home/ops/gridbot
+ExecStart=/home/ops/.local/bin/uv run python -m gridbot.instruments.mapentry_recorder
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

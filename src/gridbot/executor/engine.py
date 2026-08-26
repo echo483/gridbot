@@ -81,14 +81,22 @@ class Engine:
             log.debug("capacity hold (daily_loss) for %s", intent.dedup_key)
             return None
         self.seen.add(intent.dedup_key)
+        order_id = None
         if armed.live:
-            status = pmus.place(intent)
+            status, order_id = pmus.place(intent)
             if status == "placed":
                 self.open_count += 1
         else:
             status = "dry_run"
         row = intent.record()
-        row.update({"status": status, "ts_ns": time.time_ns(), "live": armed.live})
+        row.update(
+            {
+                "status": status,
+                "order_id": order_id,
+                "ts_ns": time.time_ns(),
+                "live": armed.live,
+            }
+        )
         self.ledger.append(row)
         log.info("intent %s %s @%.4f x%.2f -> %s", intent.hypothesis_id,
                  intent.team, intent.price, intent.shares, status)

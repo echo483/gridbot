@@ -44,20 +44,23 @@ def reset_client() -> None:
     _client = None
 
 
-def place(intent: OrderIntent) -> str:
-    """Place one capped post-only maker BUY. Returns a status, never raises.
+def place(intent: OrderIntent) -> tuple[str, str | None]:
+    """Place one capped post-only maker BUY. Returns (status, order_id).
 
-    Statuses: "placed", "rejected:<detail>", "error:<Class>". The intent
-    must carry a US market slug (`market_slug`) and side (`us_side` in
-    {"long", "short"}); anything ambiguous is refused — fail closed.
+    Statuses: "placed", "rejected:<detail>", "error:<Class>"; order_id is
+    non-None only for "placed" — the ledger persists it so cancels and
+    venue-side reconciliation can reference the exact resting order. The
+    intent must carry a US market slug (`market_slug`) and side (`us_side`
+    in {"long", "short"}); anything ambiguous is refused — fail closed.
+    Never raises.
     """
     slug = getattr(intent, "market_slug", None) or ""
     side = getattr(intent, "us_side", None)
     if not slug or side not in ("long", "short"):
-        return "rejected:no_us_market_mapping"
+        return "rejected:no_us_market_mapping", None
     quantity = int(intent.shares)
     if quantity < 1:
-        return "rejected:quantity_below_one_contract"
+        return "rejected:quantity_below_one_contract", None
     # M3: round the wire price DOWN — never nudge exposure above what the
     # intent's ceiling check approved.
     price = int(intent.price * 1000) / 1000
@@ -82,15 +85,15 @@ def place(intent: OrderIntent) -> str:
         if "Auth" in name:
             reset_client()
         log.warning("order error: %s (not retried — creates are never resent)", name)
-        return f"error:{name}"
+        return f"error:{name}", None
     order_id = (
         (resp or {}).get("orderId")
         or (resp or {}).get("id")
         or ((resp or {}).get("order") or {}).get("id")
     )
     if order_id:
-        return "placed"
+        return "placed", str(order_id)
     # S2: a 2xx we cannot parse is NOT a rejection — the order may be live.
     # Flag distinctly so reconciliation (orders.list) can find orphans.
     log.warning("ambiguous create ack: no order id in response")
-    return "error:ambiguous_ack"
+    return "error:ambiguous_ack", None

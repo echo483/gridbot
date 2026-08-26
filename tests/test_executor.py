@@ -117,7 +117,7 @@ class TestPmusWire:
 
         intent = build_intent(_instance(), 25.0)
         assert intent is not None
-        assert pmus.place(intent) == "rejected:no_us_market_mapping"
+        assert pmus.place(intent) == ("rejected:no_us_market_mapping", None)
         assert pmus._client is None  # never built
 
     def test_place_refuses_sub_contract_quantity(self) -> None:
@@ -128,4 +128,43 @@ class TestPmusWire:
         intent = build_intent(_instance(), 25.0)
         assert intent is not None
         tiny = replace(intent, market_slug="cs2-a-vs-b", us_side="long", shares=0.4)
-        assert pmus.place(tiny) == "rejected:quantity_below_one_contract"
+        assert pmus.place(tiny) == ("rejected:quantity_below_one_contract", None)
+
+    def test_place_returns_order_id_for_ledger(self, monkeypatch) -> None:
+        # The parsed order id must surface to the caller — the ledger row
+        # persists it so cancel/reconciliation can reference the order.
+        from dataclasses import replace
+
+        from gridbot.executor import pmus
+
+        class _Orders:
+            def create(self, body: dict) -> dict:
+                assert body["participateDontInitiate"] is True
+                return {"orderId": "ORD123"}
+
+        class _Client:
+            orders = _Orders()
+
+        monkeypatch.setattr(pmus, "_get_client", lambda: _Client())
+        intent = build_intent(_instance(), 25.0)
+        assert intent is not None
+        wired = replace(intent, market_slug="cs2-a-vs-b", us_side="long")
+        assert pmus.place(wired) == ("placed", "ORD123")
+
+    def test_place_ambiguous_ack_has_no_order_id(self, monkeypatch) -> None:
+        from dataclasses import replace
+
+        from gridbot.executor import pmus
+
+        class _Orders:
+            def create(self, body: dict) -> dict:
+                return {"unexpected": "shape"}
+
+        class _Client:
+            orders = _Orders()
+
+        monkeypatch.setattr(pmus, "_get_client", lambda: _Client())
+        intent = build_intent(_instance(), 25.0)
+        assert intent is not None
+        wired = replace(intent, market_slug="cs2-a-vs-b", us_side="long")
+        assert pmus.place(wired) == ("error:ambiguous_ack", None)
