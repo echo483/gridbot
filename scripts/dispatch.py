@@ -37,7 +37,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROUTES: dict[str, tuple[str, str | None]] = {
+ROUTES: dict[str, tuple[str, str | None, str | None]] = {
     # kind -> (model, provider-override or None)
     #
     # provider "openrouter" = tell hermes which GATEWAY to use (its native
@@ -62,21 +62,30 @@ ROUTES: dict[str, tuple[str, str | None]] = {
     #
     # (Hermes-side config, NOT ours to manage here: hermes default =
     # glm-5.3-flash, fallback = qwen3.8-max — user-confirmed 08-26 eve.)
-    "programming": ("z-ai/glm-5.3-flash:floor", "openrouter"),
-    "draft": ("z-ai/glm-5.3-flash:floor", "openrouter"),
-    "fast": ("deepseek/deepseek-v4-flash-0731", None),
-    "classification": ("deepseek/deepseek-v4-flash-0731", None),
-    "review": ("anthropic/claude-opus-5", "openrouter"),
-    "review2": ("z-ai/glm-5.3:floor", "openrouter"),
-    "programming2": ("deepseek/deepseek-v4-flash-0731", None),  # backup builder
+    #
+    # Third field = --reasoning level (hermes global default is only
+    # "medium" — discovered 08-26 when builder outputs came back thin;
+    # user: the default builder has "gotta be very very good"). Builders
+    # think HIGH, the opus review thinks XHIGH (user: "review with hard
+    # reasoning"), the speed lane stays LOW — reasoning tokens are
+    # latency there, not quality.
+    "programming": ("z-ai/glm-5.3-flash:floor", "openrouter", "high"),
+    "draft": ("z-ai/glm-5.3-flash:floor", "openrouter", "medium"),
+    "fast": ("deepseek/deepseek-v4-flash-0731", None, "low"),
+    "classification": ("deepseek/deepseek-v4-flash-0731", None, "low"),
+    "review": ("anthropic/claude-opus-5", "openrouter", "xhigh"),
+    "review2": ("z-ai/glm-5.3:floor", "openrouter", "high"),
+    "programming2": ("deepseek/deepseek-v4-flash-0731", None, "medium"),  # backup builder
 }
 
 
 def _run(kind: str, prompt: str, timeout: int) -> tuple[int, str]:
-    model, provider = ROUTES[kind]
+    model, provider, reasoning = ROUTES[kind]
     cmd = ["hermes", "-m", model]
     if provider:
         cmd += ["--provider", provider]
+    if reasoning:
+        cmd += ["--reasoning", reasoning]
     cmd += ["-z", prompt, "--safe-mode"]
     print(f"dispatch[{kind}] -> {model}", file=sys.stderr)
     try:
