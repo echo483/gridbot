@@ -31,7 +31,25 @@ frozen bars the shadow engine reports against.
 
 ## Before the first live order (joint session)
 
-- Review `clob.place()` together — it is deliberately one small function.
-- Verify a market EXISTS for the target title (2026-08-25 evidence:
-  tier-3 CS2 has zero PM books; LoL scope from GRID is the unlock).
-- Start engine with `--once`, watch one intent land as "dry_run", then arm.
+- Review `pmus.place()` together — it is deliberately one small function.
+- Verify a market EXISTS for the target title (2026-08-25 evidence: the US
+  venue's cs2/league-of-legends series are provisioned but empty; the pmus
+  watch timer alerts when that changes).
+- Run `GRIDBOT_LIVE=1 uv run python scripts/live_fire_test.py` — one $1
+  far-from-touch post-only order: place → list → cancel → gone, with
+  latency per leg and a MANUAL ACTION block if cancel ever fails.
+
+## Adversarial review 2026-08-25 (ox-alpha, card t_6fd66ca8) — all fixed
+
+B1 cancel-abandonment (retry+manual block) · S1 create-retry double-order
+(creates are never resent) · S2 ambiguous ack ≠ rejection · S3 open
+exposure from ledger, restart-safe · S4 bid-anchored far-from-touch +
+fill honesty · M1 explicit compliance affirmation · M2 honest gate wording
+· M3 floor price rounding · M4 client timeout · M6 capacity skips retry.
+
+## Deferred until BEFORE scaling past $1 tests (deliberate)
+
+- **Stale-maker cancel pass** (M5): engine cancels resting GTC quotes after
+  a TTL; today nothing cancels unfilled makers automatically.
+- **Venue-side reconciliation** (S3 residue): on engine start, consult
+  orders.list/positions so ledger and venue agree about open exposure.

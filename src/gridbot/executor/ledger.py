@@ -139,6 +139,22 @@ def open_positions(records: list[dict]) -> list[dict]:
     return positions
 
 
+def open_exposure(records: list[dict]) -> int:
+    """Count of placed-but-unsettled intents (resting orders + open positions).
+
+    Exposure counting for the engine's max-open cap: a placed GTC order is
+    exposure whether or not it has filled yet, and only a settle releases
+    it. Survives process restarts because it derives from the ledger.
+
+    Args:
+        records: Ledger rows (see module docstring).
+
+    Returns:
+        Number of dedup_keys with a placed intent and no settle.
+    """
+    return len(set(_placed_intents(records)) - set(_settles(records)))
+
+
 def realized_pnl(records: list[dict]) -> list[tuple[str, float, int]]:
     """Per-position realized PnL for every settled position.
 

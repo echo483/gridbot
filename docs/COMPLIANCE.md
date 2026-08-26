@@ -10,6 +10,11 @@ Every entry is dated; the go-live gates reference this file.
   user confirms prediction-market use is legal in California, is located in
   Los Angeles, and has previously used Polymarket personally on mobile. This is
   the standing eligibility confirmation required before the first live order.
+- **2026-08-25 — venue is Polymarket US (CFTC-regulated)**: the account is on
+  Polymarket US (QCEX rails), KYC approved in the US app; API keys issued via
+  polymarket.us/developer. The international CLOB is close-only for US IPs and
+  is not used for orders. ELIGIBILITY CONFIRMED: YES (the arming gate requires
+  this exact affirmation line).
 - **Standing go-live gates (unchanged)**: `dry_run=True` until a pre-registered
   PASS; flipping live is the user's own act — never Claude's, never an agent's;
   single account per platform; first live test sized at $1.

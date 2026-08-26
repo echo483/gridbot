@@ -15,7 +15,9 @@ from pathlib import Path
 from gridbot import config
 
 COMPLIANCE_FILE = Path(__file__).resolve().parents[3] / "docs" / "COMPLIANCE.md"
-COMPLIANCE_MARKER = "eligibility"  # the user-confirmation section must exist
+# M1: an explicit affirmation line, not a topic word — a template or a
+# "TODO: eligibility" stub must NOT satisfy the gate.
+COMPLIANCE_MARKER = "eligibility confirmed: yes"
 
 # Fail-small caps. Env-overridable within clamps; never unbounded.
 MAX_STAKE_USD_CEILING = 100.0
@@ -69,9 +71,9 @@ def check_armed(env: dict[str, str] | None = None) -> ArmingState:
     if e.get("GRIDBOT_LIVE") != "1":
         reasons.append("GRIDBOT_LIVE!=1 (going live is the user's own act)")
     if not config._secret("POLYMARKET_US_KEY_ID"):
-        reasons.append("POLYMARKET_US_KEY_ID not in keyring")
+        reasons.append("POLYMARKET_US_KEY_ID not available (keyring/env)")
     if not config._secret("POLYMARKET_US_SECRET_KEY"):
-        reasons.append("POLYMARKET_US_SECRET_KEY not in keyring")
+        reasons.append("POLYMARKET_US_SECRET_KEY not available (keyring/env)")
     try:
         text = COMPLIANCE_FILE.read_text().lower()
         if COMPLIANCE_MARKER not in text:

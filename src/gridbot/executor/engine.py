@@ -53,6 +53,11 @@ class Engine:
         self.ledger = ledger or IntentLedger()
         self.follow = Follow(config.DATA_DIR / "shadow", "instances", from_start=False)
         self.seen: set[str] = set()
+        # Open exposure = placed-but-unsettled intents, recomputed from the
+        # ledger each cycle (S3: survives restarts, releases on settle —
+        # never a process-local monotonic counter). Incremented in-cycle on
+        # each new "placed" for immediacy between recomputes. Venue-side
+        # reconciliation (orders.list) is a pre-scaling item: LIVE_FIRE.md.
         self.open_count = 0
         self._daily_loss = 0.0
 
@@ -67,12 +72,16 @@ class Engine:
             return None
         if intent.dedup_key in self.seen:
             return None
-        self.seen.add(intent.dedup_key)
+        # Capacity skips do NOT consume the dedup key (M6): when open slots
+        # or loss budget free up, the same instance may retry next cycle.
         if self.open_count >= limits.max_open_positions():
-            status = "skipped_max_open"
-        elif self._daily_loss >= limits.max_daily_loss_usd():
-            status = "skipped_daily_loss"
-        elif armed.live:
+            log.debug("capacity hold (max_open) for %s", intent.dedup_key)
+            return None
+        if self._daily_loss >= limits.max_daily_loss_usd():
+            log.debug("capacity hold (daily_loss) for %s", intent.dedup_key)
+            return None
+        self.seen.add(intent.dedup_key)
+        if armed.live:
             status = pmus.place(intent)
             if status == "placed":
                 self.open_count += 1
@@ -92,8 +101,9 @@ class Engine:
             self._daily_loss = ledger_mod.daily_loss_usd(
                 records, f"{datetime.now(UTC):%Y%m%d}"
             )
+            self.open_count = ledger_mod.open_exposure(records)
         except Exception:
-            log.exception("daily-loss read failed; keeping previous value")
+            log.exception("ledger read failed; keeping previous caps state")
         n = 0
         for record in self.follow.lines():
             try:

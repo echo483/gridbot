@@ -222,3 +222,22 @@ def test_summarize_counts():
         "open": 1,
         "realized_pnl_total": (1.0 - 0.5) * 10.0,
     }
+
+
+class TestOpenExposure:
+    def test_placed_without_settle_counts(self) -> None:
+        from gridbot.executor.ledger import open_exposure
+
+        records = [
+            {"type": "order_intent", "status": "placed", "dedup_key": "a", "ts_ns": 1},
+            {"type": "order_intent", "status": "placed", "dedup_key": "b", "ts_ns": 2},
+            {"type": "order_intent", "status": "dry_run", "dedup_key": "c", "ts_ns": 3},
+            {"type": "settle", "dedup_key": "a", "won": True, "ts_ns": 4},
+        ]
+        # "a" settled, "b" still resting, "c" never placed.
+        assert open_exposure(records) == 1
+
+    def test_empty_is_zero(self) -> None:
+        from gridbot.executor.ledger import open_exposure
+
+        assert open_exposure([]) == 0
