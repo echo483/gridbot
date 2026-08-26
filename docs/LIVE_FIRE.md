@@ -90,6 +90,13 @@ GRIDBOT_LIVE=1 GRIDBOT_MAX_STAKE_USD=3 GRIDBOT_MAX_OPEN=2 \
 systemctl --user start gridbot-executor     # back to dry-run daemon
 ```
 
+**Band gate (frozen 2026-08-26 pre-first-fire, H-MAPENTRY1-BANDGATE1):**
+armed placements only while 0.50 ≤ P_map ≤ 0.80. Out-of-band qualifying
+rows are ledgered as `skipped:band_gate` and never placed — external
+diagnostic (cs2agent ADR-0038 on our 32-series holdout) measured the
+frozen aggregation −8..−16pts settled edge above P_map 0.8, positive only
+in 0.50-0.80. Expect FEWER clips (~27% of crossings are in-band).
+
 Cap rationale at the $26 bankroll: $3/order ≈ quarter-Kelly on the
 strongest calibrated cell; 2 open max ≈ 23% deployed worst-case. Every
 order the armed engine can place is: H-MAPENTRY1 (registered), frozen

@@ -251,7 +251,7 @@ class TestUsIntent:
         monkeypatch.setattr(config, "DATA_DIR", tmp_path)
         (tmp_path / "shadow").mkdir()
         eng = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
-        status = eng.handle(_mapentry_row(), limits.ArmingState(dry_run=True))
+        status = eng.handle(_mapentry_row(p_map=0.75), limits.ArmingState(dry_run=True))
         assert status == "dry_run"
         rows = [
             json.loads(line)
@@ -263,8 +263,72 @@ class TestUsIntent:
         assert rows[0]["order_id"] is None
         assert rows[0]["live"] is False
         # same map book dedups — a second qualifying round does not re-enter
-        again = eng.handle(_mapentry_row(round_number=9), limits.ArmingState(dry_run=True))
+        again = eng.handle(
+            _mapentry_row(round_number=9, p_map=0.75), limits.ArmingState(dry_run=True)
+        )
         assert again is None
+
+
+class TestBandGate:
+    def test_pure_band_edges(self) -> None:
+        from gridbot.executor.intents import us_band_gated
+
+        assert us_band_gated(0.49) is True
+        assert us_band_gated(0.50) is False
+        assert us_band_gated(0.80) is False
+        assert us_band_gated(0.81) is True
+        assert us_band_gated(None) is True  # fail closed
+        assert us_band_gated("0.7") is True
+
+    def _engine(self, tmp_path, monkeypatch):
+        from gridbot import config
+        from gridbot.executor import engine as engine_mod
+
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        (tmp_path / "shadow").mkdir()
+        return engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
+
+    def _rows(self, tmp_path):
+        import json
+
+        return [
+            json.loads(line)
+            for f in (tmp_path / "executor").glob("intents-*.jsonl")
+            for line in f.read_text().splitlines()
+        ]
+
+    def test_armed_out_of_band_never_places_and_keeps_dedup(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from gridbot.executor import pmus
+
+        calls: list = []
+        monkeypatch.setattr(
+            pmus, "place", lambda i: (calls.append(i) or ("placed", "OID1"))
+        )
+        eng = self._engine(tmp_path, monkeypatch)
+        status = eng.handle(_mapentry_row(), limits.ArmingState(dry_run=False))
+        assert status == "skipped:band_gate"
+        assert calls == []  # wire never touched
+        assert eng.resting == {}
+        # dedup NOT consumed: a later in-band crossing on the same book enters
+        status = eng.handle(
+            _mapentry_row(round_number=12, p_map=0.75), limits.ArmingState(dry_run=False)
+        )
+        assert status == "placed"
+        assert len(calls) == 1
+        rows = self._rows(tmp_path)
+        assert [r["status"] for r in rows] == ["skipped:band_gate", "placed"]
+        assert rows[0]["p_map"] == 0.87
+        assert rows[0]["live"] is True
+
+    def test_dry_run_gates_identically(self, tmp_path, monkeypatch) -> None:
+        eng = self._engine(tmp_path, monkeypatch)
+        status = eng.handle(_mapentry_row(), limits.ArmingState(dry_run=True))
+        assert status == "skipped:band_gate"
+        rows = self._rows(tmp_path)
+        assert rows[0]["status"] == "skipped:band_gate"
+        assert rows[0]["live"] is False
 
 
 class TestCancel:
@@ -333,7 +397,7 @@ class TestStaleSweep:
         (tmp_path / "shadow").mkdir()
         monkeypatch.setattr(pmus, "place", lambda _i: ("placed", "OID9"))
         eng = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
-        status = eng.handle(_mapentry_row(), limits.ArmingState(dry_run=False))
+        status = eng.handle(_mapentry_row(p_map=0.75), limits.ArmingState(dry_run=False))
         assert status == "placed"
         assert "OID9" in eng.resting
         return eng, engine_mod, _time.monotonic()

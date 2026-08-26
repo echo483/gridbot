@@ -118,6 +118,25 @@ def build_intent(instance: dict, stake_cap_usd: float) -> OrderIntent | None:
     )
 
 
+US_BAND_GATE = (0.50, 0.80)
+
+
+def us_band_gated(p_map: object) -> bool:
+    """Executor risk policy (frozen 2026-08-26 pre-first-fire): place US map
+    entries only while P_map is inside US_BAND_GATE.
+
+    External diagnostic (cs2agent ADR-0038, our 32-series pinned holdout):
+    the race aggregation over-forecasts above ~0.8 — entries at P_map>=0.8
+    measured -8..-16 pts settled edge, 0.50-0.80 positive at every
+    threshold. Policy layer only: the H-MAPENTRY1 recording population and
+    frozen bar are untouched; gated rows are still ledgered for evidence.
+    Returns True when placement must be blocked; missing p_map fails closed.
+    """
+    if not isinstance(p_map, (int, float)) or isinstance(p_map, bool):
+        return True
+    return not (US_BAND_GATE[0] <= float(p_map) <= US_BAND_GATE[1])
+
+
 def build_us_intent(row: dict, stake_cap_usd: float) -> OrderIntent | None:
     """Build a Polymarket US maker intent from one QUALIFYING mapentry row.
 

@@ -31,6 +31,13 @@ loop only: analysis, reviews, reports, hypothesis drafts.
 **NOT yet proven:** map-level aggregation calibration (H-MAPENTRY1 has zero
 instances — tonight starts it); fill probability at fair−4pts (the single
 biggest unknown); any strategy PASS. No strategy is validated for scale.
+**External diagnostic (cs2agent ADR-0038, our pinned 32-series holdout,
+NOT a verdict input):** q at crossings transfers calibrated (+3pts
+UNDER-confident at τ=0.85, safe direction), but the race aggregation's iid
+p_fut over-forecasts above P_map≈0.8 (ECE 0.137-0.145 vs 0.08 bar; entry
+at −4pts measured −8..−16pts settled edge up there, positive only in
+0.50-0.80). Armed entries are band-gated to 0.50 ≤ P_map ≤ 0.80 — frozen
+pre-first-fire as H-MAPENTRY1-BANDGATE1 in the registry.
 
 ## What is RUNNING (systemd --user)
 

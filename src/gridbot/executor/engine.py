@@ -24,7 +24,7 @@ from pathlib import Path
 from gridbot import config
 from gridbot.executor import ledger as ledger_mod
 from gridbot.executor import limits, pmus, reconcile
-from gridbot.executor.intents import build_intent, build_us_intent
+from gridbot.executor.intents import build_intent, build_us_intent, us_band_gated
 from gridbot.instruments.shadow import Follow
 
 log = logging.getLogger("gridbot.executor")
@@ -89,6 +89,25 @@ class Engine:
             return None
         if intent.dedup_key in self.seen:
             return None
+        # Band gate (executor risk policy, frozen pre-first-fire): record-only
+        # skip, dedup NOT consumed — a later in-band crossing on the same book
+        # may still enter. Applies identically in dry_run so the armed
+        # decision path stays byte-identical.
+        if kind == "mapentry" and us_band_gated(record.get("p_map")):
+            row = intent.record()
+            row.update(
+                {
+                    "status": "skipped:band_gate",
+                    "order_id": None,
+                    "p_map": record.get("p_map"),
+                    "ts_ns": time.time_ns(),
+                    "live": armed.live,
+                }
+            )
+            self.ledger.append(row)
+            log.info("band gate: %s p_map=%s held out of armed band",
+                     intent.dedup_key, record.get("p_map"))
+            return "skipped:band_gate"
         # Capacity skips do NOT consume the dedup key (M6): when open slots
         # or loss budget free up, the same instance may retry next cycle.
         if self.open_count >= limits.max_open_positions():
@@ -115,6 +134,7 @@ class Engine:
             {
                 "status": status,
                 "order_id": order_id,
+                "p_map": record.get("p_map"),
                 "ts_ns": time.time_ns(),
                 "live": armed.live,
             }
