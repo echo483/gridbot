@@ -13,6 +13,7 @@ Run: uv run python scripts/pmus_watch.py [--once]
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import time
 from datetime import UTC, datetime
@@ -67,17 +68,46 @@ def snapshot(client: PolymarketUS) -> dict:
     return {"events": len(events), "markets": n_markets}
 
 
+def _grid_post_sync(url: str, query: str, variables: dict) -> dict:
+    """Sync bridge to the repo's async graphql layer (per-call event loop)."""
+
+    async def _call():
+        import httpx
+
+        from gridbot.graphql import post
+
+        async with httpx.AsyncClient() as c:
+            return await post(c, url, query, variables)
+
+    return asyncio.run(_call())
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--once", action="store_true", help="single pass (timer mode)")
+    ap.add_argument(
+        "--mapping",
+        action="store_true",
+        help="also run the GRID↔PMUS mapping snapshot (visibility bridge)",
+    )
     args = ap.parse_args()
     client = PolymarketUS()  # public gateway only — no credentials
     result = snapshot(client)
+    if args.mapping:
+        from gridbot.executor.us_mapping import snapshot as mapping_snapshot
+
+        result["mapping"] = mapping_snapshot(client, _grid_post_sync)
     stamp = f"{datetime.now(UTC):%H:%M}"
     if result["events"]:
         print(f"🎮 {stamp} PMUS ESPORTS LIVE: {result['events']} events / {result['markets']} markets")
     else:
         print(f"{stamp} pmus watch: no active esports events (series still empty)")
+    if "mapping" in result:
+        m = result["mapping"]
+        print(
+            f"🗺️  mapping: {m['matched']}/{m['grid_series']} GRID series matched "
+            f"against {m['pmus_events']} PMUS events ({m['us_markets']} US markets)"
+        )
     if not args.once:
         print("(continuous mode not implemented — run via timer)")
 

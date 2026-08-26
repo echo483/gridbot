@@ -33,7 +33,7 @@ frozen bars the shadow engine reports against.
 
 - Review `pmus.place()` together — it is deliberately one small function.
 - Verify a market EXISTS for the target title (2026-08-25 evidence: the US
-  venue's cs2/league-of-legends series are provisioned but empty; the pmus
+  venue lists real CS2 events (early "empty" read was a discovery-pagination artifact); the pmus
   watch timer alerts when that changes).
 - Run `GRIDBOT_LIVE=1 uv run python scripts/live_fire_test.py` — one $1
   far-from-touch post-only order: place → list → cancel → gone, with

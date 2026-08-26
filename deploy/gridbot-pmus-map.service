@@ -1,0 +1,14 @@
+# GRID <-> Polymarket US mapping snapshot — oneshot, every 15 min via timer.
+# Read-only: joins GRID CS2 series to PMUS events (name+time, scored) and
+# records the tradeable US markets per match. Needs GRID key (keyring) so
+# it inherits the graphical-session anchoring convention.
+[Unit]
+Description=gridbot GRID-PMUS market mapping snapshot (read-only)
+After=network-online.target graphical-session.target
+Requisite=graphical-session.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ops/gridbot
+ExecStart=/home/ops/.local/bin/uv run python scripts/pmus_map_run.py
+NoNewPrivileges=true
