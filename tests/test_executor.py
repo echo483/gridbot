@@ -42,7 +42,7 @@ class TestArmingGate:
         # GRIDBOT_LIVE=1 without keyring keys stays dry.
         state = limits.check_armed(env={"GRIDBOT_LIVE": "1"})
         assert state.dry_run
-        assert any("PRIVATE_KEY" in r for r in state.reasons)
+        assert any("US_KEY_ID" in r for r in state.reasons)
 
     def test_live_property_mirrors_dry_run(self) -> None:
         assert not limits.ArmingState(dry_run=True).live

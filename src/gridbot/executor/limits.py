@@ -68,10 +68,10 @@ def check_armed(env: dict[str, str] | None = None) -> ArmingState:
 
     if e.get("GRIDBOT_LIVE") != "1":
         reasons.append("GRIDBOT_LIVE!=1 (going live is the user's own act)")
-    if not config._secret("POLYMARKET_PRIVATE_KEY"):
-        reasons.append("POLYMARKET_PRIVATE_KEY not in keyring")
-    if not config._secret("POLYMARKET_FUNDER_ADDRESS"):
-        reasons.append("POLYMARKET_FUNDER_ADDRESS not in keyring")
+    if not config._secret("POLYMARKET_US_KEY_ID"):
+        reasons.append("POLYMARKET_US_KEY_ID not in keyring")
+    if not config._secret("POLYMARKET_US_SECRET_KEY"):
+        reasons.append("POLYMARKET_US_SECRET_KEY not in keyring")
     try:
         text = COMPLIANCE_FILE.read_text().lower()
         if COMPLIANCE_MARKER not in text:
