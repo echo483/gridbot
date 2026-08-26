@@ -1,15 +1,14 @@
 """Venue-side reconciliation: ledger truth vs exchange truth.
 
-Closes the S3 residue and the fills/settles gap in skeleton form: DETECT
-every disagreement between what the intent ledger believes (placed orders
-by order_id) and what the venue reports (open orders), and surface fills.
-The engine runs this only when ARMED — dry_run has no venue state — and
-appends a "reconcile" row per pass so the morning report can show drift.
+DETECT every disagreement between what the intent ledger believes
+(placed orders by order_id) and what the venue reports (open orders),
+and surface partial fills. The engine runs this whenever a venue client
+exists — a mid-run disarm must not stop truth ingestion for positions
+already open — and appends a "reconcile" row when the anomaly set
+changes, so the morning report can show drift. Writing the fill and
+settle rows themselves is executor/fills.py's job.
 
-Writing settle rows from venue settlement data (which finally makes the
-daily-loss cap bind on real numbers) builds on these primitives next.
-
-Pure diff logic is separated from the two thin authed fetches so tests
+Pure diff logic is separated from the one thin authed fetch so tests
 never need a client.
 """
 
@@ -18,6 +17,15 @@ from __future__ import annotations
 import logging
 
 log = logging.getLogger("gridbot.executor.reconcile")
+
+
+def _keys_of(records: list[dict], row_type: str) -> set[object]:
+    """dedup_keys carried by every row of ``row_type``."""
+    return {
+        row.get("dedup_key")
+        for row in records
+        if isinstance(row, dict) and row.get("type") == row_type
+    }
 
 
 def open_ledger_orders(records: list[dict]) -> dict[str, dict]:
@@ -31,16 +39,8 @@ def open_ledger_orders(records: list[dict]) -> dict[str, dict]:
     3 — mirrors ledger.open_exposure). ``gone_before_cancel`` never
     releases: that order likely filled; surfacing it is this pass's job.
     """
-    settled = {
-        row.get("dedup_key")
-        for row in records
-        if isinstance(row, dict) and row.get("type") == "settle"
-    }
-    filled = {
-        row.get("dedup_key")
-        for row in records
-        if isinstance(row, dict) and row.get("type") == "fill"
-    }
+    settled = _keys_of(records, "settle")
+    filled = _keys_of(records, "fill")
     cancelled = {
         str(row.get("order_id"))
         for row in records
@@ -65,12 +65,16 @@ def open_ledger_orders(records: list[dict]) -> dict[str, dict]:
     return out
 
 
+def _venue_id(order: object) -> str | None:
+    """Venue order id under either spelling (``id`` / ``orderId``), else None."""
+    if not isinstance(order, dict):
+        return None
+    oid = order.get("id") or order.get("orderId")
+    return str(oid) if oid else None
+
+
 def venue_order_ids(venue_orders: list[dict]) -> set[str]:
-    return {
-        str(o.get("id") or o.get("orderId"))
-        for o in venue_orders
-        if isinstance(o, dict) and (o.get("id") or o.get("orderId"))
-    }
+    return {oid for o in venue_orders if (oid := _venue_id(o))}
 
 
 def diff(records: list[dict], venue_orders: list[dict]) -> dict:
@@ -88,9 +92,9 @@ def diff(records: list[dict], venue_orders: list[dict]) -> dict:
     ledger_open = open_ledger_orders(records)
     venue_ids = venue_order_ids(venue_orders)
     slug_by_id = {
-        str(o.get("id") or o.get("orderId")): o.get("marketSlug")
+        oid: o.get("marketSlug")
         for o in venue_orders
-        if isinstance(o, dict) and (o.get("id") or o.get("orderId"))
+        if (oid := _venue_id(o))
     }
     partial = []
     for o in venue_orders:

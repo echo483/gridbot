@@ -4,11 +4,16 @@ One routing table for every Hermes/OpenRouter delegation so dispatches
 stay managed and cohesive: pick the model by TASK KIND, never ad-hoc.
 Roster set with the user 2026-08-26 (afternoon session):
 
-  programming      z-ai/glm-5.3-flash                primary builder (ex stealth ox-alpha)
-  classification   deepseek/deepseek-v4-flash-0731   labeling/extraction/bulk transforms
-  draft            z-ai/glm-5.3-flash                non-sensitive drafts, docs, summaries (cheap)
+  programming      z-ai/glm-5.3-flash                DEFAULT generalist/builder (user 08-26:
+                                                     "blowing others out of the water" — most
+                                                     prominent model, use throughout)
+  draft            z-ai/glm-5.3-flash                non-sensitive drafts, docs, summaries
+  fast             deepseek/deepseek-v4-flash-0731   LATENCY-SENSITIVE tasks: best token/s,
+                                                     lowest latency, widest provider range
+  classification   deepseek/deepseek-v4-flash-0731   bulk labeling/extraction/transforms
   review           anthropic/claude-opus-5           adversarial review, hard reasoning
-  review2          z-ai/glm-5.3                      second reviewer (caught 403f62a BLOCKER)
+  review2          z-ai/glm-5.3                      the ONLY full-size 5.3 use (review bench
+                                                     record earns it; everywhere else = flash)
 
 Rules encoded here, not re-decided per call:
 - --safe-mode always; prompts must be self-contained (paste data in;
@@ -41,8 +46,9 @@ ROUTES: dict[str, tuple[str, str | None]] = {
     # write are clean (verified twice: deepseek scorer 50/50 tests,
     # glm-5.3-flash wave_detect correct on review).
     "programming": ("z-ai/glm-5.3-flash", "openrouter"),
-    "classification": ("deepseek/deepseek-v4-flash-0731", None),
     "draft": ("z-ai/glm-5.3-flash", "openrouter"),
+    "fast": ("deepseek/deepseek-v4-flash-0731", None),
+    "classification": ("deepseek/deepseek-v4-flash-0731", None),
     "review": ("anthropic/claude-opus-5", "openrouter"),
     "review2": ("z-ai/glm-5.3", "openrouter"),
     "programming2": ("deepseek/deepseek-v4-flash-0731", None),  # backup builder

@@ -163,6 +163,18 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
    keyring-hermetic (conftest). Secrets live in gnome-keyring "login"
    collection (NOT KWallet) — locked keyring needs the user's login
    password, nothing code can do.
+1d. Deferred review findings (08-26 four-lane round; each deliberate,
+   none blocking at $3 stakes): (a) both-sides-held-on-one-slug settle
+   NETTING — resolutions on such slugs are skip-and-warn (fail closed on
+   exposure; loss cap blind for that book only); (b) daily-loss cap is
+   UTC-day bucketed → resets 17:00 PT mid-evening (rolling-24h window is
+   the fix); (c) no two-engine pidfile lock (runbook + systemd prevent);
+   (d) ambiguous-ack orders consume a REENTRY slot but zero max-open
+   capacity until adoption cancels them (~60s window); (e) armed-crash →
+   dry-run-daemon takeover cannot cancel prior orders (no client by
+   design) — re-arm briefly or hand-cancel; scripts for cancel-all
+   emergency queued; (f) reconcile partial_fills "None"-id oddity
+   (pre-existing, simplifier flagged).
 2. First-night analysis: qualification rate, fill rate, realized edge vs
    the 4pt design margin; rerun quant_eval; feed H-MAPENTRY1 bar.
 3. BO1 detection (GRID format field) to unlock match-winner books.

@@ -519,9 +519,11 @@ class TestReentry:
 
         monkeypatch.setattr(pmus, "place", _place)
         eng = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
+        self._tmp = tmp_path
         return eng, engine_mod, _time.monotonic()
 
     def _sweep_all(self, eng, engine_mod, monkeypatch, outcome="cancelled"):
+        from gridbot.executor import ledger as ledger_mod
         from gridbot.executor import pmus
 
         monkeypatch.setattr(pmus, "cancel", lambda _o, _s: outcome)
@@ -529,9 +531,11 @@ class TestReentry:
 
         n = eng.sweep_stale(_time.monotonic() + engine_mod.MAKER_TTL_S + 1)
         # Emulate the fills sync confirming every swept order terminal-with-
-        # zero-fill (release is deferred to venue confirmation, qwen f2).
+        # zero-fill (release is deferred to venue confirmation, qwen f2),
+        # then refresh ledger-derived state exactly as cycle() does.
         eng._fill_checked.update(f"OID{i}" for i in range(1, self._oid + 1))
         eng._confirm_releases()
+        eng._refresh_ledger_state(ledger_mod.load_records(self._tmp / "executor"))
         return n
 
     def test_clean_cancel_allows_exactly_one_reentry(self, tmp_path, monkeypatch) -> None:

@@ -94,11 +94,14 @@ class TestMatchResolution:
         i = _intent()
         assert fills.match_resolution({"m1": [i]}, _resolution()) is i
 
-    def test_both_sides_need_side_string(self) -> None:
+    def test_both_sides_always_skipped(self) -> None:
+        # The venue side string is CONSTANT regardless of our position
+        # (production 08-26), so multi-candidate matching NEVER guesses
+        # (code-review f4 — substring matching mis-attributed settles).
         lo, sh = _intent(key="k1", side="long"), _intent(oid="B", key="k2", side="short")
         by = {"m1": [lo, sh]}
-        assert fills.match_resolution(by, _resolution(side="POSITION_SIDE_SHORT")) is sh
-        assert fills.match_resolution(by, _resolution(side="")) is None  # ambiguous → skip
+        assert fills.match_resolution(by, _resolution(side="POSITION_RESOLUTION_SIDE_SHORT")) is None
+        assert fills.match_resolution(by, _resolution(side="")) is None
 
 
 class TestSync:
@@ -114,14 +117,30 @@ class TestSync:
         assert rows[1]["won"] is True
         assert "A" in checked
 
-    def test_terminal_unfilled_marked_checked_no_rows(self) -> None:
+    def test_terminal_unfilled_without_own_cancel_gets_corrective(self) -> None:
+        # No clean-cancel row of its own (hand-cancel / venue auto-cancel /
+        # crash orphan): terminal-zero-fill writes the corrective release
+        # (code-review f5 widened the glm f8 condition).
         client = _FakeClient({"A": _order(cum=0)})
         checked: set[str] = set()
-        assert fills.sync([_intent()], client, checked, 1) == []
+        rows = fills.sync([_intent()], client, checked, 1)
+        assert [r["status"] for r in rows] == ["cancelled"]
+        assert rows[0]["source"] == "venue_terminal_no_fill"
         assert "A" in checked
         # and it is never retrieved again
         client2 = _FakeClient({})  # retrieve would raise
         assert fills.sync([_intent()], client2, checked, 2) == []
+
+    def test_terminal_unfilled_with_own_cancel_no_rows(self) -> None:
+        records = [
+            _intent(),
+            {"type": "cancel", "order_id": "A", "dedup_key": "k1",
+             "status": "cancelled"},
+        ]
+        client = _FakeClient({"A": _order(cum=0)})
+        checked: set[str] = set()
+        assert fills.sync(records, client, checked, 1) == []
+        assert "A" in checked
 
     def test_existing_fill_row_not_duplicated(self) -> None:
         records = [

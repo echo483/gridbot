@@ -16,6 +16,7 @@ resolution truth → no settle row (fail closed).
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 log = logging.getLogger("gridbot.executor.fills")
 
@@ -28,6 +29,7 @@ TERMINAL_STATES = frozenset({
 })
 
 MAX_RETRIEVES_PER_PASS = 10
+MAX_SLUG_FETCHES_PER_PASS = 8
 ACTIVITY_PAGE_LIMIT = 50
 
 
@@ -98,6 +100,9 @@ def settle_row(intent_row: dict, resolution: dict, ts_ns: int) -> dict | None:
         "dedup_key": intent_row.get("dedup_key"),
         "market_slug": intent_row.get("market_slug"),
         "won": pnl > 0,
+        # Zero delta = void/refund-at-cost, not a loss (code-review f8);
+        # realized_pnl uses venue_pnl so the number stays honest either way.
+        "voided": pnl == 0,
         "venue_pnl": round(pnl, 6),
         "source": "venue_resolution",
         "ts_ns": ts,
@@ -108,12 +113,23 @@ def _iso_ns(s: object) -> int | None:
     """Epoch ns for an ISO-8601 string, else None."""
     if not isinstance(s, str) or not s:
         return None
-    from datetime import datetime
-
     try:
         return int(datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp() * 1e9)
     except (ValueError, OverflowError):
         return None
+
+
+def _order_ids(
+    records: list[dict], row_type: str, status: str | None = None
+) -> set[str]:
+    """order_ids carried by rows of ``row_type`` (optionally status-filtered)."""
+    return {
+        str(row.get("order_id"))
+        for row in records
+        if isinstance(row, dict) and row.get("type") == row_type
+        and (status is None or row.get("status") == status)
+        and row.get("order_id")
+    }
 
 
 def _rows_of(records: list[dict], row_type: str) -> dict[str, dict]:
@@ -133,12 +149,7 @@ def fill_candidates(records: list[dict], checked: set[str]) -> list[dict]:
     were confirmed terminal-with-no-fill. Key-scoped skipping made a
     re-entry sibling's fill invisible forever (qwen review f3).
     """
-    filled_orders = {
-        str(row.get("order_id"))
-        for row in records
-        if isinstance(row, dict) and row.get("type") == "fill"
-        and row.get("order_id")
-    }
+    filled_orders = _order_ids(records, "fill")
     out = []
     for row in records:
         if not isinstance(row, dict) or row.get("type") != "order_intent":
@@ -155,34 +166,41 @@ def fill_candidates(records: list[dict], checked: set[str]) -> list[dict]:
 def match_resolution(intents_by_slug: dict[str, list[dict]], resolution: dict) -> dict | None:
     """The unsettled filled intent a resolution belongs to, else None.
 
-    Slug match first; when BOTH sides of one book are held (distinct
-    dedup keys, same slug) the resolution's ``side`` string must name
-    the intent's us_side — ambiguity is skipped, never guessed.
+    Slug match only. The venue's ``side`` string is CONSTANT
+    ("POSITION_RESOLUTION_SIDE_SHORT" on every 08-26 resolution
+    regardless of our position side), so substring disambiguation would
+    confidently attribute a LONG book's resolution to the SHORT intent
+    (code-review f4). Both-sides-held on one slug is therefore always
+    skipped — fail closed; netting is a queued design item.
     """
     slug = resolution.get("marketSlug")
     candidates = intents_by_slug.get(slug) or []
     if len(candidates) == 1:
         return candidates[0]
     if len(candidates) > 1:
-        side = str(resolution.get("side") or "").lower()
-        hits = [r for r in candidates if str(r.get("us_side") or "").lower() in side and r.get("us_side")]
-        if len(hits) == 1:
-            return hits[0]
-        log.warning("resolution on %s ambiguous across %d intents; skipped",
+        log.warning("resolution on %s spans %d held intents (both sides?) — "
+                    "skipped, needs manual/netted settlement",
                     slug, len(candidates))
     return None
 
 
-def fetch_resolutions(client) -> list[dict] | None:
-    """Recent position resolutions; None on error (callers skip, retry later)."""
+def fetch_resolutions(client, slug: str) -> list[dict] | None:
+    """Position resolutions FOR ONE MARKET; None on error (retry later).
+
+    Per-slug on purpose: a single newest-N global page can bury an old
+    resolution behind unrelated account activity forever (code-review
+    f7) — asking the venue per market makes every held position's
+    settlement reachable.
+    """
     try:
         resp = client.portfolio.activities({
             "limit": ACTIVITY_PAGE_LIMIT,
+            "marketSlug": slug,
             "types": ["ACTIVITY_TYPE_POSITION_RESOLUTION"],
             "sortOrder": "SORT_ORDER_DESCENDING",
         })
     except Exception as exc:  # noqa: BLE001 — fills sync must never kill the engine
-        log.warning("activities fetch failed: %s", type(exc).__name__)
+        log.warning("activities fetch failed for %s: %s", slug, type(exc).__name__)
         return None
     out = []
     for act in (resp or {}).get("activities") or []:
@@ -193,21 +211,22 @@ def fetch_resolutions(client) -> list[dict] | None:
     return out
 
 
-def sync(records: list[dict], client, checked: set[str], now_ns: int) -> list[dict]:
-    """One fills/settles pass. Returns new ledger rows (caller appends).
+def _sync_fills(
+    records: list[dict], client, checked: set[str], now_ns: int
+) -> list[dict]:
+    """Fill (or corrective-cancel) rows for placed orders now terminal on venue.
 
     Mutates ``checked`` with order_ids proven terminal so they are never
-    re-fetched. Bounded venue load: at most MAX_RETRIEVES_PER_PASS order
-    retrieves plus one activities page per pass.
+    re-fetched. At most MAX_RETRIEVES_PER_PASS order retrieves per pass.
     """
     new_rows: list[dict] = []
 
-    gone_orders = {
-        str(row.get("order_id"))
-        for row in records
-        if isinstance(row, dict) and row.get("type") == "cancel"
-        and row.get("status") == "gone_before_cancel" and row.get("order_id")
-    }
+    # Orders that already have a venue-confirmed clean cancel of their own —
+    # those need no corrective release. Everything ELSE that turns out
+    # terminal-with-zero-fill gets one: gone_before_cancel, hand-cancelled,
+    # venue-auto-cancelled at resolution, crash orphans (code-review f5 —
+    # gating on gone rows alone leaked slots across sessions).
+    clean_cancelled = _order_ids(records, "cancel", status="cancelled")
 
     retrieves = 0
     for intent in fill_candidates(records, checked):
@@ -238,12 +257,12 @@ def sync(records: list[dict], client, checked: set[str], now_ns: int) -> list[di
                         intent.get("market_slug"), intent.get("us_side"),
                         row["shares"], row["price"],
                         " (partial)" if row["partial"] else "")
-        elif oid in gone_orders:
-            # gone_before_cancel but the venue says terminal with ZERO
-            # executed (expired / hand-cancelled): without this corrective
-            # row the exposure slot leaks forever (glm review 08-26,
-            # finding 8). A clean-cancel row releases it via the normal
-            # ledger semantics.
+        elif oid not in clean_cancelled:
+            # Terminal with ZERO executed and no clean-cancel row of its
+            # own (gone_before_cancel, hand-cancel, venue auto-cancel,
+            # crash orphan): without this corrective row the exposure slot
+            # leaks forever (glm f8 + code-review f5). A clean-cancel row
+            # releases it via the normal ledger semantics.
             new_rows.append({
                 "type": "cancel", "order_id": oid,
                 "dedup_key": intent.get("dedup_key"),
@@ -254,8 +273,19 @@ def sync(records: list[dict], client, checked: set[str], now_ns: int) -> list[di
             log.warning("order %s was gone_before_cancel but venue shows "
                         "terminal with no fill — exposure released", oid)
         checked.add(oid)
+    return new_rows
 
-    all_rows = records + new_rows
+
+def _sync_settles(
+    records: list[dict], fill_rows: list[dict], client, now_ns: int
+) -> list[dict]:
+    """Settle rows for filled-but-unsettled positions.
+
+    ``fill_rows`` are this pass's brand-new fills, not yet in ``records``.
+    At most MAX_SLUG_FETCHES_PER_PASS activities pages per pass.
+    """
+    new_rows: list[dict] = []
+    all_rows = records + fill_rows
     fills = _rows_of(all_rows, "fill")
     settles = _rows_of(all_rows, "settle")
     placed = {
@@ -266,7 +296,7 @@ def sync(records: list[dict], client, checked: set[str], now_ns: int) -> list[di
     }
     unsettled = set(fills) & set(placed) - set(settles)
     if not unsettled:
-        return new_rows
+        return []
 
     by_slug: dict[str, list[dict]] = {}
     for key in unsettled:
@@ -275,18 +305,30 @@ def sync(records: list[dict], client, checked: set[str], now_ns: int) -> list[di
         if isinstance(slug, str) and slug:
             by_slug.setdefault(slug, []).append(intent)
 
-    resolutions = fetch_resolutions(client)
-    if resolutions is None:
-        return new_rows
     done: set[str] = set()
-    for res in resolutions:
-        intent = match_resolution(by_slug, res)
-        if intent is None or intent.get("dedup_key") in done:
+    for slug in sorted(by_slug)[:MAX_SLUG_FETCHES_PER_PASS]:
+        resolutions = fetch_resolutions(client, slug)
+        if resolutions is None:
             continue
-        row = settle_row(intent, res, now_ns)
-        if row:
-            done.add(str(intent.get("dedup_key")))
-            new_rows.append(row)
-            log.warning("SETTLE recorded from venue: %s won=%s pnl=%s",
-                        row["market_slug"], row["won"], row["venue_pnl"])
+        for res in resolutions:
+            intent = match_resolution(by_slug, res)
+            if intent is None or intent.get("dedup_key") in done:
+                continue
+            row = settle_row(intent, res, now_ns)
+            if row:
+                done.add(str(intent.get("dedup_key")))
+                new_rows.append(row)
+                log.warning("SETTLE recorded from venue: %s won=%s pnl=%s",
+                            row["market_slug"], row["won"], row["venue_pnl"])
     return new_rows
+
+
+def sync(records: list[dict], client, checked: set[str], now_ns: int) -> list[dict]:
+    """One fills/settles pass. Returns new ledger rows (caller appends).
+
+    Mutates ``checked`` with order_ids proven terminal so they are never
+    re-fetched. Bounded venue load: at most MAX_RETRIEVES_PER_PASS order
+    retrieves plus MAX_SLUG_FETCHES_PER_PASS activities pages per pass.
+    """
+    fill_rows = _sync_fills(records, client, checked, now_ns)
+    return fill_rows + _sync_settles(records, fill_rows, client, now_ns)

@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import signal
 import time
 from pathlib import Path
@@ -39,10 +40,17 @@ class Follow:
         self.path: Path | None = None
         self.fh = None
         self._partial = ""  # carry buffer: torn tail of a concurrent append
+        self._stuck = 0  # consecutive empty polls while a partial is held
         self._open_latest(seek_end=not from_start)
 
     def _latest(self) -> Path | None:
-        files = sorted(self.directory.glob(f"{self.prefix}-*.jsonl"))
+        # Date-named files only — a stray sibling (prefix-backup.jsonl)
+        # sorts after every date lexicographically and would latch the
+        # tail forever (code-review f13).
+        files = sorted(
+            f for f in self.directory.glob(f"{self.prefix}-*.jsonl")
+            if re.fullmatch(rf"{re.escape(self.prefix)}-\d{{8}}\.jsonl", f.name)
+        )
         return files[-1] if files else None
 
     def _open_latest(self, seek_end: bool) -> None:
@@ -79,8 +87,25 @@ class Follow:
                 out.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
-        if not out and not self._partial:
-            self._open_latest(seek_end=False)  # day rollover, if any
+        if not out:
+            if not self._partial:
+                self._stuck = 0
+                self._open_latest(seek_end=False)  # day rollover, if any
+            else:
+                # A final line torn forever (writer killed mid-append at day
+                # end) must not block rollover eternally (code-review f13):
+                # after ~30 quiet polls, roll if a newer day file exists.
+                self._stuck += 1
+                if self._stuck >= 30 and self._latest() != self.path:
+                    log.warning(
+                        "follow %s: dropping stuck partial (%d bytes) to "
+                        "roll to newer day file", self.prefix, len(self._partial)
+                    )
+                    self._partial = ""
+                    self._stuck = 0
+                    self._open_latest(seek_end=False)
+        else:
+            self._stuck = 0
         return out
 
     def close(self) -> None:

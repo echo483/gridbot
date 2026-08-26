@@ -76,18 +76,9 @@ def main() -> int:
             # emulate the fills sync confirming every cancel zero-filled
             eng._fill_checked.update(eng._pending_release.keys())
             eng._confirm_releases()
-            # refresh ledger-derived state as cycle() would
+            # refresh ledger-derived state exactly as cycle() does
             records = ledger_mod.load_records(tmp / "executor")
-            counts: dict[str, int] = {}
-            for row in records:
-                s = str(row.get("status") or "")
-                if row.get("type") == "order_intent" and (
-                    s == "placed" or s.startswith("error:")
-                ):
-                    k = row.get("dedup_key")
-                    if isinstance(k, str):
-                        counts[k] = counts.get(k, 0) + 1
-            eng._placed_counts = counts
+            eng._refresh_ledger_state(records)
             eng.open_count = ledger_mod.open_exposure(records)
     # final sweep
     if eng.resting:

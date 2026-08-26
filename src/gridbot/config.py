@@ -80,7 +80,8 @@ class MissingSecret(RuntimeError):
 # deletion kill switch must stay bounded even when the keyring is down).
 # A healthy keyring answering None (secret deleted) clears the entry.
 _SECRET_CACHE: dict[str, tuple[str, float]] = {}
-_KEYRING_INFLIGHT: dict[str, object] = {}  # name -> live worker Thread
+# name -> (worker thread, result box) of a read whose result is not harvested yet
+_KEYRING_INFLIGHT: dict[str, tuple[threading.Thread, dict]] = {}
 _DEGRADED: set[str] = set()  # names being served from cache (log transitions once)
 _SECRET_LOCK = threading.Lock()
 KEYRING_TIMEOUT_S = 5.0
@@ -117,10 +118,20 @@ def _secret(name: str) -> str | None:
 
     with _SECRET_LOCK:
         prior = _KEYRING_INFLIGHT.get(name)
-        if prior is not None and prior.is_alive():
-            # A previous read is still stuck in D-Bus — don't stack another
-            # blocked thread; serve degraded from cache until it resolves.
-            return _from_cache(name, "read still blocked")
+        if prior is not None:
+            prior_worker, prior_box = prior
+            if prior_worker.is_alive():
+                # A previous read is still stuck in D-Bus — don't stack
+                # another blocked thread; serve degraded from cache.
+                return _from_cache(name, "read still blocked")
+            # Harvest a late completion: a keyring that answers slower than
+            # the timeout but SUCCEEDS must still refresh the cache, or a
+            # consistently-slow-but-healthy keyring disarms the engine at
+            # the cache age bound (code-review f15).
+            _KEYRING_INFLIGHT.pop(name, None)
+            val = _finish_read(name, prior_box)
+            if val is not None:
+                return val
 
         box: dict[str, object] = {}
 
@@ -133,24 +144,29 @@ def _secret(name: str) -> str | None:
                 box["exc"] = exc
 
         worker = threading.Thread(target=_read, daemon=True, name=f"keyring:{name}")
-        _KEYRING_INFLIGHT[name] = worker
+        _KEYRING_INFLIGHT[name] = (worker, box)
         worker.start()
         worker.join(KEYRING_TIMEOUT_S)
         if worker.is_alive():
             return _from_cache(name, "read timed out")
         _KEYRING_INFLIGHT.pop(name, None)
-        if "exc" in box:
-            return _from_cache(name, type(box["exc"]).__name__)
-        if name in _DEGRADED:
-            _DEGRADED.discard(name)
-            log.warning("secret %s: keyring healthy again", name)
-        val = box.get("val")
-        if isinstance(val, str) and val:
-            _SECRET_CACHE[name] = (val, time.monotonic())
-            register_secret(val)
-            return val
-        _SECRET_CACHE.pop(name, None)
-        return None
+        return _finish_read(name, box)
+
+
+def _finish_read(name: str, box: dict) -> str | None:
+    """Process a completed keyring read's result box (holds _SECRET_LOCK)."""
+    if "exc" in box:
+        return _from_cache(name, type(box["exc"]).__name__)
+    if name in _DEGRADED:
+        _DEGRADED.discard(name)
+        log.warning("secret %s: keyring healthy again", name)
+    val = box.get("val")
+    if isinstance(val, str) and val:
+        _SECRET_CACHE[name] = (val, time.monotonic())
+        register_secret(val)
+        return val
+    _SECRET_CACHE.pop(name, None)
+    return None
 
 
 def require(name: str) -> str:

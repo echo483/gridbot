@@ -8,11 +8,16 @@ much, what today's realized loss is.
 Ledger row types understood here:
 
 - ``order_intent`` — as written by :meth:`OrderIntent.record`, plus
-  ``status`` ('dry_run' | 'placed' | 'rejected:...' | 'error:...' |
-  'skipped_max_open'), ``ts_ns`` (epoch ns int), ``live`` (bool).
-  Only ``status == 'placed'`` rows can open positions.
-- ``fill`` (future) — ``{type, dedup_key, price, shares, ts_ns}``.
-- ``settle`` (future) — ``{type, dedup_key, won, ts_ns}``.
+  ``status`` ('dry_run' | 'wire_pending' | 'placed' | 'rejected:...' |
+  'error:...' | 'skipped:...'), ``ts_ns`` (epoch ns int), ``live``
+  (bool). Only ``status == 'placed'`` rows can open positions.
+- ``fill`` — ``{type, dedup_key, order_id, price, shares, ts_ns}``.
+- ``settle`` — ``{type, dedup_key, won, venue_pnl, ts_ns}``.
+- ``cancel`` — ``{type, dedup_key, order_id, status, ts_ns}``; only
+  ``status == 'cancelled'`` releases exposure (see :func:`open_exposure`).
+
+``fill``/``settle``/``cancel`` rows come from the engine's TTL sweep and
+from executor/fills.py's venue sync.
 
 Everything is pure over ``list[dict]``; :func:`load_records` does the
 only I/O. Unknown row types and rows with missing fields are skipped —
@@ -55,30 +60,34 @@ def load_records(root: Path) -> list[dict]:
     return records
 
 
-def _placed_intents(records: list[dict]) -> dict[str, dict]:
-    """Map dedup_key -> placed intent row (first placed wins)."""
-    placed: dict[str, dict] = {}
+def _first_by_key(
+    records: list[dict], row_type: str, status: str | None = None
+) -> dict[str, dict]:
+    """Map dedup_key -> first row of ``row_type`` (first wins).
+
+    ``status``, when given, additionally requires that row status. Rows
+    without a non-empty string dedup_key are skipped.
+    """
+    out: dict[str, dict] = {}
     for row in records:
-        if not isinstance(row, dict) or row.get("type") != "order_intent":
+        if not isinstance(row, dict) or row.get("type") != row_type:
             continue
-        if row.get("status") != "placed":
+        if status is not None and row.get("status") != status:
             continue
         key = row.get("dedup_key")
-        if isinstance(key, str) and key and key not in placed:
-            placed[key] = row
-    return placed
+        if isinstance(key, str) and key and key not in out:
+            out[key] = row
+    return out
+
+
+def _placed_intents(records: list[dict]) -> dict[str, dict]:
+    """Map dedup_key -> placed intent row (first placed wins)."""
+    return _first_by_key(records, "order_intent", status="placed")
 
 
 def _fills(records: list[dict]) -> dict[str, dict]:
     """Map dedup_key -> first fill row (first wins)."""
-    fills: dict[str, dict] = {}
-    for row in records:
-        if not isinstance(row, dict) or row.get("type") != "fill":
-            continue
-        key = row.get("dedup_key")
-        if isinstance(key, str) and key and key not in fills:
-            fills[key] = row
-    return fills
+    return _first_by_key(records, "fill")
 
 
 def _fill_totals(records: list[dict]) -> dict[str, tuple[float, float, int]]:
@@ -122,14 +131,7 @@ def _fill_totals(records: list[dict]) -> dict[str, tuple[float, float, int]]:
 
 def _settles(records: list[dict]) -> dict[str, dict]:
     """Map dedup_key -> first settle row (first wins)."""
-    settles: dict[str, dict] = {}
-    for row in records:
-        if not isinstance(row, dict) or row.get("type") != "settle":
-            continue
-        key = row.get("dedup_key")
-        if isinstance(key, str) and key and key not in settles:
-            settles[key] = row
-    return settles
+    return _first_by_key(records, "settle")
 
 
 def _price(row: dict) -> float | None:
@@ -176,26 +178,6 @@ def open_positions(records: list[dict]) -> list[dict]:
     return positions
 
 
-def _clean_cancels(records: list[dict]) -> dict[str, dict]:
-    """dedup_key -> first CLEAN cancel row (order pulled while unfilled).
-
-    Only ``status == "cancelled"`` releases exposure. A
-    ``gone_before_cancel`` row means the venue no longer had the order when
-    we tried to pull it — very likely a fill — so the slot stays counted
-    until a settle (or reconcile) resolves it. Conservative by design.
-    """
-    out: dict[str, dict] = {}
-    for row in records:
-        if not isinstance(row, dict) or row.get("type") != "cancel":
-            continue
-        if row.get("status") != "cancelled":
-            continue
-        key = row.get("dedup_key")
-        if isinstance(key, str) and key and key not in out:
-            out[key] = row
-    return out
-
-
 def open_exposure(records: list[dict]) -> int:
     """Count of placed-but-unreleased ORDERS (resting orders + open positions).
 
@@ -204,10 +186,14 @@ def open_exposure(records: list[dict]) -> int:
     two placed orders, and the first entry's clean cancel must not hide
     the second entry's live exposure (glm trade-path review 08-26,
     finding 2). An order is released by ITS OWN clean cancel (matched on
-    order_id) unless its key has a fill row (partial fill before cancel
-    = contracts held), or by its key settling. Orders without an
-    order_id (should not happen for status "placed") stay counted —
-    fail closed. Survives restarts because it derives from the ledger.
+    order_id, ``status == "cancelled"`` only) unless its key has a fill
+    row (partial fill before cancel = contracts held), or by its key
+    settling. ``gone_before_cancel`` never releases: the venue no longer
+    had the order when we pulled it — very likely a fill — so the slot
+    stays counted until a settle (or reconcile) resolves it. Orders
+    without an order_id (should not happen for status "placed") stay
+    counted — fail closed. Derives from the ledger, so it survives
+    restarts.
 
     Args:
         records: Ledger rows (see module docstring).
