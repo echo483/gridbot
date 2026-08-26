@@ -15,6 +15,7 @@ is one small function for joint review before the first live order.
 from __future__ import annotations
 
 import logging
+import time
 
 from gridbot import config
 from gridbot.executor.intents import OrderIntent
@@ -97,3 +98,30 @@ def place(intent: OrderIntent) -> tuple[str, str | None]:
     # Flag distinctly so reconciliation (orders.list) can find orphans.
     log.warning("ambiguous create ack: no order id in response")
     return "error:ambiguous_ack", None
+
+
+def cancel(order_id: str, market_slug: str) -> str:
+    """Cancel one resting order. Unlike creates, cancels ARE retried —
+    cancelling is idempotent and abandoning a stale quote is the worse
+    failure (B1). Returns:
+
+    - "cancelled": the venue accepted the cancel; the order rested unfilled
+      (or the venue treats cancel-after-fill as success — reconcile checks).
+    - "gone": the venue no longer had the order — most likely it FILLED.
+      Callers must NOT release exposure on this.
+    - "error:cancel_failed": three attempts failed; the order may still be
+      resting. Callers keep it tracked and retry next sweep.
+    """
+    for attempt in range(3):
+        try:
+            _get_client().orders.cancel(order_id, {"marketSlug": market_slug})
+            return "cancelled"
+        except Exception as exc:  # noqa: BLE001 — engine must survive any wire failure
+            name = type(exc).__name__
+            if "NotFound" in name or "404" in str(exc)[:120]:
+                return "gone"
+            if "Auth" in name:
+                reset_client()
+            log.warning("cancel %s attempt %d failed: %s", order_id, attempt + 1, name)
+            time.sleep(0.5 * (attempt + 1))
+    return "error:cancel_failed"

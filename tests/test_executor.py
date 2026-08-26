@@ -265,3 +265,122 @@ class TestUsIntent:
         # same map book dedups — a second qualifying round does not re-enter
         again = eng.handle(_mapentry_row(round_number=9), limits.ArmingState(dry_run=True))
         assert again is None
+
+
+class TestCancel:
+    def _stub(self, monkeypatch, behavior):
+        from gridbot.executor import pmus
+
+        class _Orders:
+            def __init__(self):
+                self.calls = 0
+
+            def cancel(self, order_id, params):
+                self.calls += 1
+                behavior(self.calls)
+
+        class _Client:
+            orders = _Orders()
+
+        monkeypatch.setattr(pmus, "_get_client", lambda: _Client())
+        monkeypatch.setattr(pmus.time, "sleep", lambda _s: None)
+        return _Client.orders
+
+    def test_cancel_success(self, monkeypatch) -> None:
+        from gridbot.executor import pmus
+
+        self._stub(monkeypatch, lambda _n: None)
+        assert pmus.cancel("OID", "slug-x") == "cancelled"
+
+    def test_cancel_gone_is_not_retried(self, monkeypatch) -> None:
+        from gridbot.executor import pmus
+
+        class NotFoundError(Exception):
+            pass
+
+        orders = self._stub(monkeypatch, lambda _n: (_ for _ in ()).throw(NotFoundError()))
+        assert pmus.cancel("OID", "slug-x") == "gone"
+        assert orders.calls == 1
+
+    def test_cancel_retries_then_fails(self, monkeypatch) -> None:
+        from gridbot.executor import pmus
+
+        orders = self._stub(monkeypatch, lambda _n: (_ for _ in ()).throw(RuntimeError("x")))
+        assert pmus.cancel("OID", "slug-x") == "error:cancel_failed"
+        assert orders.calls == 3
+
+    def test_cancel_recovers_on_retry(self, monkeypatch) -> None:
+        from gridbot.executor import pmus
+
+        def flaky(n: int) -> None:
+            if n < 3:
+                raise RuntimeError("transient")
+
+        orders = self._stub(monkeypatch, flaky)
+        assert pmus.cancel("OID", "slug-x") == "cancelled"
+        assert orders.calls == 3
+
+
+class TestStaleSweep:
+    def _armed_engine(self, tmp_path, monkeypatch):
+        import time as _time
+
+        from gridbot import config
+        from gridbot.executor import engine as engine_mod
+        from gridbot.executor import pmus
+
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        (tmp_path / "shadow").mkdir()
+        monkeypatch.setattr(pmus, "place", lambda _i: ("placed", "OID9"))
+        eng = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
+        status = eng.handle(_mapentry_row(), limits.ArmingState(dry_run=False))
+        assert status == "placed"
+        assert "OID9" in eng.resting
+        return eng, engine_mod, _time.monotonic()
+
+    def _ledger_rows(self, tmp_path):
+        import json
+
+        return [
+            json.loads(line)
+            for f in (tmp_path / "executor").glob("intents-*.jsonl")
+            for line in f.read_text().splitlines()
+        ]
+
+    def test_fresh_orders_left_alone(self, tmp_path, monkeypatch) -> None:
+        eng, engine_mod, now = self._armed_engine(tmp_path, monkeypatch)
+        assert eng.sweep_stale(now + 1) == 0
+        assert "OID9" in eng.resting
+
+    def test_stale_order_cancelled_releases_slot(self, tmp_path, monkeypatch) -> None:
+        from gridbot.executor import ledger as ledger_mod
+        from gridbot.executor import pmus
+
+        eng, engine_mod, now = self._armed_engine(tmp_path, monkeypatch)
+        monkeypatch.setattr(pmus, "cancel", lambda _o, _s: "cancelled")
+        assert eng.sweep_stale(now + engine_mod.MAKER_TTL_S + 1) == 1
+        assert eng.resting == {}
+        rows = self._ledger_rows(tmp_path)
+        cancels = [r for r in rows if r["type"] == "cancel"]
+        assert len(cancels) == 1 and cancels[0]["status"] == "cancelled"
+        assert ledger_mod.open_exposure(rows) == 0  # clean cancel frees the cap
+
+    def test_gone_keeps_exposure_held(self, tmp_path, monkeypatch) -> None:
+        from gridbot.executor import ledger as ledger_mod
+        from gridbot.executor import pmus
+
+        eng, engine_mod, now = self._armed_engine(tmp_path, monkeypatch)
+        monkeypatch.setattr(pmus, "cancel", lambda _o, _s: "gone")
+        eng.sweep_stale(now + engine_mod.MAKER_TTL_S + 1)
+        rows = self._ledger_rows(tmp_path)
+        cancels = [r for r in rows if r["type"] == "cancel"]
+        assert cancels[0]["status"] == "gone_before_cancel"
+        assert ledger_mod.open_exposure(rows) == 1  # likely fill: stays counted
+
+    def test_failed_cancel_stays_tracked(self, tmp_path, monkeypatch) -> None:
+        from gridbot.executor import pmus
+
+        eng, engine_mod, now = self._armed_engine(tmp_path, monkeypatch)
+        monkeypatch.setattr(pmus, "cancel", lambda _o, _s: "error:cancel_failed")
+        assert eng.sweep_stale(now + engine_mod.MAKER_TTL_S + 1) == 0
+        assert "OID9" in eng.resting  # retried next sweep

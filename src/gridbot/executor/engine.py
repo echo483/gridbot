@@ -31,6 +31,8 @@ log = logging.getLogger("gridbot.executor")
 
 CYCLE_S = 2.0
 RECONCILE_EVERY = 30  # armed only: venue orders.list vs ledger every ~60s
+MAKER_TTL_S = 150.0  # M5: pull unfilled maker quotes — a fair-value quote
+# older than ~2 rounds is stale against a live map and pure adverse selection
 
 
 class IntentLedger:
@@ -59,6 +61,11 @@ class Engine:
         self.follow_us = Follow(config.DATA_DIR / "shadow", "mapentry", from_start=False)
         self.seen: set[str] = set()
         self._cycles = 0
+        # Orders THIS process placed and has not yet released: order_id ->
+        # {slug, dedup_key, placed_mono}. The TTL sweep cancels them when
+        # stale. (Orders from a previous armed session are the reconcile
+        # pass's job — they show up as ledger-open vs venue drift.)
+        self.resting: dict[str, dict] = {}
         # Open exposure = placed-but-unsettled intents, recomputed from the
         # ledger each cycle (S3: survives restarts, releases on settle —
         # never a process-local monotonic counter). Incremented in-cycle on
@@ -96,6 +103,11 @@ class Engine:
             status, order_id = pmus.place(intent)
             if status == "placed":
                 self.open_count += 1
+                self.resting[str(order_id)] = {
+                    "slug": intent.market_slug,
+                    "dedup_key": intent.dedup_key,
+                    "placed_mono": time.monotonic(),
+                }
         else:
             status = "dry_run"
         row = intent.record()
@@ -111,6 +123,50 @@ class Engine:
         log.info("intent %s %s @%.4f x%.2f -> %s", intent.hypothesis_id,
                  intent.team, intent.price, intent.shares, status)
         return status
+
+    def sweep_stale(self, now_mono: float) -> int:
+        """M5: cancel this session's maker orders older than MAKER_TTL_S.
+
+        "cancelled" writes a clean cancel row (releases the exposure slot);
+        "gone" writes gone_before_cancel (likely a fill — slot stays held
+        until settle/reconcile); a failed cancel stays tracked, logs a
+        MANUAL ACTION line, and is retried every sweep.
+        """
+        n = 0
+        for order_id in list(self.resting):
+            info = self.resting[order_id]
+            if now_mono - info["placed_mono"] < MAKER_TTL_S:
+                continue
+            outcome = pmus.cancel(order_id, info["slug"])
+            if outcome == "error:cancel_failed":
+                log.error(
+                    "MANUAL ACTION REQUIRED: cancel failed for order %s on %s "
+                    "(dedup %s) — order may still be resting; will retry next "
+                    "sweep; hand-cancel in the Polymarket US app if it persists.",
+                    order_id, info["slug"], info["dedup_key"],
+                )
+                continue
+            status = "cancelled" if outcome == "cancelled" else "gone_before_cancel"
+            self.ledger.append(
+                {
+                    "type": "cancel",
+                    "order_id": order_id,
+                    "dedup_key": info["dedup_key"],
+                    "market_slug": info["slug"],
+                    "status": status,
+                    "age_s": round(now_mono - info["placed_mono"], 1),
+                    "ts_ns": time.time_ns(),
+                }
+            )
+            if outcome == "gone":
+                log.warning(
+                    "order %s was gone before cancel (likely FILLED) on %s — "
+                    "exposure slot stays held pending settle/reconcile",
+                    order_id, info["slug"],
+                )
+            del self.resting[order_id]
+            n += 1
+        return n
 
     def cycle(self) -> int:
         armed = limits.check_armed()
@@ -131,6 +187,8 @@ class Engine:
                 except Exception:
                     log.exception("bad shadow record skipped")
         self._cycles += 1
+        if armed.live:
+            self.sweep_stale(time.monotonic())
         if armed.live and self._cycles % RECONCILE_EVERY == 0:
             try:
                 report = reconcile.run(

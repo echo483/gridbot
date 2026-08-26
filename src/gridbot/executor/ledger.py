@@ -139,20 +139,42 @@ def open_positions(records: list[dict]) -> list[dict]:
     return positions
 
 
+def _clean_cancels(records: list[dict]) -> dict[str, dict]:
+    """dedup_key -> first CLEAN cancel row (order pulled while unfilled).
+
+    Only ``status == "cancelled"`` releases exposure. A
+    ``gone_before_cancel`` row means the venue no longer had the order when
+    we tried to pull it — very likely a fill — so the slot stays counted
+    until a settle (or reconcile) resolves it. Conservative by design.
+    """
+    out: dict[str, dict] = {}
+    for row in records:
+        if not isinstance(row, dict) or row.get("type") != "cancel":
+            continue
+        if row.get("status") != "cancelled":
+            continue
+        key = row.get("dedup_key")
+        if isinstance(key, str) and key and key not in out:
+            out[key] = row
+    return out
+
+
 def open_exposure(records: list[dict]) -> int:
-    """Count of placed-but-unsettled intents (resting orders + open positions).
+    """Count of placed-but-unreleased intents (resting orders + open positions).
 
     Exposure counting for the engine's max-open cap: a placed GTC order is
-    exposure whether or not it has filled yet, and only a settle releases
-    it. Survives process restarts because it derives from the ledger.
+    exposure whether or not it has filled yet; a settle releases it, and so
+    does a CLEAN unfilled cancel (the stale-maker TTL pass). Survives
+    process restarts because it derives from the ledger.
 
     Args:
         records: Ledger rows (see module docstring).
 
     Returns:
-        Number of dedup_keys with a placed intent and no settle.
+        Number of dedup_keys with a placed intent and no settle/clean-cancel.
     """
-    return len(set(_placed_intents(records)) - set(_settles(records)))
+    placed = set(_placed_intents(records))
+    return len(placed - set(_settles(records)) - set(_clean_cancels(records)))
 
 
 def realized_pnl(records: list[dict]) -> list[tuple[str, float, int]]:
