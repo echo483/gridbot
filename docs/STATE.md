@@ -35,9 +35,16 @@ biggest unknown); any strategy PASS. No strategy is validated for scale.
 NOT a verdict input):** q at crossings transfers calibrated (+3pts
 UNDER-confident at τ=0.85, safe direction), but the race aggregation's iid
 p_fut over-forecasts above P_map≈0.8 (ECE 0.137-0.145 vs 0.08 bar; entry
-at −4pts measured −8..−16pts settled edge up there, positive only in
-0.50-0.80). Armed entries are band-gated to 0.50 ≤ P_map ≤ 0.80 — frozen
-pre-first-fire as H-MAPENTRY1-BANDGATE1 in the registry.
+at −4pts measured −8..−9.5pts settled edge up there, by-series CIs
+excluding zero). Armed entries are band-gated to 0.50 ≤ P_map ≤ 0.80 —
+frozen pre-first-fire as H-MAPENTRY1-BANDGATE1. The gate is HARM
+REDUCTION only: H-BAND1 showed the kept band has NO demonstrated positive
+edge (holdout CIs all include zero; the +0.026 was post-hoc selection).
+Pre-registered first-night read: thin in-band ledger = consistent with
+mechanism; in-band fills arriving READILY = adverse-selection warning
+(judge fill rate per crossing, not count). 0.50-0.65 is the pre-declared
+candidate for the next gate amendment (positive 6/6 cells, but only
+in-sample CIs exclude zero) — do NOT re-cut on same-night data.
 
 ## What is RUNNING (systemd --user)
 

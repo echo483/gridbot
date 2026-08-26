@@ -92,10 +92,18 @@ systemctl --user start gridbot-executor     # back to dry-run daemon
 
 **Band gate (frozen 2026-08-26 pre-first-fire, H-MAPENTRY1-BANDGATE1):**
 armed placements only while 0.50 ≤ P_map ≤ 0.80. Out-of-band qualifying
-rows are ledgered as `skipped:band_gate` and never placed — external
-diagnostic (cs2agent ADR-0038 on our 32-series holdout) measured the
-frozen aggregation −8..−16pts settled edge above P_map 0.8, positive only
-in 0.50-0.80. Expect FEWER clips (~27% of crossings are in-band).
+rows are ledgered as `skipped:band_gate` and never placed. **HARM
+REDUCTION, not edge selection** (cs2agent ADR-0038 + H-BAND1 on our
+32-series holdout): above P_map 0.8 the aggregation measures −8.4/−9.4/
+−9.5pts settled edge with by-series CIs excluding zero; the kept band has
+NO demonstrated positive edge (all holdout CIs include zero — the earlier
++0.026 was post-hoc selection, corrected by its own author). In-band clips
+buy fill-mechanics evidence. Expect FEWER clips (~27% of crossings
+in-band) and RARE fills. **Pre-registered read of first-night data (frozen
+before any arrived):** a thin in-band ledger is CONSISTENT with the
+mechanism (model under-confident in-band → book rarely sits below our
+too-low fair); in-band entries filling READILY is the adverse-selection
+warning. Judge fill RATE per in-band crossing, not fill count.
 
 Cap rationale at the $26 bankroll: $3/order ≈ quarter-Kelly on the
 strongest calibrated cell; 2 open max ≈ 23% deployed worst-case. Every
