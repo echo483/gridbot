@@ -230,3 +230,10 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
    change needed: join mapentry rows to instance rows on
    (src_hypothesis_id, series_id, map_number, round_number, dedup_extra);
    clock_seconds lives on the instance row.
+12. Knowledge-graph lane (user-led, queued 08-26 eve, task #29): the user
+   wants to learn KG engineering and co-develop a gridbot knowledge graph.
+   They research first; do NOT start building until they kick it off.
+   Carry-in when it starts: this STATE.md, docs/experiments/registry.jsonl
+   (hypotheses/verdicts = natural nodes+edges), the capture corpus
+   relations (series↔maps↔markets↔orders↔fills↔settles), the gotchas
+   section, and Claude memory. Slow-loop only (iron rail 1).
