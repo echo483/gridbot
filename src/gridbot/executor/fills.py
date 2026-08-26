@@ -89,6 +89,10 @@ def settle_row(intent_row: dict, resolution: dict, ts_ns: int) -> dict | None:
     if rb is None or ra is None:
         return None
     pnl = ra - rb
+    # Venue resolution time when parseable, else sync time — a settle
+    # bucketed into the wrong UTC day mis-binds the daily-loss cap
+    # (qwen review f9).
+    ts = _iso_ns(resolution.get("updateTime")) or ts_ns
     return {
         "type": "settle",
         "dedup_key": intent_row.get("dedup_key"),
@@ -96,8 +100,20 @@ def settle_row(intent_row: dict, resolution: dict, ts_ns: int) -> dict | None:
         "won": pnl > 0,
         "venue_pnl": round(pnl, 6),
         "source": "venue_resolution",
-        "ts_ns": ts_ns,
+        "ts_ns": ts,
     }
+
+
+def _iso_ns(s: object) -> int | None:
+    """Epoch ns for an ISO-8601 string, else None."""
+    if not isinstance(s, str) or not s:
+        return None
+    from datetime import datetime
+
+    try:
+        return int(datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp() * 1e9)
+    except (ValueError, OverflowError):
+        return None
 
 
 def _rows_of(records: list[dict], row_type: str) -> dict[str, dict]:
@@ -113,10 +129,16 @@ def _rows_of(records: list[dict], row_type: str) -> dict[str, dict]:
 def fill_candidates(records: list[dict], checked: set[str]) -> list[dict]:
     """Placed intents whose order still needs a venue fill-state check.
 
-    Skips dedup_keys that already have a fill row and order_ids the
-    caller has already confirmed terminal-with-no-fill.
+    ORDER-scoped: skips order_ids that already have their own fill row or
+    were confirmed terminal-with-no-fill. Key-scoped skipping made a
+    re-entry sibling's fill invisible forever (qwen review f3).
     """
-    fills = _rows_of(records, "fill")
+    filled_orders = {
+        str(row.get("order_id"))
+        for row in records
+        if isinstance(row, dict) and row.get("type") == "fill"
+        and row.get("order_id")
+    }
     out = []
     for row in records:
         if not isinstance(row, dict) or row.get("type") != "order_intent":
@@ -124,9 +146,7 @@ def fill_candidates(records: list[dict], checked: set[str]) -> list[dict]:
         if row.get("status") != "placed":
             continue
         oid = row.get("order_id")
-        if not oid or str(oid) in checked:
-            continue
-        if row.get("dedup_key") in fills:
+        if not oid or str(oid) in checked or str(oid) in filled_orders:
             continue
         out.append(row)
     return out

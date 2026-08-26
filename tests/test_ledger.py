@@ -171,12 +171,14 @@ def test_unknown_types_and_missing_fields_skipped():
         {"type": "settle", "dedup_key": "k", "won": True},  # missing ts_ns ok
         {"type": "order_intent", "dedup_key": "k", "status": "placed"},  # no price fields
         intent("ok"),
-        fill("ok", "bad", 5),  # non-numeric price on fill -> intent price, fill shares
+        fill("ok", "bad", 5),  # corrupt fill row (non-numeric price) ignored WHOLE
         settle("ok", True, ns(2026, 8, 25, 1)),
     ]
-    # 'ok' settles won: intent price 0.50 with fill shares 5
+    # 'ok' settles won: corrupt fill falls back to the intent's price AND
+    # shares (mixed-source price/shares was arbitrary; whole-row fallback
+    # since the multi-fill aggregation rework).
     pnl = {k: p for k, p, _ in realized_pnl(records)}
-    assert pnl["ok"] == (1.0 - 0.50) * 5.0
+    assert pnl["ok"] == (1.0 - 0.50) * 10.0
 
 
 def test_load_records_reads_and_skips_bad_lines(tmp_path):
@@ -290,3 +292,45 @@ class TestOpenExposure:
         records.append({"type": "cancel", "status": "cancelled",
                         "dedup_key": "k", "order_id": "O2", "ts_ns": 4})
         assert open_exposure(records) == 0
+
+
+def test_multi_fill_key_aggregates_and_dedupes():
+    # qwen review f3: a re-entry key carries fills from two orders — shares
+    # sum, price is the weighted average, duplicate rows (crash replay,
+    # same order_id) count once.
+    from gridbot.executor.ledger import _fill_totals, realized_pnl
+
+    records = [
+        {"type": "order_intent", "status": "placed", "dedup_key": "k",
+         "order_id": "O1", "price": 0.5, "shares": 4.0, "ts_ns": 1},
+        {"type": "fill", "dedup_key": "k", "order_id": "O1", "price": 0.5,
+         "shares": 4.0, "ts_ns": 2},
+        {"type": "fill", "dedup_key": "k", "order_id": "O1", "price": 0.5,
+         "shares": 4.0, "ts_ns": 2},  # duplicate — must not double
+        {"type": "fill", "dedup_key": "k", "order_id": "O2", "price": 0.6,
+         "shares": 2.0, "ts_ns": 3},
+    ]
+    totals = _fill_totals(records)
+    shares, wavg, first_ts = totals["k"]
+    assert shares == 6.0
+    assert abs(wavg - (0.5 * 4 + 0.6 * 2) / 6.0) < 1e-9
+    assert first_ts == 2
+    records.append({"type": "settle", "dedup_key": "k", "won": True, "ts_ns": 9})
+    pnl = {k: p for k, p, _ in realized_pnl(records)}
+    assert abs(pnl["k"] - (1.0 - wavg) * 6.0) < 1e-6
+
+
+def test_settle_venue_pnl_preferred_over_formula():
+    # qwen review f9 + 08-26 production evidence: venue short PnL is
+    # price x qty, not (1-price) x qty — the venue's number is the truth.
+    from gridbot.executor.ledger import realized_pnl
+
+    records = [
+        {"type": "order_intent", "status": "placed", "dedup_key": "k",
+         "order_id": "O1", "price": 0.52, "shares": 5.0, "ts_ns": 1},
+        {"type": "fill", "dedup_key": "k", "order_id": "O1", "price": 0.52,
+         "shares": 5.0, "ts_ns": 2},
+        {"type": "settle", "dedup_key": "k", "won": True, "venue_pnl": 2.6,
+         "ts_ns": 3},
+    ]
+    assert realized_pnl(records) == [("k", 2.6, 3)]

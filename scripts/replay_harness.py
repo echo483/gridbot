@@ -73,6 +73,9 @@ def main() -> int:
             for info in eng.resting.values():
                 info["placed_mono"] = time.monotonic() - engine_mod.MAKER_TTL_S - 1
             eng.sweep_stale(time.monotonic())
+            # emulate the fills sync confirming every cancel zero-filled
+            eng._fill_checked.update(eng._pending_release.keys())
+            eng._confirm_releases()
             # refresh ledger-derived state as cycle() would
             records = ledger_mod.load_records(tmp / "executor")
             counts: dict[str, int] = {}

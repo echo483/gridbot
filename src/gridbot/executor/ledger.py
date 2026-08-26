@@ -81,6 +81,45 @@ def _fills(records: list[dict]) -> dict[str, dict]:
     return fills
 
 
+def _fill_totals(records: list[dict]) -> dict[str, tuple[float, float, int]]:
+    """dedup_key -> (total_shares, weighted_avg_price, first_fill_ts_ns).
+
+    Under re-entry one key can carry fills from TWO orders (qwen review
+    f3); position accounting must aggregate them. Idempotent against
+    crash-replay duplicates: first fill row per order_id wins (rows
+    without an order_id fall back to first-per-key).
+    """
+    seen_orders: set[str] = set()
+    keyless_seen: set[str] = set()
+    agg: dict[str, list[float]] = {}
+    for row in records:
+        if not isinstance(row, dict) or row.get("type") != "fill":
+            continue
+        key = row.get("dedup_key")
+        if not isinstance(key, str) or not key:
+            continue
+        oid = row.get("order_id")
+        if oid:
+            if str(oid) in seen_orders:
+                continue
+            seen_orders.add(str(oid))
+        else:
+            if key in keyless_seen:
+                continue
+            keyless_seen.add(key)
+        shares = _shares(row)
+        price = _price(row)
+        if shares is None or shares <= 0 or price is None:
+            continue
+        ts = row.get("ts_ns")
+        cur = agg.setdefault(key, [0.0, 0.0, ts if isinstance(ts, int) else 0])
+        cur[0] += shares
+        cur[1] += price * shares
+    return {
+        k: (s, cost / s, int(t)) for k, (s, cost, t) in agg.items() if s > 0
+    }
+
+
 def _settles(records: list[dict]) -> dict[str, dict]:
     """Map dedup_key -> first settle row (first wins)."""
     settles: dict[str, dict] = {}
@@ -123,18 +162,16 @@ def open_positions(records: list[dict]) -> list[dict]:
         ``fill_ts_ns`` key. Sorted by dedup_key for determinism.
     """
     placed = _placed_intents(records)
-    fills = _fills(records)
+    totals = _fill_totals(records)
     settles = _settles(records)
     positions: list[dict] = []
-    for key in sorted(set(placed) & set(fills) - set(settles)):
+    for key in sorted(set(placed) & set(totals) - set(settles)):
         intent = placed[key]
-        fill = fills[key]
-        price = _price(fill)
-        shares = _shares(fill)
+        shares, price, first_ts = totals[key]
         pos = dict(intent)
-        pos["price"] = price if price is not None else intent.get("price")
-        pos["shares"] = shares if shares is not None else intent.get("shares")
-        pos["fill_ts_ns"] = fill.get("ts_ns")
+        pos["price"] = price
+        pos["shares"] = shares
+        pos["fill_ts_ns"] = first_ts
         positions.append(pos)
     return positions
 
@@ -218,26 +255,33 @@ def realized_pnl(records: list[dict]) -> list[tuple[str, float, int]]:
         Settles without a matching placed intent are ignored.
     """
     placed = _placed_intents(records)
-    fills = _fills(records)
+    totals = _fill_totals(records)
     settles = _settles(records)
     out: list[tuple[str, float, int]] = []
     for key in sorted(set(placed) & set(settles)):
+        srow = settles[key]
+        ts = srow.get("ts_ns")
+        ts = ts if isinstance(ts, int) else 0
+        # The venue's own realized number is the truth when present — the
+        # maker formula misprices shorts (venue short PnL = price × qty,
+        # observed 08-26) and mispairs multi-fill keys (qwen review f9).
+        vp = srow.get("venue_pnl")
+        if isinstance(vp, (int, float)) and not isinstance(vp, bool):
+            out.append((key, round(float(vp), 6), ts))
+            continue
         intent = placed[key]
-        source = fills.get(key, intent)
-        price = _price(source)
-        if price is None:
+        if key in totals:
+            shares, price, _first = totals[key]
+        else:
             price = _price(intent)
-        shares = _shares(source)
-        if shares is None:
             shares = _shares(intent)
         if price is None or shares is None:
             continue
-        won = settles[key].get("won")
+        won = srow.get("won")
         if not isinstance(won, bool):
             continue
         pnl = (1.0 - price) * shares if won else -price * shares
-        ts = settles[key].get("ts_ns")
-        out.append((key, round(pnl, 6), ts if isinstance(ts, int) else 0))
+        out.append((key, round(pnl, 6), ts))
     return out
 
 

@@ -527,7 +527,12 @@ class TestReentry:
         monkeypatch.setattr(pmus, "cancel", lambda _o, _s: outcome)
         import time as _time
 
-        return eng.sweep_stale(_time.monotonic() + engine_mod.MAKER_TTL_S + 1)
+        n = eng.sweep_stale(_time.monotonic() + engine_mod.MAKER_TTL_S + 1)
+        # Emulate the fills sync confirming every swept order terminal-with-
+        # zero-fill (release is deferred to venue confirmation, qwen f2).
+        eng._fill_checked.update(f"OID{i}" for i in range(1, self._oid + 1))
+        eng._confirm_releases()
+        return n
 
     def test_clean_cancel_allows_exactly_one_reentry(self, tmp_path, monkeypatch) -> None:
         eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
@@ -602,3 +607,39 @@ class TestReentry:
         eng2.cycle()
         assert eng2._placed_counts.get(key, 0) >= 2
         assert eng2.handle(_mapentry_row(p_map=0.70), armed) == "skipped:reentry_cap"
+
+    def test_filled_sibling_does_not_abandon_unfilled_reentry(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # qwen review f1 (BLOCKER): entry 1's fill must not make the sweep
+        # skip-cancel unfilled entry 2 on the same key — the skip is
+        # ORDER-scoped, so entry 2 still gets a real venue cancel.
+        from gridbot.executor import pmus
+
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(_mapentry_row(p_map=0.75), armed) == "placed"  # OID1
+        assert self._sweep_all(eng, engine_mod, monkeypatch) == 1
+        assert eng.handle(_mapentry_row(p_map=0.70), armed) == "placed"  # OID2
+        key = next(iter(eng.resting.values()))["dedup_key"]
+        # fills sync later proves OID1 filled (key becomes fill-bearing)
+        eng._filled_orders.add("OID1")
+        eng._filled_keys.add(key)
+
+        cancelled: list[str] = []
+
+        def _cancel(oid, _slug):
+            cancelled.append(oid)
+            return "cancelled"
+
+        monkeypatch.setattr(pmus, "cancel", _cancel)
+        import time as _time
+
+        eng.sweep_stale(_time.monotonic() + engine_mod.MAKER_TTL_S + 1)
+        assert cancelled == ["OID2"]  # real cancel, not a fabricated skip
+        assert eng.resting == {}
+        # and the fill-bearing key never releases even after confirmation:
+        # it stays seen-blocked (None), never reaching another placement
+        eng._fill_checked.update({"OID1", "OID2"})
+        eng._confirm_releases()
+        assert eng.handle(_mapentry_row(p_map=0.65), armed) is None

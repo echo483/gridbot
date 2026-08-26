@@ -85,8 +85,19 @@ class Engine:
         # H-MAPENTRY1-REENTRY1 (frozen 08-26, user-approved): ledger-derived
         # per-key placed counts (2 lifetime max) and fill-bearing keys (a
         # filled book never releases). Refreshed each cycle's ledger read.
+        # _filled_orders is ORDER-scoped for the sweep's cancel-skip — under
+        # re-entry one key holds two orders and entry 1's fill must never
+        # make the sweep abandon unfilled entry 2 (qwen review f1, BLOCKER).
         self._placed_counts: dict[str, int] = {}
         self._filled_keys: set[str] = set()
+        self._filled_orders: set[str] = set()
+        # Clean cancels awaiting VENUE confirmation of zero fill before the
+        # re-entry release fires: cancel status alone lies (production
+        # evidence: three FULL fills reported "cancelled"), and terminal-only
+        # fill recording means the fill row cannot exist at sweep time — so
+        # releasing at cancel time would hand every partially-filled book a
+        # re-entry (qwen review f2). order_id -> dedup_key.
+        self._pending_release: dict[str, str] = {}
 
     def handle(self, record: dict, armed: limits.ArmingState) -> str | None:
         """Process one shadow record; returns the outcome status or None."""
@@ -207,6 +218,22 @@ class Engine:
         except Exception:
             log.exception("skip-row append failed")
 
+    def _confirm_releases(self) -> None:
+        """Fire queued re-entry releases ONLY for orders the fills sync has
+        proven terminal-with-zero-fill (qwen review f2): order in
+        _fill_checked with no fill row, key untainted by any fill."""
+        for oid in list(self._pending_release):
+            key = self._pending_release[oid]
+            if oid in self._filled_orders or key in self._filled_keys:
+                del self._pending_release[oid]  # filled — never release
+                continue
+            if oid in self._fill_checked:
+                del self._pending_release[oid]
+                if key in self.seen:
+                    self.seen.discard(key)
+                    log.info("re-entry slot released for %s "
+                             "(venue-confirmed unfilled cancel)", key)
+
     def sweep_stale(self, now_mono: float) -> int:
         """M5: cancel this session's maker orders older than MAKER_TTL_S.
 
@@ -218,10 +245,11 @@ class Engine:
         n = 0
         for order_id in list(self.resting):
             info = self.resting[order_id]
-            # A key the fills sync has proven FILLED needs no cancel: hammering
-            # cancel on a terminal order spams the venue forever (glm review
-            # f10). Write the truthful row and hold the slot pending settle.
-            if info["dedup_key"] and info["dedup_key"] in self._filled_keys:
+            # An ORDER the fills sync has proven FILLED needs no cancel:
+            # hammering cancel on a terminal order spams the venue forever
+            # (glm review f10). ORDER-scoped on purpose — key-scoped skipping
+            # abandoned an unfilled re-entry sibling (qwen review f1).
+            if order_id in self._filled_orders:
                 self.ledger.append({
                     "type": "cancel", "order_id": order_id,
                     "dedup_key": info["dedup_key"], "market_slug": info["slug"],
@@ -255,14 +283,15 @@ class Engine:
                     "ts_ns": time.time_ns(),
                 }
             )
-            # H-MAPENTRY1-REENTRY1: a venue-confirmed unfilled cancel frees
-            # the key for ONE more entry (the ledger 2-cap still binds).
-            # gone_before_cancel and fill-bearing keys never release.
+            # H-MAPENTRY1-REENTRY1: the frozen text releases on a cancel the
+            # "venue confirmed was never filled" — cancel SUCCESS is not that
+            # confirmation (the venue reports success on filled orders, seen
+            # in production). Queue the release; it fires only after the
+            # fills sync retrieves the order terminal-with-zero-fill
+            # (qwen review f2).
             key = info["dedup_key"]
-            if (outcome == "cancelled" and key and key in self.seen
-                    and key not in self._filled_keys):
-                self.seen.discard(key)
-                log.info("re-entry slot released for %s (clean cancel)", key)
+            if outcome == "cancelled" and key and key in self.seen:
+                self._pending_release[order_id] = key
             if outcome == "gone":
                 log.warning(
                     "order %s was gone before cancel (likely FILLED) on %s — "
@@ -308,12 +337,15 @@ class Engine:
             pend: dict[str, int] = {}
             outcomes: dict[str, int] = {}
             filled: set[str] = set()
+            filled_orders: set[str] = set()
             for row in records:
                 key = row.get("dedup_key") if isinstance(row, dict) else None
                 if not isinstance(key, str) or not key:
                     continue
                 if row.get("type") == "fill":
                     filled.add(key)
+                    if row.get("order_id"):
+                        filled_orders.add(str(row["order_id"]))
                     continue
                 if row.get("type") != "order_intent":
                     continue
@@ -332,6 +364,7 @@ class Engine:
             }
             self._placed_counts = counts
             self._filled_keys = filled
+            self._filled_orders = filled_orders
         except Exception:
             log.exception("ledger read failed; keeping previous caps state")
         n = 0
@@ -346,7 +379,13 @@ class Engine:
             except Exception:
                 log.exception("shadow follow failed; continuing")
         self._cycles += 1
-        if armed.live and self._cycles % RECONCILE_EVERY == 0:
+        # Venue truth (reconcile + fills/settles + adoption) runs whenever a
+        # client exists — a mid-run DISARM must not stop truth ingestion for
+        # positions already open (qwen review f4/f5). A never-armed process
+        # has no client and correctly skips.
+        if (armed.live or pmus._client is not None) and (
+            self._cycles % RECONCILE_EVERY == 0
+        ):
             try:
                 records = ledger_mod.load_records(self.ledger.root)
                 report = reconcile.run(
@@ -373,20 +412,30 @@ class Engine:
                 ):
                     oid = str(o.get("id"))
                     if oid and o.get("slug") and oid not in self.resting:
+                        # Backdated past TTL: an adopted order is by
+                        # definition already stale (unmanaged >=60s) — the
+                        # next sweep cancels it immediately instead of
+                        # granting a fresh 150s of adverse selection
+                        # (qwen review f7).
                         self.resting[oid] = {
                             "slug": o["slug"],
                             "dedup_key": o.get("dedup_key"),
-                            "placed_mono": time.monotonic(),
+                            "placed_mono": time.monotonic() - MAKER_TTL_S - 1,
                         }
                         log.warning(
                             "adopted venue order %s on %s into TTL sweep "
-                            "(%s)", oid, o["slug"],
+                            "(%s; cancel next sweep)", oid, o["slug"],
                             "prior session" if o.get("dedup_key") else "orphan",
                         )
                 for row in fills_mod.sync(
                     records, pmus._get_client(), self._fill_checked, time.time_ns()
                 ):
                     self.ledger.append(row)
+                    if row.get("type") == "fill" and row.get("order_id"):
+                        self._filled_orders.add(str(row["order_id"]))
+                        if isinstance(row.get("dedup_key"), str):
+                            self._filled_keys.add(row["dedup_key"])
+                self._confirm_releases()
             except Exception:
                 log.exception("reconcile pass failed (engine continues)")
         return n
