@@ -24,15 +24,22 @@ def open_ledger_orders(records: list[dict]) -> dict[str, dict]:
     """order_id -> placed intent row the ledger still believes is live.
 
     Released by a settle row (dedup_key) or a CLEAN cancel row (order_id,
-    status "cancelled" — the venue confirmed it died unfilled). A
-    ``gone_before_cancel`` cancel does NOT release: that order likely
-    filled, and it should stay flagged until a settle row lands — that is
-    the drift this pass exists to surface.
+    status "cancelled") — but a clean cancel releases ONLY when no fill
+    row exists for the dedup_key: the venue reports "cancelled" even for
+    cancel-after-partial-fill (pmus.cancel B1 note), and a filled book
+    must stay visible here until it settles (peer review 08-26, finding
+    3 — mirrors ledger.open_exposure). ``gone_before_cancel`` never
+    releases: that order likely filled; surfacing it is this pass's job.
     """
     settled = {
         row.get("dedup_key")
         for row in records
         if isinstance(row, dict) and row.get("type") == "settle"
+    }
+    filled = {
+        row.get("dedup_key")
+        for row in records
+        if isinstance(row, dict) and row.get("type") == "fill"
     }
     cancelled = {
         str(row.get("order_id"))
@@ -47,10 +54,14 @@ def open_ledger_orders(records: list[dict]) -> dict[str, dict]:
         if not isinstance(row, dict) or row.get("status") != "placed":
             continue
         oid = row.get("order_id")
-        if not oid or str(oid) in cancelled:
+        if not oid:
             continue
-        if row.get("dedup_key") not in settled:
-            out[str(oid)] = row
+        key = row.get("dedup_key")
+        if key in settled:
+            continue
+        if str(oid) in cancelled and key not in filled:
+            continue
+        out[str(oid)] = row
     return out
 
 

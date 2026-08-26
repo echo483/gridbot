@@ -81,7 +81,7 @@ def main() -> None:
     print(f"wrote {out_path}")
 
     filled = [o for o in orders_out
-              if any(float(o["venue"].get(k) or 0) > 0
+              if any(float(o.get("venue", {}).get(k) or 0) > 0
                      for k in ("cumQuantity", "filledQuantity"))]
     print(f"\norders with venue-reported fills: {len(filled)}")
     for o in filled:

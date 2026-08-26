@@ -58,6 +58,18 @@ class TestLedgerSide:
         records = [_placed("A", "k1"), _cancel("A", status="gone_before_cancel")]
         assert set(open_ledger_orders(records)) == {"A"}
 
+    def test_clean_cancel_with_fill_stays_open(self) -> None:
+        # Cancel-after-partial-fill reports "cancelled" too; a filled book
+        # stays visible until it settles (peer review 08-26, finding 3).
+        records = [
+            _placed("A", "k1"),
+            {"type": "fill", "dedup_key": "k1", "price": 0.5, "shares": 2.0},
+            _cancel("A"),
+        ]
+        assert set(open_ledger_orders(records)) == {"A"}
+        records.append({"type": "settle", "dedup_key": "k1", "won": True})
+        assert set(open_ledger_orders(records)) == set()
+
 
 class TestDiff:
     def test_agreement_is_quiet(self) -> None:

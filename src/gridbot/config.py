@@ -9,7 +9,10 @@ Secrets policy (same posture as cs2agent — see SECURITY.md):
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
+import time
 from pathlib import Path
 
 from gridbot.redaction import register_secret
@@ -64,17 +67,46 @@ class MissingSecret(RuntimeError):
     """Raised with a secret-FREE message when a required secret is absent."""
 
 
-# Last good keyring value per secret. The Secret Service daemon rides
+# Last good keyring value per secret, with the monotonic time it was
+# last CONFIRMED by a healthy keyring. The Secret Service daemon rides
 # D-Bus and 2026-08-26 it failed BOTH ways in one afternoon: it crashed
 # mid-call (killed the armed engine with an unhandled exception), then its
 # locked replacement made every read BLOCK forever behind an unanswered
 # GUI unlock prompt (wedged the restarted daemon). So reads run in a
-# reaper thread with a hard timeout; an outage or timeout falls back
-# here; a healthy keyring answering None (secret deleted) clears the
-# entry, so deleting a secret still disarms a live engine.
-_SECRET_CACHE: dict[str, str] = {}
+# reaper thread with a hard timeout; an outage or timeout falls back to
+# the cache — but only within KEYRING_CACHE_MAX_AGE_S of the last healthy
+# confirmation, so a wedged keyring cannot keep an armed engine running on
+# a possibly-deleted credential forever (peer review 08-26, finding 1: the
+# deletion kill switch must stay bounded even when the keyring is down).
+# A healthy keyring answering None (secret deleted) clears the entry.
+_SECRET_CACHE: dict[str, tuple[str, float]] = {}
 _KEYRING_INFLIGHT: dict[str, object] = {}  # name -> live worker Thread
+_DEGRADED: set[str] = set()  # names being served from cache (log transitions once)
+_SECRET_LOCK = threading.Lock()
 KEYRING_TIMEOUT_S = 5.0
+KEYRING_CACHE_MAX_AGE_S = 600.0
+
+log = logging.getLogger("gridbot.config")
+
+
+def _from_cache(name: str, why: str) -> str | None:
+    entry = _SECRET_CACHE.get(name)
+    if entry is None:
+        return None
+    val, confirmed_at = entry
+    if time.monotonic() - confirmed_at > KEYRING_CACHE_MAX_AGE_S:
+        if name in _DEGRADED:
+            log.error(
+                "secret %s: keyring degraded (%s) and cached value older than "
+                "%.0fs — treating as UNAVAILABLE (fail closed)",
+                name, why, KEYRING_CACHE_MAX_AGE_S,
+            )
+        return None
+    if name not in _DEGRADED:
+        _DEGRADED.add(name)
+        log.warning("secret %s: keyring degraded (%s); serving last good "
+                    "value from in-process cache", name, why)
+    return val
 
 
 def _secret(name: str) -> str | None:
@@ -83,40 +115,42 @@ def _secret(name: str) -> str | None:
         register_secret(env)
         return env
 
-    import threading
+    with _SECRET_LOCK:
+        prior = _KEYRING_INFLIGHT.get(name)
+        if prior is not None and prior.is_alive():
+            # A previous read is still stuck in D-Bus — don't stack another
+            # blocked thread; serve degraded from cache until it resolves.
+            return _from_cache(name, "read still blocked")
 
-    prior = _KEYRING_INFLIGHT.get(name)
-    if prior is not None and prior.is_alive():
-        # A previous read is still stuck in D-Bus — don't stack another
-        # blocked thread; serve degraded from cache until it resolves.
-        return _SECRET_CACHE.get(name)
+        box: dict[str, object] = {}
 
-    box: dict[str, object] = {}
+        def _read() -> None:
+            try:
+                import keyring  # lazy so tests without a keyring backend still import config
 
-    def _read() -> None:
-        try:
-            import keyring  # lazy so tests without a keyring backend still import config
+                box["val"] = keyring.get_password(KEYRING_SERVICE, name)
+            except Exception as exc:  # noqa: BLE001 — backend outage, not "secret absent"
+                box["exc"] = exc
 
-            box["val"] = keyring.get_password(KEYRING_SERVICE, name)
-        except Exception as exc:  # noqa: BLE001 — backend outage, not "secret absent"
-            box["exc"] = exc
-
-    worker = threading.Thread(target=_read, daemon=True, name=f"keyring:{name}")
-    _KEYRING_INFLIGHT[name] = worker
-    worker.start()
-    worker.join(KEYRING_TIMEOUT_S)
-    if worker.is_alive():
-        return _SECRET_CACHE.get(name)
-    _KEYRING_INFLIGHT.pop(name, None)
-    if "exc" in box:
-        return _SECRET_CACHE.get(name)
-    val = box.get("val")
-    if isinstance(val, str) and val:
-        _SECRET_CACHE[name] = val
-        register_secret(val)
-        return val
-    _SECRET_CACHE.pop(name, None)
-    return None
+        worker = threading.Thread(target=_read, daemon=True, name=f"keyring:{name}")
+        _KEYRING_INFLIGHT[name] = worker
+        worker.start()
+        worker.join(KEYRING_TIMEOUT_S)
+        if worker.is_alive():
+            return _from_cache(name, "read timed out")
+        _KEYRING_INFLIGHT.pop(name, None)
+        if "exc" in box:
+            return _from_cache(name, type(box["exc"]).__name__)
+        if name in _DEGRADED:
+            _DEGRADED.discard(name)
+            log.warning("secret %s: keyring healthy again", name)
+        val = box.get("val")
+        if isinstance(val, str) and val:
+            _SECRET_CACHE[name] = (val, time.monotonic())
+            register_secret(val)
+            return val
+        _SECRET_CACHE.pop(name, None)
+        return None
 
 
 def require(name: str) -> str:

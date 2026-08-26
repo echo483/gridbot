@@ -121,17 +121,29 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
 
 ## Open work queue (post-first-fire)
 
-1. Fills→settles writer (venue settlement → ledger settle rows → daily-loss
-   cap binds; then raise caps discussion). Anchor PnL accounting at the FILL
-   tick, not the post tick — fills are a selected sample (cs2agent
-   H-MAKER-ANCHOR1: fill-anchored ~0.38/$100 worse, uniformly).
-1b. Reconcile false-alarm fix (OBSERVED first armed night, 33x, order
-   C3RBPBKHTFSK): fetch_venue_orders returns [] on any fetch error and
-   diff() reads [] as "venue empty" → phantom gone_from_venue (disproven
-   by the subsequent CLEAN cancel). Fix: return None on error and SKIP
-   the diff; optionally require 2 consecutive gone sightings. Fail
-   direction was safe (false alarm, TTL cancel is the real guard) — do
-   NOT hot-patch mid-armed-session.
+1. DONE 08-26 afternoon (executor/fills.py, awaiting independent review
+   before the commit lands): venue orders.retrieve + activities
+   (POSITION_RESOLUTION) → ledger fill/settle rows on the reconcile
+   cadence; exposure now keeps counting a partially-filled-then-cancelled
+   book until settle (first night: every real fill hid behind a clean
+   "cancelled" — post-only partial fills, then TTL cancel succeeds on the
+   remainder, ledger looks clean while contracts are held). Fill-tick
+   anchoring for PnL analysis still applies (cs2agent H-MAKER-ANCHOR1).
+1b. DONE 08-26 afternoon (commit 403f62a): open_ledger_orders now
+   subtracts CLEAN cancel rows (root cause of the 15-order warning spam,
+   558 rows); gone_before_cancel stays flagged until settle; failed venue
+   fetch returns None and SKIPS the diff; unchanged anomaly sets log
+   DEBUG and are not re-appended.
+1c. Secret Service hardening (commit 403f62a) after gnome-keyring crashed
+   BOTH ways on 08-26 (11:43 D-Bus death killed the armed engine; the
+   restarted daemon came back LOCKED and reads blocked forever behind a
+   GUI prompt, wedging the dry-run daemon + suite + GRID capture, which
+   reads the key per poll): config._secret runs keyring reads in a 5s-
+   timeout thread with an in-process last-good cache; deletion still
+   disarms; engine main loop survives any cycle exception; tests are
+   keyring-hermetic (conftest). Secrets live in gnome-keyring "login"
+   collection (NOT KWallet) — locked keyring needs the user's login
+   password, nothing code can do.
 2. First-night analysis: qualification rate, fill rate, realized edge vs
    the 4pt design margin; rerun quant_eval; feed H-MAPENTRY1 bar.
 3. BO1 detection (GRID format field) to unlock match-winner books.
@@ -167,13 +179,19 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
    calibration-corrected fair, not discount vs a too-low fair.
    Pre-register with own trigger/pricing/bar before ANY run.
 11. TIMING PROFILE (user priority 08-26: "get the timing of the predictive
-   model down"): morning analysis extracts (a) signal→quote latency per
-   order (grid_ts_ns → ts_ns → placement), (b) PMUS reprice lag from
-   postquote drift curves — NOTE the 13-27s lead was measured on INTL
-   books; PMUS absorption is first measured TONIGHT, (c) TTL calibration
-   (150s vs measured absorption time), (d) trust windows: within-round
-   (clock strata) + within-map (progress strata, H-MAPENTRY2). Output
-   feeds a pre-registered timing-aware entry v2. cs2agent (read-only cross-check,
+   model down"): FIRST NUMBERS 08-26 (scripts/timing_profile.py, n=15
+   placed): signal→ledger latency median 8.5s (min 5.5, max 38) — our own
+   pipe consumes a third of the 13-27s intl-book lead; the 3 outliers
+   (22-38s) need explanation (capacity retries?). Post-quote oriented
+   drift (all qualifying rows, sides separate): long +0.85c@30s,
+   +0.53c@60s, fading −0.57c@120s; short flat then +1.7c@120s — NOT the
+   adverse-selection signature (immediate move against), directionally
+   consistent with a real lead; small n, no CIs, describe only. TTL 150s
+   spans the favorable window. Still open: per-fill absorption (needs
+   fills), clock/progress trust windows, latency-outlier attribution,
+   pipeline latency reduction (poll cadence 12s + file-follows + 2s
+   engine cycle are the levers). Output feeds a pre-registered
+   timing-aware entry v2. cs2agent (read-only cross-check,
    08-26) measured ~3x within-round Brier gradient on our 08-25 capture
    (0.22 earliest poll → 0.07 latest, n=232 rounds / 8 series). Our q is
    event-sampled at first threshold crossing (calibrated AT that event,

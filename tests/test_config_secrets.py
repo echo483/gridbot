@@ -31,9 +31,11 @@ def _clean(monkeypatch):
     monkeypatch.setattr(config, "KEYRING_TIMEOUT_S", 0.2)
     config._SECRET_CACHE.pop(NAME, None)
     config._KEYRING_INFLIGHT.pop(NAME, None)
+    config._DEGRADED.discard(NAME)
     yield
     config._SECRET_CACHE.pop(NAME, None)
     config._KEYRING_INFLIGHT.pop(NAME, None)
+    config._DEGRADED.discard(NAME)
 
 
 def test_env_override_wins(monkeypatch) -> None:
@@ -84,6 +86,29 @@ def test_blocking_read_times_out_to_cache(monkeypatch) -> None:
     t0 = _time.monotonic()
     assert config._secret(NAME) == "v1"
     assert _time.monotonic() - t0 < 0.1
+    release.set()
+
+
+def test_wedged_cache_fallback_is_age_bounded(monkeypatch) -> None:
+    # Peer review 08-26 finding 1: while the keyring is WEDGED, deletion
+    # cannot be observed — so the cache fallback must expire. An armed
+    # engine may run at most KEYRING_CACHE_MAX_AGE_S on an unconfirmed
+    # credential before failing closed.
+    import threading
+
+    monkeypatch.setitem(sys.modules, "keyring", _fake_keyring(lambda s, n: "v1"))
+    assert config._secret(NAME) == "v1"
+
+    release = threading.Event()
+
+    def hang(service, name):
+        release.wait(10.0)
+        return "v1"
+
+    monkeypatch.setitem(sys.modules, "keyring", _fake_keyring(hang))
+    assert config._secret(NAME) == "v1"  # within the age bound: cache serves
+    monkeypatch.setattr(config, "KEYRING_CACHE_MAX_AGE_S", 0.0)
+    assert config._secret(NAME) is None  # bound passed: fail closed
     release.set()
 
 

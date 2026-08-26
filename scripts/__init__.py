@@ -1,0 +1,1 @@
+# scripts package — enables `from scripts.mapentry2_score import ...` in tests

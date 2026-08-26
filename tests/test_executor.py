@@ -448,3 +448,46 @@ class TestStaleSweep:
         monkeypatch.setattr(pmus, "cancel", lambda _o, _s: "error:cancel_failed")
         assert eng.sweep_stale(now + engine_mod.MAKER_TTL_S + 1) == 0
         assert "OID9" in eng.resting  # retried next sweep
+
+
+class TestCycleResilience:
+    """Peer review 08-26 finding 4: nothing may starve the TTL sweep."""
+
+    def test_broken_follow_and_gate_still_sweep(self, tmp_path, monkeypatch) -> None:
+        import time as _time
+
+        from gridbot import config
+        from gridbot.executor import engine as engine_mod
+        from gridbot.executor import pmus
+
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        (tmp_path / "shadow").mkdir()
+        monkeypatch.setattr(pmus, "place", lambda _i: ("placed", "OID9"))
+        eng = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
+        assert eng.handle(_mapentry_row(p_map=0.75), limits.ArmingState(dry_run=False)) == "placed"
+
+        # Make the order stale, then break EVERYTHING after the sweep:
+        eng.resting["OID9"]["placed_mono"] = _time.monotonic() - engine_mod.MAKER_TTL_S - 1
+        cancelled: list[str] = []
+
+        def _cancel(oid, _slug):
+            cancelled.append(oid)
+            return "cancelled"
+
+        monkeypatch.setattr(pmus, "cancel", _cancel)
+
+        def _boom(*_a, **_k):
+            raise RuntimeError("deterministic gate failure")
+
+        monkeypatch.setattr(limits, "check_armed", _boom)
+
+        class _BrokenFollow:
+            def lines(self):
+                raise OSError("corrupt shadow file")
+
+        eng.follow = _BrokenFollow()
+        eng.follow_us = _BrokenFollow()
+
+        eng.cycle()  # must not raise, and must have swept first
+        assert cancelled == ["OID9"]
+        assert eng.resting == {}

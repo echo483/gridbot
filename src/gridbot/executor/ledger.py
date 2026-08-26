@@ -164,17 +164,22 @@ def open_exposure(records: list[dict]) -> int:
 
     Exposure counting for the engine's max-open cap: a placed GTC order is
     exposure whether or not it has filled yet; a settle releases it, and so
-    does a CLEAN unfilled cancel (the stale-maker TTL pass). Survives
-    process restarts because it derives from the ledger.
+    does a CLEAN unfilled cancel (the stale-maker TTL pass) — UNLESS a fill
+    row exists for the same dedup_key: a partial fill before the cancel
+    means contracts are held until settlement (first armed night: every
+    real fill hid behind a clean cancel). Survives process restarts
+    because it derives from the ledger.
 
     Args:
         records: Ledger rows (see module docstring).
 
     Returns:
-        Number of dedup_keys with a placed intent and no settle/clean-cancel.
+        Number of dedup_keys with a placed intent and no settle, minus
+        clean-cancelled keys that never filled.
     """
     placed = set(_placed_intents(records))
-    return len(placed - set(_settles(records)) - set(_clean_cancels(records)))
+    released = set(_clean_cancels(records)) - set(_fills(records))
+    return len(placed - set(_settles(records)) - released)
 
 
 def realized_pnl(records: list[dict]) -> list[tuple[str, float, int]]:

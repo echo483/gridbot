@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from gridbot import config
+from gridbot.executor import fills as fills_mod
 from gridbot.executor import ledger as ledger_mod
 from gridbot.executor import limits, pmus, reconcile
 from gridbot.executor.intents import build_intent, build_us_intent, us_band_gated
@@ -77,6 +78,10 @@ class Engine:
         # identical diff neither re-warn nor re-append (the first armed night
         # wrote 558 near-identical rows for one long-cancelled order).
         self._last_reconcile: dict | None = None
+        # Order ids proven terminal-with-no-fill by the fills sync — never
+        # re-fetched. Fills/settles found on venue become ledger rows so
+        # exposure and the daily-loss cap bind on real numbers (S3).
+        self._fill_checked: set[str] = set()
 
     def handle(self, record: dict, armed: limits.ArmingState) -> str | None:
         """Process one shadow record; returns the outcome status or None."""
@@ -193,7 +198,23 @@ class Engine:
         return n
 
     def cycle(self) -> int:
-        armed = limits.check_armed()
+        # TTL sweep FIRST and whenever resting orders exist (not only while
+        # armed): cancelling stale quotes is the safe direction, and nothing
+        # earlier in the cycle may starve it — a deterministic raise in the
+        # gate or the follow-tail must not leave live orders unswept (peer
+        # review 08-26, finding 4).
+        if self.resting:
+            try:
+                self.sweep_stale(time.monotonic())
+            except Exception:
+                log.exception("TTL sweep failed (retried next cycle)")
+        try:
+            armed = limits.check_armed()
+        except Exception:
+            log.exception("arming gate raised; failing closed to dry_run")
+            armed = limits.ArmingState(
+                dry_run=True, reasons=["arming gate exception (fail closed)"]
+            )
         try:
             records = ledger_mod.load_records(self.ledger.root)
             self._daily_loss = ledger_mod.daily_loss_usd(
@@ -204,27 +225,37 @@ class Engine:
             log.exception("ledger read failed; keeping previous caps state")
         n = 0
         for follow in (self.follow, self.follow_us):
-            for record in follow.lines():
-                try:
-                    if self.handle(record, armed):
-                        n += 1
-                except Exception:
-                    log.exception("bad shadow record skipped")
+            try:
+                for record in follow.lines():
+                    try:
+                        if self.handle(record, armed):
+                            n += 1
+                    except Exception:
+                        log.exception("bad shadow record skipped")
+            except Exception:
+                log.exception("shadow follow failed; continuing")
         self._cycles += 1
-        if armed.live:
-            self.sweep_stale(time.monotonic())
         if armed.live and self._cycles % RECONCILE_EVERY == 0:
             try:
+                records = ledger_mod.load_records(self.ledger.root)
                 report = reconcile.run(
-                    ledger_mod.load_records(self.ledger.root),
-                    pmus._get_client(),
-                    last=self._last_reconcile,
+                    records, pmus._get_client(), last=self._last_reconcile
                 )
-                if report != self._last_reconcile:
+                # Append on ANOMALY-set change only — ledger_open/venue_open
+                # counts drift every pass during a live session and would
+                # re-append near-identical rows (peer review 08-26, finding 5).
+                keys = ("gone_from_venue", "unknown_on_venue", "partial_fills", "error")
+                if any(
+                    report.get(k) != (self._last_reconcile or {}).get(k) for k in keys
+                ):
                     self.ledger.append(
                         {"type": "reconcile", **report, "ts_ns": time.time_ns()}
                     )
-                    self._last_reconcile = report
+                self._last_reconcile = report
+                for row in fills_mod.sync(
+                    records, pmus._get_client(), self._fill_checked, time.time_ns()
+                ):
+                    self.ledger.append(row)
             except Exception:
                 log.exception("reconcile pass failed (engine continues)")
         return n

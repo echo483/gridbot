@@ -241,3 +241,28 @@ class TestOpenExposure:
         from gridbot.executor.ledger import open_exposure
 
         assert open_exposure([]) == 0
+
+    def test_clean_cancel_releases_only_unfilled(self) -> None:
+        from gridbot.executor.ledger import open_exposure
+
+        records = [
+            {"type": "order_intent", "status": "placed", "dedup_key": "a", "ts_ns": 1},
+            {"type": "order_intent", "status": "placed", "dedup_key": "b", "ts_ns": 2},
+            {"type": "cancel", "status": "cancelled", "dedup_key": "a", "ts_ns": 3},
+            {"type": "cancel", "status": "cancelled", "dedup_key": "b", "ts_ns": 4},
+            # "b" partially filled BEFORE its clean cancel: contracts are
+            # held to settlement, so its slot must stay counted.
+            {"type": "fill", "dedup_key": "b", "price": 0.5, "shares": 2.0, "ts_ns": 3},
+        ]
+        assert open_exposure(records) == 1
+
+    def test_settle_releases_filled_cancelled(self) -> None:
+        from gridbot.executor.ledger import open_exposure
+
+        records = [
+            {"type": "order_intent", "status": "placed", "dedup_key": "b", "ts_ns": 1},
+            {"type": "cancel", "status": "cancelled", "dedup_key": "b", "ts_ns": 2},
+            {"type": "fill", "dedup_key": "b", "price": 0.5, "shares": 2.0, "ts_ns": 2},
+            {"type": "settle", "dedup_key": "b", "won": False, "ts_ns": 3},
+        ]
+        assert open_exposure(records) == 0
