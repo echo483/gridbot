@@ -303,6 +303,13 @@ def main() -> None:
     ap.add_argument("--once", action="store_true", help="single 30s pass then exit")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # The engine is the process that holds trading keys: the redaction
+    # filter must be live HERE, not only in the capture supervisor
+    # (security review 08-26, LOW-1 — config registers secrets, but
+    # registration is inert until the filter is installed).
+    from gridbot.redaction import install_log_redaction
+
+    install_log_redaction()
 
     armed = limits.check_armed()
     mode = "LIVE (user-armed)" if armed.live else "dry_run"

@@ -19,6 +19,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from gridbot import config  # noqa: E402
+from gridbot.redaction import install_log_redaction  # noqa: E402
+
+install_log_redaction()  # this process reads trading keys (security review 08-26)
 
 
 def main() -> None:
