@@ -125,7 +125,7 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
    cap binds; then raise caps discussion). Anchor PnL accounting at the FILL
    tick, not the post tick — fills are a selected sample (cs2agent
    H-MAKER-ANCHOR1: fill-anchored ~0.38/$100 worse, uniformly).
-1b. Reconcile false-alarm fix (OBSERVED first armed night, order
+1b. Reconcile false-alarm fix (OBSERVED first armed night, 33x, order
    C3RBPBKHTFSK): fetch_venue_orders returns [] on any fetch error and
    diff() reads [] as "venue empty" → phantom gone_from_venue (disproven
    by the subsequent CLEAN cancel). Fix: return None on error and SKIP

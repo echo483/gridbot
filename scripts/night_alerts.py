@@ -21,6 +21,17 @@ def send(msg: str) -> None:
                    capture_output=True, timeout=30)
 
 
+def alert_key(r: dict) -> str:
+    """Stable identity so repeated ledger rows never re-alert (the reconcile
+    pass re-flags the same cancelled order every ~60s — known engine bug,
+    STATE queue 1b)."""
+    t = r.get("type")
+    if t == "reconcile":
+        ids = sorted(set((r.get("gone_from_venue") or []) + (r.get("unknown_on_venue") or [])))
+        return "recon:" + ",".join(ids)
+    return f"{t}:{r.get('order_id')}:{r.get('status')}"
+
+
 def fmt(r: dict) -> str | None:
     s = r.get("status", "")
     slug = str(r.get("market_slug", ""))[-30:]
@@ -46,14 +57,18 @@ def fmt(r: dict) -> str | None:
 
 
 def main() -> None:
-    send("👁 gridbot night alerts armed — placed/fills/errors/reconcile will push here")
+    send("👁 gridbot night alerts armed (dedup v2) — placed/fills/errors/reconcile push once each")
     offsets: dict[Path, int] = {}
+    seen: set[str] = set()
     last_beat = time.monotonic()
     counts = {"placed": 0, "fills": 0}
     while True:
         day = f"{datetime.now(UTC):%Y%m%d}"
         path = DATA / "executor" / f"intents-{day}.jsonl"
         if path.exists():
+            if path not in offsets:
+                offsets[path] = path.stat().st_size  # alerts are for NEW events; skip backlog
+                continue
             off = offsets.get(path, 0)
             with open(path) as fh:
                 fh.seek(off)
@@ -66,6 +81,10 @@ def main() -> None:
                     continue
                 m = fmt(r)
                 if m:
+                    k = alert_key(r)
+                    if k in seen:
+                        continue
+                    seen.add(k)
                     if "PLACED" in m:
                         counts["placed"] += 1
                     if "FILL" in m:
