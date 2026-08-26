@@ -132,7 +132,14 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
 5. Kalshi read-only lane (task #18) + in-repo read-only MCP (task #19).
 6. 24/7 armed operation is a POST-PASS, user-deliberate step — the dry-run
    stack already runs 24/7; only the armed session is manual by design.
-7. Clock-stratified P_map calibration read. cs2agent (read-only cross-check,
+7. H-MAPENTRY2 scoring script (registered pre-fire 08-26 ~08:20Z): score
+   aggregation candidates A/B0/B10/B20 + the 0.50-0.65 vs 0.65-0.80 band
+   sub-hypothesis on live capture from 09:00Z onward, retrospectively from
+   mapentry rows (a, b, q_round) + resolved map winners. Verdict at n>=60
+   resolved maps; simplicity tiebreak frozen (B0>B10>B20 on |dECE|<=0.01).
+   Slow-loop analysis only — armed lane unchanged until a pre-registered
+   amendment cites the verdict.
+8. Clock-stratified P_map calibration read. cs2agent (read-only cross-check,
    08-26) measured ~3x within-round Brier gradient on our 08-25 capture
    (0.22 earliest poll → 0.07 latest, n=232 rounds / 8 series). Our q is
    event-sampled at first threshold crossing (calibrated AT that event,
