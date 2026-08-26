@@ -157,6 +157,15 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
    exit rule exists. Any exit logic must be its own pre-registered
    instrument; requires sell order support in pmus wire first.
 10. Clock-stratified P_map calibration read.
+10b. H-WAVE1 candidate (user-called live 08-26, G2 comeback map1):
+   momentum/transit entry. Evidence: model tracked G2 0.04->1.0 but book
+   led the model the whole climb (r11 model 0.573 vs book 0.68; r12
+   0.744 vs 0.75) so static value never qualified — AND peer holdout
+   shows v1 UNDER-forecasts 0.2-0.6 (realized 0.48-0.56+, unrepaired in
+   all H-MAPAGG2 candidates). Thesis: during rapid upward transit the
+   model lags truth; edge = timing into the move priced vs
+   calibration-corrected fair, not discount vs a too-low fair.
+   Pre-register with own trigger/pricing/bar before ANY run.
 11. TIMING PROFILE (user priority 08-26: "get the timing of the predictive
    model down"): morning analysis extracts (a) signal→quote latency per
    order (grid_ts_ns → ts_ns → placement), (b) PMUS reprice lag from
