@@ -40,6 +40,7 @@ biggest unknown); any strategy PASS. No strategy is validated for scale.
 | gridbot-shadow.service | detectors for 4 registered lanes → data/shadow/instances-*.jsonl |
 | gridbot-mapentry.service | H-MAPENTRY1 recorder: joins instances to PMUS map books, frozen race fair value, qualification — data/shadow/mapentry-*.jsonl |
 | gridbot-executor.service | dry-run engine: instances+mapentry → capped intents ledger (NEVER arms itself) |
+| gridbot-postquote.service | adverse-selection diagnostic: samples book mid +30/+60/+120s after every QUALIFYING mapentry row, ORIENTED to taken side — data/shadow/postquote-*.jsonl (analysis rule: never pool unoriented across sides) |
 | gridbot-pmus-map.timer (15m) | GRID↔PMUS mapping snapshots |
 | gridbot-ingest (1h) / gridbot-backup (05:10) | corpus → Supabase; raw offsite |
 | gridbot-analysis (22:30) / gridbot-morning (08:00) | slow-loop Claude analyst; morning digest (hermes→Telegram) |
@@ -107,7 +108,9 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
 ## Open work queue (post-first-fire)
 
 1. Fills→settles writer (venue settlement → ledger settle rows → daily-loss
-   cap binds; then raise caps discussion).
+   cap binds; then raise caps discussion). Anchor PnL accounting at the FILL
+   tick, not the post tick — fills are a selected sample (cs2agent
+   H-MAKER-ANCHOR1: fill-anchored ~0.38/$100 worse, uniformly).
 2. First-night analysis: qualification rate, fill rate, realized edge vs
    the 4pt design margin; rerun quant_eval; feed H-MAPENTRY1 bar.
 3. BO1 detection (GRID format field) to unlock match-winner books.
@@ -115,3 +118,11 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
 5. Kalshi read-only lane (task #18) + in-repo read-only MCP (task #19).
 6. 24/7 armed operation is a POST-PASS, user-deliberate step — the dry-run
    stack already runs 24/7; only the armed session is manual by design.
+7. Clock-stratified P_map calibration read. cs2agent (read-only cross-check,
+   08-26) measured ~3x within-round Brier gradient on our 08-25 capture
+   (0.22 earliest poll → 0.07 latest, n=232 rounds / 8 series). Our q is
+   event-sampled at first threshold crossing (calibrated AT that event,
+   n=1,613) — but drift-by-clock would hide in pooled cells. No schema
+   change needed: join mapentry rows to instance rows on
+   (src_hypothesis_id, series_id, map_number, round_number, dedup_extra);
+   clock_seconds lives on the instance row.

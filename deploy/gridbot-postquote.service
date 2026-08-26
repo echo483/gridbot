@@ -1,0 +1,20 @@
+# Post-quote oriented drift sampler — adverse-selection diagnostic for
+# H-MAPENTRY1 fill quality (mechanism: cs2agent H-MAKER-ANCHOR1). Tails
+# qualifying mapentry rows, samples the same book at +30/+60/+120s, records
+# the mid move ORIENTED to the taken side. Read-only + record-only: public
+# gateway, no credentials, never places orders.
+# Evidence rows -> data/shadow/postquote-YYYYMMDD.jsonl.
+[Unit]
+Description=gridbot post-quote drift sampler (dry-run evidence, read-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/home/ops/gridbot
+ExecStart=/home/ops/.local/bin/uv run python -m gridbot.instruments.postquote
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
