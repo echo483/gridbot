@@ -33,13 +33,18 @@ def _instance(**over) -> dict:
 
 class TestArmingGate:
     def test_default_is_dry_run(self) -> None:
-        # No GRIDBOT_LIVE, no Polymarket keys in the keyring yet.
+        # Without the user's GRIDBOT_LIVE=1, dry_run regardless of keys.
         state = limits.check_armed(env={})
         assert state.dry_run
         assert any("GRIDBOT_LIVE" in r for r in state.reasons)
 
-    def test_env_alone_cannot_arm(self) -> None:
-        # GRIDBOT_LIVE=1 without keyring keys stays dry.
+    def test_env_alone_cannot_arm(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # GRIDBOT_LIVE=1 with an EMPTY keyring stays dry. The real keyring
+        # may hold live keys, so mock the secret lookup — the test must not
+        # depend on machine state.
+        from gridbot import config as cfg
+
+        monkeypatch.setattr(cfg, "_secret", lambda _name: None)
         state = limits.check_armed(env={"GRIDBOT_LIVE": "1"})
         assert state.dry_run
         assert any("US_KEY_ID" in r for r in state.reasons)
