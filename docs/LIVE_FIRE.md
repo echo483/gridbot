@@ -2,7 +2,7 @@
 
 The executor (`gridbot.executor.engine`) is BUILD-READY and runs dry_run by
 default. Dry-run and live share one decision path; the only difference is
-whether the final wire call in `clob.place()` happens. Going live is the
+whether the final wire call in `pmus.place()` happens. Going live is the
 user's own act (iron rail 3) — every item below must be true, and the gate
 re-checks each engine cycle, so removing any item drops it back to dry_run
 within seconds.
@@ -10,9 +10,30 @@ within seconds.
 ## The gate (`gridbot.executor.limits.check_armed`)
 
 1. `GRIDBOT_LIVE=1` set in the engine's environment by the user.
-2. `POLYMARKET_PRIVATE_KEY` in the OS keyring (`scripts/setup_secrets.py`).
-3. `POLYMARKET_FUNDER_ADDRESS` in the OS keyring.
-4. `docs/COMPLIANCE.md` present with the eligibility confirmation.
+2. `POLYMARKET_US_KEY_ID` in the OS keyring (`scripts/setup_secrets.py`;
+   Ed25519 keypair from https://polymarket.us/developer).
+3. `POLYMARKET_US_SECRET_KEY` in the OS keyring.
+4. `docs/COMPLIANCE.md` present with the explicit affirmation line
+   "eligibility confirmed: yes".
+
+## First fire — 2026-08-25 20:27 PDT (VERIFIED, user-armed)
+
+One $0.84 far-from-touch post-only order on `tec-mlb-nlchamp-2026-09-27-lad`
+(0.21 × 4 vs bid 0.438), placed and cancelled by the user running
+`GRIDBOT_LIVE=1 uv run python scripts/live_fire_test.py`:
+
+| leg | latency |
+|---|---|
+| preview (incl. one-time auth setup) | 2246 ms |
+| **place ack** (order `C3KCSKP1PFSG`) | **394 ms** |
+| visible in orders.list | 101 ms |
+| **cancel ack** | **137 ms** |
+| confirmed gone | 120 ms |
+
+Place+cancel round trip **531 ms** — 2–4% of the 13–27 s information lead.
+Fill honesty confirmed (cumQuantity 0). Machine-readable copy:
+`data/executor/wire-baseline.json`. Steady-state order ops are the
+100–400 ms legs; the 2.2 s preview cost is paid once per process.
 
 ## Caps (env-overridable, hard-clamped in code)
 
