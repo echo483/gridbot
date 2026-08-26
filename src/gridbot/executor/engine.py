@@ -82,6 +82,11 @@ class Engine:
         # re-fetched. Fills/settles found on venue become ledger rows so
         # exposure and the daily-loss cap bind on real numbers (S3).
         self._fill_checked: set[str] = set()
+        # H-MAPENTRY1-REENTRY1 (frozen 08-26, user-approved): ledger-derived
+        # per-key placed counts (2 lifetime max) and fill-bearing keys (a
+        # filled book never releases). Refreshed each cycle's ledger read.
+        self._placed_counts: dict[str, int] = {}
+        self._filled_keys: set[str] = set()
 
     def handle(self, record: dict, armed: limits.ArmingState) -> str | None:
         """Process one shadow record; returns the outcome status or None."""
@@ -97,6 +102,10 @@ class Engine:
         if intent is None:
             return None
         if intent.dedup_key in self.seen:
+            return None
+        # REENTRY1 hard cap: at most 2 lifetime placed entries per key,
+        # counted from the ledger so it survives restarts.
+        if self._placed_counts.get(intent.dedup_key, 0) >= 2:
             return None
         # Band gate (executor risk policy, frozen pre-first-fire): record-only
         # skip, dedup NOT consumed — a later in-band crossing on the same book
@@ -131,6 +140,9 @@ class Engine:
             status, order_id = pmus.place(intent)
             if status == "placed":
                 self.open_count += 1
+                self._placed_counts[intent.dedup_key] = (
+                    self._placed_counts.get(intent.dedup_key, 0) + 1
+                )
                 self.resting[str(order_id)] = {
                     "slug": intent.market_slug,
                     "dedup_key": intent.dedup_key,
@@ -187,6 +199,14 @@ class Engine:
                     "ts_ns": time.time_ns(),
                 }
             )
+            # H-MAPENTRY1-REENTRY1: a venue-confirmed unfilled cancel frees
+            # the key for ONE more entry (the ledger 2-cap still binds).
+            # gone_before_cancel and fill-bearing keys never release.
+            key = info["dedup_key"]
+            if (outcome == "cancelled" and key and key in self.seen
+                    and key not in self._filled_keys):
+                self.seen.discard(key)
+                log.info("re-entry slot released for %s (clean cancel)", key)
             if outcome == "gone":
                 log.warning(
                     "order %s was gone before cancel (likely FILLED) on %s — "
@@ -221,6 +241,23 @@ class Engine:
                 records, f"{datetime.now(UTC):%Y%m%d}"
             )
             self.open_count = ledger_mod.open_exposure(records)
+            counts: dict[str, int] = {}
+            filled: set[str] = set()
+            for row in records:
+                key = row.get("dedup_key") if isinstance(row, dict) else None
+                if not isinstance(key, str) or not key:
+                    continue
+                # Ambiguous acks count toward the cap: the venue may hold a
+                # live order the ledger cannot confirm (glm review finding 1
+                # — conservative, blocks entries, never releases them).
+                if row.get("type") == "order_intent" and row.get("status") in (
+                    "placed", "error:ambiguous_ack"
+                ):
+                    counts[key] = counts.get(key, 0) + 1
+                elif row.get("type") == "fill":
+                    filled.add(key)
+            self._placed_counts = counts
+            self._filled_keys = filled
         except Exception:
             log.exception("ledger read failed; keeping previous caps state")
         n = 0

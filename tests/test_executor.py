@@ -491,3 +491,110 @@ class TestCycleResilience:
         eng.cycle()  # must not raise, and must have swept first
         assert cancelled == ["OID9"]
         assert eng.resting == {}
+
+
+class TestReentry:
+    """H-MAPENTRY1-REENTRY1 (frozen + user-approved 08-26): a clean cancel
+    releases the dedup key for exactly one more entry; fills never release;
+    2 lifetime placed entries per key, ledger-derived."""
+
+    def _armed(self, tmp_path, monkeypatch):
+        import time as _time
+
+        from gridbot import config
+        from gridbot.executor import engine as engine_mod
+        from gridbot.executor import pmus
+
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        (tmp_path / "shadow").mkdir()
+        self._oid = 0
+
+        def _place(_i):
+            self._oid += 1
+            return "placed", f"OID{self._oid}"
+
+        monkeypatch.setattr(pmus, "place", _place)
+        eng = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
+        return eng, engine_mod, _time.monotonic()
+
+    def _sweep_all(self, eng, engine_mod, monkeypatch, outcome="cancelled"):
+        from gridbot.executor import pmus
+
+        monkeypatch.setattr(pmus, "cancel", lambda _o, _s: outcome)
+        import time as _time
+
+        return eng.sweep_stale(_time.monotonic() + engine_mod.MAKER_TTL_S + 1)
+
+    def test_clean_cancel_allows_exactly_one_reentry(self, tmp_path, monkeypatch) -> None:
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(_mapentry_row(p_map=0.75), armed) == "placed"
+        assert eng.handle(_mapentry_row(p_map=0.70), armed) is None  # dedup holds
+        assert self._sweep_all(eng, engine_mod, monkeypatch) == 1
+        assert eng.handle(_mapentry_row(p_map=0.70), armed) == "placed"  # re-entry
+        assert self._sweep_all(eng, engine_mod, monkeypatch) == 1
+        # third entry refused by the lifetime 2-cap even though key released
+        assert eng.handle(_mapentry_row(p_map=0.65), armed) is None
+
+    def test_gone_before_cancel_never_releases(self, tmp_path, monkeypatch) -> None:
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(_mapentry_row(p_map=0.75), armed) == "placed"
+        assert self._sweep_all(eng, engine_mod, monkeypatch, outcome="gone") == 1
+        assert eng.handle(_mapentry_row(p_map=0.70), armed) is None
+
+    def test_filled_key_never_releases(self, tmp_path, monkeypatch) -> None:
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(_mapentry_row(p_map=0.75), armed) == "placed"
+        key = next(iter(eng.resting.values()))["dedup_key"]
+        eng._filled_keys.add(key)  # fills.sync discovered a partial fill
+        assert self._sweep_all(eng, engine_mod, monkeypatch) == 1
+        assert eng.handle(_mapentry_row(p_map=0.70), armed) is None
+
+    def test_restart_enforces_ledger_cap(self, tmp_path, monkeypatch) -> None:
+        # glm review finding 7: the ledger derivation is the whole point —
+        # a fresh process must refuse a third entry from ledger counts alone.
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(_mapentry_row(p_map=0.75), armed) == "placed"
+        assert self._sweep_all(eng, engine_mod, monkeypatch) == 1
+        assert eng.handle(_mapentry_row(p_map=0.70), armed) == "placed"
+        assert self._sweep_all(eng, engine_mod, monkeypatch) == 1
+
+        eng2 = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
+        eng2.cycle()  # loads the ledger; dry_run in tests, counts refresh anyway
+        assert eng2.handle(_mapentry_row(p_map=0.65), armed) is None
+
+    def test_fill_row_via_ledger_blocks_release(self, tmp_path, monkeypatch) -> None:
+        # Derivation coverage: a fill ROW in the ledger (not an injected set)
+        # must reach _filled_keys and block the release.
+        import json
+
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(_mapentry_row(p_map=0.75), armed) == "placed"
+        key = next(iter(eng.resting.values()))["dedup_key"]
+        eng.ledger.append({"type": "fill", "dedup_key": key, "price": 0.5,
+                           "shares": 2.0, "ts_ns": 1})
+        eng.cycle()  # refresh _filled_keys from the ledger
+        assert key in eng._filled_keys
+        assert self._sweep_all(eng, engine_mod, monkeypatch) == 1
+        assert eng.handle(_mapentry_row(p_map=0.70), armed) is None
+
+    def test_ambiguous_ack_counts_toward_cap(self, tmp_path, monkeypatch) -> None:
+        # glm review finding 1: an ambiguous ack may be live on the venue —
+        # after restart it must consume a lifetime entry slot.
+        import json
+
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(_mapentry_row(p_map=0.75), armed) == "placed"
+        key = next(iter(eng.resting.values()))["dedup_key"]
+        row = {"type": "order_intent", "status": "error:ambiguous_ack",
+               "dedup_key": key, "order_id": None, "ts_ns": 2}
+        eng.ledger.append(row)
+        eng2 = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
+        eng2.cycle()
+        assert eng2._placed_counts.get(key, 0) >= 2
+        assert eng2.handle(_mapentry_row(p_map=0.70), armed) is None

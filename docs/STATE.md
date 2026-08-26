@@ -108,7 +108,26 @@ doesn't bind on realized PnL; risk is bounded by stake×max_open instead.
   Ambiguous 2xx = "error:ambiguous_ack", never "rejected".
 - **Hermes**: kanban create needs explicit `assign` + `set-model` after;
   a hook blocks env-dump-looking command bodies (rephrase); telegram sends
-  work standalone via `hermes send -t telegram`.
+  work standalone via `hermes send -t telegram`. Judge dispatched agents
+  by ARTIFACTS, not transcripts — the `-z` transcript channel renders
+  mojibake for several models while the files they write are clean.
+- **Secret Service is a single point of failure that fails BOTH ways**
+  (2026-08-26): gnome-keyring crashed (killed the armed engine), came
+  back LOCKED (reads BLOCK forever; wedged daemon, tests, gh/git-push,
+  and capture — which reads the key per poll). Recovery: user runs
+  `gnome-keyring-daemon --replace --unlock` (gcr prompter can be dead —
+  no dialogs ever appear). Capture data gap 11:46–14:59 PT on 08-26
+  (GRID + PM books; analyses over that window are missing data).
+- **Venue reports cancel success on already-FILLED orders** (confirmed in
+  production: all 3 first-night fills were FULL fills whose TTL cancels
+  returned clean "cancelled"). Never read cancel status as fill truth —
+  fills.sync / settle_truth.py are the truth path.
+- **Short-price convention unpinned**: venue resolution PnL for the
+  AUR-G2 short was +$2.60 (= 0.52×5) not (1−0.52)×5=+2.40 — shorts fill
+  at 1−price cost. ledger.realized_pnl's maker formula overstates short
+  losses/understates wins by that gap (conservative direction). Settle
+  rows carry venue_pnl; use IT for truth reporting. Pin the convention
+  in ledger.py before scaling stakes.
 
 ## Where verdicts come from
 

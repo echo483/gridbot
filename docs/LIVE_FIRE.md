@@ -114,7 +114,11 @@ derived, restart-safe). Expect up to ~2× placements per in-band book vs
 night 1. Fill truth now comes from the engine's fills sync (venue
 `orders.retrieve` + resolutions → `fill`/`settle` ledger rows every
 ~60s) — a partial fill hidden behind a clean cancel is counted as held
-exposure until settlement.
+exposure until settlement. Known bounded window (glm review 08-26,
+finding 2): a partial fill hidden behind a clean cancel may not have its
+fill row yet when the key releases (~60s sync cadence), so one re-entry
+can briefly double stake on that book; hard-bounded by the 2-cap and the
+stake cap.
 
 Cap rationale at the $26 bankroll: $3/order ≈ quarter-Kelly on the
 strongest calibrated cell; 2 open max ≈ 23% deployed worst-case. Every

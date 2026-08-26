@@ -32,11 +32,17 @@ from pathlib import Path
 
 ROUTES: dict[str, tuple[str, str | None]] = {
     # kind -> (model, provider-override or None)
-    "programming": ("deepseek/deepseek-v4-flash-0731", None),
+    # User 08-26: ox-alpha is the primary builder — it's free, use it hard.
+    # Judge agents by ARTIFACTS, not transcripts: the hermes -z transcript
+    # channel renders as mojibake for several models while the files they
+    # write are clean (verified twice: deepseek scorer 50/50 tests,
+    # ox-alpha wave_detect correct on review).
+    "programming": ("stealth/ox-alpha", None),
     "classification": ("deepseek/deepseek-v4-flash-0731", None),
     "draft": ("stealth/ox-alpha", None),
     "review": ("anthropic/claude-opus-5", "openrouter"),
     "review2": ("z-ai/glm-5.3", "openrouter"),
+    "programming2": ("deepseek/deepseek-v4-flash-0731", None),  # backup builder
 }
 
 
