@@ -73,6 +73,10 @@ class Engine:
         # reconciliation (orders.list) is a pre-scaling item: LIVE_FIRE.md.
         self.open_count = 0
         self._daily_loss = 0.0
+        # Last reconcile report actually appended: repeat passes with an
+        # identical diff neither re-warn nor re-append (the first armed night
+        # wrote 558 near-identical rows for one long-cancelled order).
+        self._last_reconcile: dict | None = None
 
     def handle(self, record: dict, armed: limits.ArmingState) -> str | None:
         """Process one shadow record; returns the outcome status or None."""
@@ -212,11 +216,15 @@ class Engine:
         if armed.live and self._cycles % RECONCILE_EVERY == 0:
             try:
                 report = reconcile.run(
-                    ledger_mod.load_records(self.ledger.root), pmus._get_client()
+                    ledger_mod.load_records(self.ledger.root),
+                    pmus._get_client(),
+                    last=self._last_reconcile,
                 )
-                self.ledger.append(
-                    {"type": "reconcile", **report, "ts_ns": time.time_ns()}
-                )
+                if report != self._last_reconcile:
+                    self.ledger.append(
+                        {"type": "reconcile", **report, "ts_ns": time.time_ns()}
+                    )
+                    self._last_reconcile = report
             except Exception:
                 log.exception("reconcile pass failed (engine continues)")
         return n
@@ -238,7 +246,13 @@ def main() -> None:
     engine = Engine()
     deadline = time.monotonic() + 30 if args.once else None
     while True:
-        engine.cycle()
+        try:
+            engine.cycle()
+        except Exception:
+            # An armed session may hold resting orders; nothing transient
+            # (keyring D-Bus outage, wire hiccup, bad ledger line) may kill
+            # the process, or the TTL sweep dies with it.
+            log.exception("cycle failed; engine continues")
         if deadline and time.monotonic() > deadline:
             break
         time.sleep(CYCLE_S)

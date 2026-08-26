@@ -2,11 +2,32 @@
 
 from __future__ import annotations
 
-from gridbot.executor.reconcile import diff, open_ledger_orders, venue_order_ids
+import logging
+
+from gridbot.executor.reconcile import diff, open_ledger_orders, run, venue_order_ids
 
 
 def _placed(oid: str, key: str) -> dict:
     return {"type": "order_intent", "status": "placed", "order_id": oid, "dedup_key": key}
+
+
+def _cancel(oid: str, status: str = "cancelled") -> dict:
+    return {"type": "cancel", "order_id": oid, "status": status}
+
+
+class _FakeOrders:
+    def __init__(self, orders: list[dict] | Exception) -> None:
+        self._orders = orders
+
+    def list(self, params=None):
+        if isinstance(self._orders, Exception):
+            raise self._orders
+        return {"orders": self._orders}
+
+
+class _FakeClient:
+    def __init__(self, orders: list[dict] | Exception) -> None:
+        self.orders = _FakeOrders(orders)
 
 
 class TestLedgerSide:
@@ -25,6 +46,17 @@ class TestLedgerSide:
             {"type": "settle", "dedup_key": "k1", "won": True},
         ]
         assert set(open_ledger_orders(records)) == {"B"}
+
+    def test_clean_cancel_releases(self) -> None:
+        # The first armed night: every TTL-cancelled order was re-flagged
+        # gone_from_venue forever because only settles were subtracted.
+        records = [_placed("A", "k1"), _placed("B", "k2"), _cancel("A")]
+        assert set(open_ledger_orders(records)) == {"B"}
+
+    def test_gone_before_cancel_stays_open(self) -> None:
+        # Likely a fill — MUST keep flagging until a settle row lands.
+        records = [_placed("A", "k1"), _cancel("A", status="gone_before_cancel")]
+        assert set(open_ledger_orders(records)) == {"A"}
 
 
 class TestDiff:
@@ -48,3 +80,27 @@ class TestDiff:
 
     def test_orderid_key_variant(self) -> None:
         assert venue_order_ids([{"orderId": "Q1"}, {"junk": 1}]) == {"Q1"}
+
+
+class TestRun:
+    def test_fetch_error_skips_diff(self) -> None:
+        # A failed fetch must NOT read as "venue empty → everything gone".
+        report = run([_placed("A", "k1")], _FakeClient(RuntimeError("down")))
+        assert report == {"error": "venue_fetch_failed"}
+
+    def test_unchanged_anomaly_logs_debug_not_warning(self, caplog) -> None:
+        records = [_placed("A", "k1")]
+        client = _FakeClient([])
+        with caplog.at_level(logging.DEBUG, logger="gridbot.executor.reconcile"):
+            first = run(records, client, last=None)
+            caplog.clear()
+            second = run(records, client, last=first)
+        assert first["gone_from_venue"] == ["A"] == second["gone_from_venue"]
+        assert all(r.levelno < logging.WARNING for r in caplog.records)
+
+    def test_changed_anomaly_warns_again(self, caplog) -> None:
+        client = _FakeClient([])
+        first = run([_placed("A", "k1")], client, last=None)
+        with caplog.at_level(logging.DEBUG, logger="gridbot.executor.reconcile"):
+            run([_placed("A", "k1"), _placed("B", "k2")], client, last=first)
+        assert any(r.levelno == logging.WARNING for r in caplog.records)

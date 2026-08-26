@@ -64,17 +64,59 @@ class MissingSecret(RuntimeError):
     """Raised with a secret-FREE message when a required secret is absent."""
 
 
+# Last good keyring value per secret. The Secret Service daemon rides
+# D-Bus and 2026-08-26 it failed BOTH ways in one afternoon: it crashed
+# mid-call (killed the armed engine with an unhandled exception), then its
+# locked replacement made every read BLOCK forever behind an unanswered
+# GUI unlock prompt (wedged the restarted daemon). So reads run in a
+# reaper thread with a hard timeout; an outage or timeout falls back
+# here; a healthy keyring answering None (secret deleted) clears the
+# entry, so deleting a secret still disarms a live engine.
+_SECRET_CACHE: dict[str, str] = {}
+_KEYRING_INFLIGHT: dict[str, object] = {}  # name -> live worker Thread
+KEYRING_TIMEOUT_S = 5.0
+
+
 def _secret(name: str) -> str | None:
     env = os.environ.get(name)
     if env:
         register_secret(env)
         return env
-    import keyring  # imported lazily so tests without a keyring backend still import config
 
-    val = keyring.get_password(KEYRING_SERVICE, name)
-    if val:
+    import threading
+
+    prior = _KEYRING_INFLIGHT.get(name)
+    if prior is not None and prior.is_alive():
+        # A previous read is still stuck in D-Bus — don't stack another
+        # blocked thread; serve degraded from cache until it resolves.
+        return _SECRET_CACHE.get(name)
+
+    box: dict[str, object] = {}
+
+    def _read() -> None:
+        try:
+            import keyring  # lazy so tests without a keyring backend still import config
+
+            box["val"] = keyring.get_password(KEYRING_SERVICE, name)
+        except Exception as exc:  # noqa: BLE001 — backend outage, not "secret absent"
+            box["exc"] = exc
+
+    worker = threading.Thread(target=_read, daemon=True, name=f"keyring:{name}")
+    _KEYRING_INFLIGHT[name] = worker
+    worker.start()
+    worker.join(KEYRING_TIMEOUT_S)
+    if worker.is_alive():
+        return _SECRET_CACHE.get(name)
+    _KEYRING_INFLIGHT.pop(name, None)
+    if "exc" in box:
+        return _SECRET_CACHE.get(name)
+    val = box.get("val")
+    if isinstance(val, str) and val:
+        _SECRET_CACHE[name] = val
         register_secret(val)
-    return val or None
+        return val
+    _SECRET_CACHE.pop(name, None)
+    return None
 
 
 def require(name: str) -> str:

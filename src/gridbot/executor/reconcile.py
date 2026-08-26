@@ -21,18 +21,35 @@ log = logging.getLogger("gridbot.executor.reconcile")
 
 
 def open_ledger_orders(records: list[dict]) -> dict[str, dict]:
-    """order_id -> placed intent row with no settle row for its dedup_key."""
+    """order_id -> placed intent row the ledger still believes is live.
+
+    Released by a settle row (dedup_key) or a CLEAN cancel row (order_id,
+    status "cancelled" — the venue confirmed it died unfilled). A
+    ``gone_before_cancel`` cancel does NOT release: that order likely
+    filled, and it should stay flagged until a settle row lands — that is
+    the drift this pass exists to surface.
+    """
     settled = {
         row.get("dedup_key")
         for row in records
         if isinstance(row, dict) and row.get("type") == "settle"
+    }
+    cancelled = {
+        str(row.get("order_id"))
+        for row in records
+        if isinstance(row, dict)
+        and row.get("type") == "cancel"
+        and row.get("status") == "cancelled"
+        and row.get("order_id")
     }
     out: dict[str, dict] = {}
     for row in records:
         if not isinstance(row, dict) or row.get("status") != "placed":
             continue
         oid = row.get("order_id")
-        if oid and row.get("dedup_key") not in settled:
+        if not oid or str(oid) in cancelled:
+            continue
+        if row.get("dedup_key") not in settled:
             out[str(oid)] = row
     return out
 
@@ -78,29 +95,47 @@ def diff(records: list[dict], venue_orders: list[dict]) -> dict:
     }
 
 
-def fetch_venue_orders(client) -> list[dict]:
-    """Open orders from the venue; [] on any error (callers log the gap)."""
+def fetch_venue_orders(client) -> list[dict] | None:
+    """Open orders from the venue; None on any error — a failed fetch is
+    NOT an empty book (treating it as one flags every open order gone)."""
     try:
         return list((client.orders.list() or {}).get("orders") or [])
     except Exception as exc:  # noqa: BLE001 — reconcile must never kill the engine
         log.warning("venue orders.list failed: %s", type(exc).__name__)
-        return []
+        return None
 
 
-def run(records: list[dict], client) -> dict:
-    """One reconcile pass; returns the diff (already logged)."""
-    report = diff(records, fetch_venue_orders(client))
+def run(records: list[dict], client, last: dict | None = None) -> dict:
+    """One reconcile pass; returns the diff (already logged).
+
+    ``last`` is the previous pass's report: an UNCHANGED anomaly set logs
+    at DEBUG instead of re-warning every pass. A failed venue fetch skips
+    the diff entirely and returns {"error": "venue_fetch_failed"}.
+    """
+    venue = fetch_venue_orders(client)
+    if venue is None:
+        return {"error": "venue_fetch_failed"}
+    report = diff(records, venue)
+    changed = last is None or any(
+        report.get(k) != last.get(k)
+        for k in ("gone_from_venue", "unknown_on_venue", "partial_fills")
+    )
     if report["gone_from_venue"]:
-        log.warning(
+        log.log(
+            logging.WARNING if changed else logging.DEBUG,
             "reconcile: %d ledger orders no longer on venue (fill/cancel "
             "unrecorded): %s", len(report["gone_from_venue"]),
             report["gone_from_venue"],
         )
     if report["unknown_on_venue"]:
-        log.error(
+        log.log(
+            logging.ERROR if changed else logging.DEBUG,
             "reconcile: %d venue orders NOT in ledger (orphans!): %s",
             len(report["unknown_on_venue"]), report["unknown_on_venue"],
         )
     if report["partial_fills"]:
-        log.info("reconcile: partial fills on %s", report["partial_fills"])
+        log.log(
+            logging.INFO if changed else logging.DEBUG,
+            "reconcile: partial fills on %s", report["partial_fills"],
+        )
     return report
