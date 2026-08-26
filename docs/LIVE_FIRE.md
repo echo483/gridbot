@@ -60,7 +60,7 @@ frozen bars the shadow engine reports against.
   far-from-touch post-only order: place → list → cancel → gone, with
   latency per leg and a MANUAL ACTION block if cancel ever fails.
 
-## Adversarial review 2026-08-25 (ox-alpha, card t_6fd66ca8) — all fixed
+## Adversarial review 2026-08-25 (glm-5.3-flash (then stealth 'ox-alpha'), card t_6fd66ca8) — all fixed
 
 B1 cancel-abandonment (retry+manual block) · S1 create-retry double-order
 (creates are never resent) · S2 ambiguous ack ≠ rejection · S3 open

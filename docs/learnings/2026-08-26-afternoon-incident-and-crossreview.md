@@ -70,7 +70,7 @@ Never trust cancel status as fill truth.
   `deepseek-v4-pro-0813` produced mojibake through hermes;
   `deepseek-v4-flash-0731` (user: "#1s rn") and glm-5.3 are solid.
   Routing table now lives in `scripts/dispatch.py` (programming/
-  classification → deepseek-0731; drafts → ox-alpha free tier; review →
+  classification → deepseek-0731; drafts → glm-5.3-flash (then stealth 'ox-alpha') free tier; review →
   opus-5 via OpenRouter; review2 → glm-5.3). hermes `-z` transcripts
   mirror to the user's Telegram — batch dispatches, don't spam.
 

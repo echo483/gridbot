@@ -14,7 +14,7 @@ the morning starts with **one digest**, not a scroll of pings.
    (resolution rates, quote availability, distance to frozen bars). Ingest
    picks up newly finished series hourly; spot-check counts.
 3. **Dual-agent development**: work that doesn't need the user is split —
-   Hermes kanban workers (glm-5.3 / ox-alpha) author well-specified facets in
+   Hermes kanban workers (glm-5.3 / glm-5.3-flash (then stealth 'ox-alpha')) author well-specified facets in
    isolated worktrees; Claude reviews substance (not just tests), corrects,
    merges with credit, and comments the verdict on the card. Claude-side
    builds get adversarial multi-agent review before they count as done.

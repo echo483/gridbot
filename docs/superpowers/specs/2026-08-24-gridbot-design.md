@@ -93,7 +93,7 @@ flattens positions; a falsified instrument closes.
 
 - **Claude (this harness):** orchestrator, architect, reviewer; writes and verifies the
   load-bearing code.
-- **Hermes runtime:** cron (EOD/retrain/health), Telegram gateway, agents (ox-alpha now,
+- **Hermes runtime:** cron (EOD/retrain/health), Telegram gateway, agents (glm-5.3-flash now,
   OpenRouter `gridbot` workspace models when the key exists) for corpus mining, hypothesis
   drafting, EOD narrative. Skills authored in-repo, synced via `hermes skills`.
 - **LLMs are slow-loop only.** No model touches an order or a raw secret.

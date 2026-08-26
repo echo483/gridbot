@@ -4,9 +4,9 @@ One routing table for every Hermes/OpenRouter delegation so dispatches
 stay managed and cohesive: pick the model by TASK KIND, never ad-hoc.
 Roster set with the user 2026-08-26 (afternoon session):
 
-  programming      deepseek/deepseek-v4-flash-0731   bulk code + tests ("#1s rn")
+  programming      z-ai/glm-5.3-flash                primary builder (ex stealth ox-alpha)
   classification   deepseek/deepseek-v4-flash-0731   labeling/extraction/bulk transforms
-  draft            stealth/ox-alpha                  non-sensitive drafts, docs, summaries (free)
+  draft            z-ai/glm-5.3-flash                non-sensitive drafts, docs, summaries (cheap)
   review           anthropic/claude-opus-5           adversarial review, hard reasoning
   review2          z-ai/glm-5.3                      second reviewer (caught 403f62a BLOCKER)
 
@@ -15,7 +15,7 @@ Rules encoded here, not re-decided per call:
   agents get no repo access guarantees). Prompts ride argv and are
   visible in /proc/<pid>/cmdline for the run — NEVER paste secrets or
   key material into a dispatch prompt (security review 08-26, LOW-2).
-- NOTHING sensitive to ox-alpha; secrets to NO agent, ever.
+- NOTHING sensitive to the cheap builder tier; secrets to NO agent, ever.
 - hermes -z transcripts mirror to the user's Telegram — batch dispatches,
   don't spam.
 - Every agent-authored file/finding is reviewed by Claude before it
@@ -34,14 +34,15 @@ from pathlib import Path
 
 ROUTES: dict[str, tuple[str, str | None]] = {
     # kind -> (model, provider-override or None)
-    # User 08-26: ox-alpha is the primary builder — it's free, use it hard.
+    # User 08-26: glm-5.3-flash (released from stealth 'ox-alpha' the same
+    # day) is the primary builder — cheap, use it hard.
     # Judge agents by ARTIFACTS, not transcripts: the hermes -z transcript
     # channel renders as mojibake for several models while the files they
     # write are clean (verified twice: deepseek scorer 50/50 tests,
-    # ox-alpha wave_detect correct on review).
-    "programming": ("stealth/ox-alpha", None),
+    # glm-5.3-flash wave_detect correct on review).
+    "programming": ("z-ai/glm-5.3-flash", "openrouter"),
     "classification": ("deepseek/deepseek-v4-flash-0731", None),
-    "draft": ("stealth/ox-alpha", None),
+    "draft": ("z-ai/glm-5.3-flash", "openrouter"),
     "review": ("anthropic/claude-opus-5", "openrouter"),
     "review2": ("z-ai/glm-5.3", "openrouter"),
     "programming2": ("deepseek/deepseek-v4-flash-0731", None),  # backup builder
@@ -63,8 +64,8 @@ def _run(kind: str, prompt: str, timeout: int) -> tuple[int, str]:
 
 
 def pair(spec_file: str, artifacts: list[str], timeout: int) -> int:
-    """A2A development relay (user directive 08-26): ox-alpha BUILDS,
-    Opus 5 REVIEWS the actual artifacts, ox-alpha REVISES from the
+    """A2A development relay (user directive 08-26): glm-5.3-flash BUILDS,
+    Opus 5 REVIEWS the actual artifacts, the builder REVISES from the
     review. Claude verifies before anything lands — the relay replaces
     neither tests nor the human-side review gate. Opus stalls fall back
     to glm-5.3 (observed >25min hang via hermes once)."""
