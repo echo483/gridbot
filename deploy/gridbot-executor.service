@@ -1,0 +1,19 @@
+# Executor engine — dry_run BY DEFAULT and by design under systemd: this
+# unit never sets GRIDBOT_LIVE, so every intent lands in the ledger as a
+# dry_run row (iron rail 3: arming is the user's own act, done manually in
+# their shell, never via this unit). The gate re-checks every cycle.
+# Consumes shadow instances (intl lane) + mapentry rows (Polymarket US lane).
+[Unit]
+Description=gridbot executor engine (dry-run intent ledger)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/home/ops/gridbot
+ExecStart=/home/ops/.local/bin/uv run python -m gridbot.executor.engine
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

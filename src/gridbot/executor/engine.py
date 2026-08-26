@@ -23,13 +23,14 @@ from pathlib import Path
 
 from gridbot import config
 from gridbot.executor import ledger as ledger_mod
-from gridbot.executor import limits, pmus
-from gridbot.executor.intents import build_intent
+from gridbot.executor import limits, pmus, reconcile
+from gridbot.executor.intents import build_intent, build_us_intent
 from gridbot.instruments.shadow import Follow
 
 log = logging.getLogger("gridbot.executor")
 
 CYCLE_S = 2.0
+RECONCILE_EVERY = 30  # armed only: venue orders.list vs ledger every ~60s
 
 
 class IntentLedger:
@@ -52,7 +53,12 @@ class Engine:
     def __init__(self, ledger: IntentLedger | None = None) -> None:
         self.ledger = ledger or IntentLedger()
         self.follow = Follow(config.DATA_DIR / "shadow", "instances", from_start=False)
+        # H-MAPENTRY1 lane: qualifying mapentry rows already carry the US
+        # market slug/side + the frozen entry rule evaluated against a real
+        # book — the executor only converts, caps and dedups them.
+        self.follow_us = Follow(config.DATA_DIR / "shadow", "mapentry", from_start=False)
         self.seen: set[str] = set()
+        self._cycles = 0
         # Open exposure = placed-but-unsettled intents, recomputed from the
         # ledger each cycle (S3: survives restarts, releases on settle —
         # never a process-local monotonic counter). Incremented in-cycle on
@@ -62,12 +68,16 @@ class Engine:
         self._daily_loss = 0.0
 
     def handle(self, record: dict, armed: limits.ArmingState) -> str | None:
-        """Process one instance record; returns the outcome status or None."""
-        if record.get("type") != "instance":
+        """Process one shadow record; returns the outcome status or None."""
+        kind = record.get("type")
+        if kind not in ("instance", "mapentry"):
             return None
         if str(record.get("series_id")) in config.GRID_TEST_SERIES_IDS:
             return None
-        intent = build_intent(record, limits.max_stake_usd())
+        if kind == "mapentry":
+            intent = build_us_intent(record, limits.max_stake_usd())
+        else:
+            intent = build_intent(record, limits.max_stake_usd())
         if intent is None:
             return None
         if intent.dedup_key in self.seen:
@@ -113,12 +123,24 @@ class Engine:
         except Exception:
             log.exception("ledger read failed; keeping previous caps state")
         n = 0
-        for record in self.follow.lines():
+        for follow in (self.follow, self.follow_us):
+            for record in follow.lines():
+                try:
+                    if self.handle(record, armed):
+                        n += 1
+                except Exception:
+                    log.exception("bad shadow record skipped")
+        self._cycles += 1
+        if armed.live and self._cycles % RECONCILE_EVERY == 0:
             try:
-                if self.handle(record, armed):
-                    n += 1
+                report = reconcile.run(
+                    ledger_mod.load_records(self.ledger.root), pmus._get_client()
+                )
+                self.ledger.append(
+                    {"type": "reconcile", **report, "ts_ns": time.time_ns()}
+                )
             except Exception:
-                log.exception("bad instance record skipped")
+                log.exception("reconcile pass failed (engine continues)")
         return n
 
 

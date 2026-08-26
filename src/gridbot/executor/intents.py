@@ -18,6 +18,7 @@ from gridbot.instruments.market_match import team_outcome_token
 from gridbot.instruments.verdict import ENTRY_ASK
 
 DEFAULT_ENTRY_CEILING = 0.90  # H-MODELENTRY1 cells: never chase past this
+US_TICK = 0.01  # Polymarket US orderPriceMinTickSize on every observed book
 
 
 @dataclass(frozen=True)
@@ -114,4 +115,54 @@ def build_intent(instance: dict, stake_cap_usd: float) -> OrderIntent | None:
         shares=shares,
         stake_usd=round(quote * shares, 2),
         dedup_key=dedup,
+    )
+
+
+def build_us_intent(row: dict, stake_cap_usd: float) -> OrderIntent | None:
+    """Build a Polymarket US maker intent from one QUALIFYING mapentry row.
+
+    The row's frozen entry rule already held (side_ask <= p_map - margin);
+    this converts it into a post-only resting order one US tick inside the
+    taker price for OUR side, clamped to the frozen entry cap and the
+    hypothesis ceiling — the clamps only ever LOWER the price, so the order
+    always rests (never matches) and never pays above what the registration
+    allows. Integer contracts (venue rule); below one contract -> None.
+
+    Dedup is per (series, map, side, book): ONE entry per map book — later
+    qualifying rounds for the same book never average in.
+    """
+    if row.get("type") != "mapentry" or not row.get("qualifies"):
+        return None
+    slug = str(row.get("market_slug") or "")
+    us_side = row.get("us_side")
+    side_ask = row.get("side_ask")
+    entry_max = row.get("entry_price_max")
+    if not slug or us_side not in ("long", "short"):
+        return None
+    if not isinstance(side_ask, (int, float)) or not isinstance(entry_max, (int, float)):
+        return None
+    hyp = str(row.get("hypothesis_id") or "")
+    price = round(min(float(side_ask) - US_TICK, float(entry_max), entry_ceiling(hyp)), 4)
+    if price < US_TICK:
+        return None
+    contracts = int(stake_cap_usd // price)
+    if contracts < 1:
+        return None
+    dedup = ":".join(
+        [hyp, str(row.get("series_id")), str(row.get("map_number")), str(us_side), slug]
+    )
+    return OrderIntent(
+        hypothesis_id=hyp,
+        series_id=str(row.get("series_id")),
+        map_number=int(row.get("map_number") or 0),
+        round_number=int(row.get("round_number") or 0),
+        market_condition_id="",
+        token_id="",
+        team=str(row.get("team", "")),
+        price=price,
+        shares=float(contracts),
+        stake_usd=round(price * contracts, 2),
+        dedup_key=dedup,
+        market_slug=slug,
+        us_side=str(us_side),
     )

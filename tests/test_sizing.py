@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import itertools
+
 import pytest
 
 from gridbot.sizing.kelly import size_entry, wilson_lower
 from gridbot.sizing.params import SizingParams
-
 
 # ---------- params ----------
 
@@ -120,5 +121,5 @@ def test_decision_carries_param_snapshot():
 
 def test_monotone_edge_grows_stake_until_cap():
     stakes = [size_entry(0.60 + i * 0.02, 0.50, P).stake for i in range(10)]
-    assert all(b >= a - 1e-9 for a, b in zip(stakes, stakes[1:]))
+    assert all(b >= a - 1e-9 for a, b in itertools.pairwise(stakes))
     assert stakes[-1] <= P.bankroll * P.max_stake_frac + 1e-9
