@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from gridbot import config
+from gridbot.executor import ledger as ledger_mod
 from gridbot.executor import limits, pmus
 from gridbot.executor.intents import build_intent
 from gridbot.instruments.shadow import Follow
@@ -53,6 +54,7 @@ class Engine:
         self.follow = Follow(config.DATA_DIR / "shadow", "instances", from_start=False)
         self.seen: set[str] = set()
         self.open_count = 0
+        self._daily_loss = 0.0
 
     def handle(self, record: dict, armed: limits.ArmingState) -> str | None:
         """Process one instance record; returns the outcome status or None."""
@@ -68,6 +70,8 @@ class Engine:
         self.seen.add(intent.dedup_key)
         if self.open_count >= limits.max_open_positions():
             status = "skipped_max_open"
+        elif self._daily_loss >= limits.max_daily_loss_usd():
+            status = "skipped_daily_loss"
         elif armed.live:
             status = pmus.place(intent)
             if status == "placed":
@@ -83,6 +87,13 @@ class Engine:
 
     def cycle(self) -> int:
         armed = limits.check_armed()
+        try:
+            records = ledger_mod.load_records(self.ledger.root)
+            self._daily_loss = ledger_mod.daily_loss_usd(
+                records, f"{datetime.now(UTC):%Y%m%d}"
+            )
+        except Exception:
+            log.exception("daily-loss read failed; keeping previous value")
         n = 0
         for record in self.follow.lines():
             try:
