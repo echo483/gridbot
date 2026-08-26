@@ -77,8 +77,9 @@ def main() -> int:
             records = ledger_mod.load_records(tmp / "executor")
             counts: dict[str, int] = {}
             for row in records:
-                if row.get("type") == "order_intent" and row.get("status") in (
-                    "placed", "error:ambiguous_ack"
+                s = str(row.get("status") or "")
+                if row.get("type") == "order_intent" and (
+                    s == "placed" or s.startswith("error:")
                 ):
                     k = row.get("dedup_key")
                     if isinstance(k, str):

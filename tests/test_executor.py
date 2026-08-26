@@ -318,7 +318,11 @@ class TestBandGate:
         assert status == "placed"
         assert len(calls) == 1
         rows = self._rows(tmp_path)
-        assert [r["status"] for r in rows] == ["skipped:band_gate", "placed"]
+        # armed placements write a wire_pending row BEFORE the wire call
+        # (write-ahead, glm review f7) and the outcome row after
+        assert [r["status"] for r in rows] == [
+            "skipped:band_gate", "wire_pending", "placed"
+        ]
         assert rows[0]["p_map"] == 0.87
         assert rows[0]["live"] is True
 
@@ -534,7 +538,7 @@ class TestReentry:
         assert eng.handle(_mapentry_row(p_map=0.70), armed) == "placed"  # re-entry
         assert self._sweep_all(eng, engine_mod, monkeypatch) == 1
         # third entry refused by the lifetime 2-cap even though key released
-        assert eng.handle(_mapentry_row(p_map=0.65), armed) is None
+        assert eng.handle(_mapentry_row(p_map=0.65), armed) == "skipped:reentry_cap"
 
     def test_gone_before_cancel_never_releases(self, tmp_path, monkeypatch) -> None:
         eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
@@ -564,7 +568,7 @@ class TestReentry:
 
         eng2 = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
         eng2.cycle()  # loads the ledger; dry_run in tests, counts refresh anyway
-        assert eng2.handle(_mapentry_row(p_map=0.65), armed) is None
+        assert eng2.handle(_mapentry_row(p_map=0.65), armed) == "skipped:reentry_cap"
 
     def test_fill_row_via_ledger_blocks_release(self, tmp_path, monkeypatch) -> None:
         # Derivation coverage: a fill ROW in the ledger (not an injected set)
@@ -597,4 +601,4 @@ class TestReentry:
         eng2 = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
         eng2.cycle()
         assert eng2._placed_counts.get(key, 0) >= 2
-        assert eng2.handle(_mapentry_row(p_map=0.70), armed) is None
+        assert eng2.handle(_mapentry_row(p_map=0.70), armed) == "skipped:reentry_cap"

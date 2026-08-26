@@ -160,26 +160,46 @@ def _clean_cancels(records: list[dict]) -> dict[str, dict]:
 
 
 def open_exposure(records: list[dict]) -> int:
-    """Count of placed-but-unreleased intents (resting orders + open positions).
+    """Count of placed-but-unreleased ORDERS (resting orders + open positions).
 
-    Exposure counting for the engine's max-open cap: a placed GTC order is
-    exposure whether or not it has filled yet; a settle releases it, and so
-    does a CLEAN unfilled cancel (the stale-maker TTL pass) — UNLESS a fill
-    row exists for the same dedup_key: a partial fill before the cancel
-    means contracts are held until settlement (first armed night: every
-    real fill hid behind a clean cancel). Survives process restarts
-    because it derives from the ledger.
+    Exposure counting for the engine's max-open cap, per ORDER not per
+    key — under re-entry (H-MAPENTRY1-REENTRY1) one dedup_key can carry
+    two placed orders, and the first entry's clean cancel must not hide
+    the second entry's live exposure (glm trade-path review 08-26,
+    finding 2). An order is released by ITS OWN clean cancel (matched on
+    order_id) unless its key has a fill row (partial fill before cancel
+    = contracts held), or by its key settling. Orders without an
+    order_id (should not happen for status "placed") stay counted —
+    fail closed. Survives restarts because it derives from the ledger.
 
     Args:
         records: Ledger rows (see module docstring).
 
     Returns:
-        Number of dedup_keys with a placed intent and no settle, minus
-        clean-cancelled keys that never filled.
+        Number of placed orders with no own clean cancel and no settle.
     """
-    placed = set(_placed_intents(records))
-    released = set(_clean_cancels(records)) - set(_fills(records))
-    return len(placed - set(_settles(records)) - released)
+    settled = set(_settles(records))
+    filled = set(_fills(records))
+    cancelled_orders = {
+        str(row.get("order_id"))
+        for row in records
+        if isinstance(row, dict) and row.get("type") == "cancel"
+        and row.get("status") == "cancelled" and row.get("order_id")
+    }
+    n = 0
+    for row in records:
+        if not isinstance(row, dict) or row.get("type") != "order_intent":
+            continue
+        if row.get("status") != "placed":
+            continue
+        key = row.get("dedup_key")
+        if key in settled:
+            continue
+        oid = row.get("order_id")
+        if oid and str(oid) in cancelled_orders and key not in filled:
+            continue
+        n += 1
+    return n
 
 
 def realized_pnl(records: list[dict]) -> list[tuple[str, float, int]]:

@@ -104,9 +104,11 @@ class Engine:
         if intent.dedup_key in self.seen:
             return None
         # REENTRY1 hard cap: at most 2 lifetime placed entries per key,
-        # counted from the ledger so it survives restarts.
+        # counted from the ledger so it survives restarts. Ledgered so the
+        # measurement population keeps its denominator (glm review f11).
         if self._placed_counts.get(intent.dedup_key, 0) >= 2:
-            return None
+            self._skip_row(intent, record, "skipped:reentry_cap", armed)
+            return "skipped:reentry_cap"
         # Band gate (executor risk policy, frozen pre-first-fire): record-only
         # skip, dedup NOT consumed — a later in-band crossing on the same book
         # may still enter. Applies identically in dry_run so the armed
@@ -126,17 +128,35 @@ class Engine:
             log.info("band gate: %s p_map=%s held out of armed band",
                      intent.dedup_key, record.get("p_map"))
             return "skipped:band_gate"
-        # Capacity skips do NOT consume the dedup key (M6): when open slots
-        # or loss budget free up, the same instance may retry next cycle.
+        # Capacity skips do NOT consume the dedup key (M6). They ARE
+        # ledgered: a silently dropped would-have-traded row is selection
+        # bias in the measurement record (glm review f11).
         if self.open_count >= limits.max_open_positions():
-            log.debug("capacity hold (max_open) for %s", intent.dedup_key)
-            return None
+            self._skip_row(intent, record, "skipped:capacity", armed)
+            return "skipped:capacity"
         if self._daily_loss >= limits.max_daily_loss_usd():
-            log.debug("capacity hold (daily_loss) for %s", intent.dedup_key)
-            return None
-        self.seen.add(intent.dedup_key)
+            self._skip_row(intent, record, "skipped:daily_loss", armed)
+            return "skipped:daily_loss"
         order_id = None
         if armed.live:
+            # Write-ahead row BEFORE the wire call (glm review f7): a create
+            # the ledger cannot record must not happen — and a crash between
+            # venue ack and outcome append leaves the pending row as evidence
+            # (counted toward the REENTRY1 cap until an outcome supersedes).
+            pending = intent.record()
+            pending.update({
+                "status": "wire_pending", "order_id": None,
+                "p_map": record.get("p_map"), "ts_ns": time.time_ns(),
+                "live": True,
+            })
+            try:
+                self.ledger.append(pending)
+            except Exception:
+                log.critical("ledger unwritable — REFUSING to place %s "
+                             "(fail closed; measurement outranks trading)",
+                             intent.dedup_key)
+                return None
+            self.seen.add(intent.dedup_key)
             status, order_id = pmus.place(intent)
             if status == "placed":
                 self.open_count += 1
@@ -149,6 +169,7 @@ class Engine:
                     "placed_mono": time.monotonic(),
                 }
         else:
+            self.seen.add(intent.dedup_key)
             status = "dry_run"
         row = intent.record()
         row.update(
@@ -160,10 +181,31 @@ class Engine:
                 "live": armed.live,
             }
         )
-        self.ledger.append(row)
+        try:
+            self.ledger.append(row)
+        except Exception:
+            # The order (if any) is live and tracked in-memory — the TTL
+            # sweep still guards it — but the ledger just lost a row: say
+            # so at CRITICAL, never as "bad shadow record" (glm review f7).
+            log.critical("ledger append FAILED for %s outcome %s — venue "
+                         "state diverges from ledger", intent.dedup_key, status)
         log.info("intent %s %s @%.4f x%.2f -> %s", intent.hypothesis_id,
                  intent.team, intent.price, intent.shares, status)
         return status
+
+    def _skip_row(self, intent, record: dict, status: str,
+                  armed: limits.ArmingState) -> None:
+        """Ledger a non-placement decision (measurement, not trading)."""
+        row = intent.record()
+        row.update({
+            "status": status, "order_id": None,
+            "p_map": record.get("p_map"), "ts_ns": time.time_ns(),
+            "live": armed.live,
+        })
+        try:
+            self.ledger.append(row)
+        except Exception:
+            log.exception("skip-row append failed")
 
     def sweep_stale(self, now_mono: float) -> int:
         """M5: cancel this session's maker orders older than MAKER_TTL_S.
@@ -176,6 +218,20 @@ class Engine:
         n = 0
         for order_id in list(self.resting):
             info = self.resting[order_id]
+            # A key the fills sync has proven FILLED needs no cancel: hammering
+            # cancel on a terminal order spams the venue forever (glm review
+            # f10). Write the truthful row and hold the slot pending settle.
+            if info["dedup_key"] and info["dedup_key"] in self._filled_keys:
+                self.ledger.append({
+                    "type": "cancel", "order_id": order_id,
+                    "dedup_key": info["dedup_key"], "market_slug": info["slug"],
+                    "status": "gone_before_cancel", "source": "known_filled",
+                    "age_s": round(now_mono - info["placed_mono"], 1),
+                    "ts_ns": time.time_ns(),
+                })
+                del self.resting[order_id]
+                n += 1
+                continue
             if now_mono - info["placed_mono"] < MAKER_TTL_S:
                 continue
             outcome = pmus.cancel(order_id, info["slug"])
@@ -241,21 +297,39 @@ class Engine:
                 records, f"{datetime.now(UTC):%Y%m%d}"
             )
             self.open_count = ledger_mod.open_exposure(records)
-            counts: dict[str, int] = {}
+            # REENTRY1 cap accounting (glm review f1/f6): every wire attempt
+            # writes a wire_pending row first, so the cap counts
+            #   placed + post-wire error rows + pendings with NO outcome yet
+            # — a create that errored after possible venue acceptance, or a
+            # crash between ack and outcome append, still consumes a slot.
+            # Pre-wire refusals ("rejected:*") pair off a pending without
+            # consuming one.
+            hard: dict[str, int] = {}
+            pend: dict[str, int] = {}
+            outcomes: dict[str, int] = {}
             filled: set[str] = set()
             for row in records:
                 key = row.get("dedup_key") if isinstance(row, dict) else None
                 if not isinstance(key, str) or not key:
                     continue
-                # Ambiguous acks count toward the cap: the venue may hold a
-                # live order the ledger cannot confirm (glm review finding 1
-                # — conservative, blocks entries, never releases them).
-                if row.get("type") == "order_intent" and row.get("status") in (
-                    "placed", "error:ambiguous_ack"
-                ):
-                    counts[key] = counts.get(key, 0) + 1
-                elif row.get("type") == "fill":
+                if row.get("type") == "fill":
                     filled.add(key)
+                    continue
+                if row.get("type") != "order_intent":
+                    continue
+                s = str(row.get("status") or "")
+                if s == "wire_pending":
+                    pend[key] = pend.get(key, 0) + 1
+                    continue
+                if s == "placed" or s.startswith("error:"):
+                    hard[key] = hard.get(key, 0) + 1
+                if s == "placed" or s.startswith("error:") or s.startswith("rejected:"):
+                    outcomes[key] = outcomes.get(key, 0) + 1
+            counts = {
+                k: hard.get(k, 0)
+                + max(0, pend.get(k, 0) - outcomes.get(k, 0))
+                for k in set(hard) | set(pend)
+            }
             self._placed_counts = counts
             self._filled_keys = filled
         except Exception:
@@ -289,6 +363,26 @@ class Engine:
                         {"type": "reconcile", **report, "ts_ns": time.time_ns()}
                     )
                 self._last_reconcile = report
+                # ADOPTION (glm review f1/f3): every live venue order must be
+                # under THIS process's TTL sweep. Prior-session ledger orders
+                # and unknown orphans (create errors that were really acks;
+                # single-account rail says nothing else trades here) both get
+                # adopted and cancelled by the normal sweep when stale.
+                for o in (report.get("open_orders") or []) + (
+                    report.get("unknown_orders") or []
+                ):
+                    oid = str(o.get("id"))
+                    if oid and o.get("slug") and oid not in self.resting:
+                        self.resting[oid] = {
+                            "slug": o["slug"],
+                            "dedup_key": o.get("dedup_key"),
+                            "placed_mono": time.monotonic(),
+                        }
+                        log.warning(
+                            "adopted venue order %s on %s into TTL sweep "
+                            "(%s)", oid, o["slug"],
+                            "prior session" if o.get("dedup_key") else "orphan",
+                        )
                 for row in fills_mod.sync(
                     records, pmus._get_client(), self._fill_checked, time.time_ns()
                 ):

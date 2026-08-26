@@ -87,6 +87,11 @@ def diff(records: list[dict], venue_orders: list[dict]) -> dict:
     """
     ledger_open = open_ledger_orders(records)
     venue_ids = venue_order_ids(venue_orders)
+    slug_by_id = {
+        str(o.get("id") or o.get("orderId")): o.get("marketSlug")
+        for o in venue_orders
+        if isinstance(o, dict) and (o.get("id") or o.get("orderId"))
+    }
     partial = []
     for o in venue_orders:
         if not isinstance(o, dict):
@@ -97,12 +102,28 @@ def diff(records: list[dict], venue_orders: list[dict]) -> dict:
             cum = 0.0
         if cum > 0:
             partial.append(str(o.get("id") or o.get("orderId")))
+    unknown = sorted(venue_ids - set(ledger_open))
+    both = sorted(set(ledger_open) & venue_ids)
     return {
         "ledger_open": len(ledger_open),
         "venue_open": len(venue_ids),
         "gone_from_venue": sorted(set(ledger_open) - venue_ids),
-        "unknown_on_venue": sorted(venue_ids - set(ledger_open)),
+        "unknown_on_venue": unknown,
         "partial_fills": sorted(partial),
+        # Adoption inputs (glm review findings 1/3): every live venue order
+        # must end up under some process's TTL sweep. Slugs are needed to
+        # cancel; dedup keys come from the ledger row when we have one.
+        "unknown_orders": [
+            {"id": i, "slug": slug_by_id.get(i)} for i in unknown
+        ],
+        "open_orders": [
+            {
+                "id": i,
+                "slug": (ledger_open[i].get("market_slug") or slug_by_id.get(i)),
+                "dedup_key": ledger_open[i].get("dedup_key"),
+            }
+            for i in both
+        ],
     }
 
 

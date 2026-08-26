@@ -133,6 +133,33 @@ class TestSync:
         client = _FakeClient({"A": _order(cum=2)})
         assert fills.sync(records, client, set(), 3) == []
 
+    def test_live_partial_not_recorded_until_terminal(self) -> None:
+        # glm trade-path review finding 4: a live order's cum can still grow;
+        # first-wins fill rows would freeze an understated quantity forever.
+        client = _FakeClient({"A": _order(cum=2, state="ORDER_STATE_PARTIALLY_FILLED")})
+        checked: set[str] = set()
+        assert fills.sync([_intent()], client, checked, 1) == []
+        assert "A" not in checked  # re-fetched next pass
+        client2 = _FakeClient({"A": _order(cum=4, state="ORDER_STATE_CANCELED")})
+        rows = fills.sync([_intent()], client2, checked, 2)
+        assert [r["type"] for r in rows] == ["fill"]
+        assert rows[0]["shares"] == 4.0  # the FINAL quantity, not the frozen 2
+
+    def test_gone_no_fill_writes_corrective_release(self) -> None:
+        # glm trade-path review finding 8: gone_before_cancel + venue says
+        # terminal-with-zero-fill (expired/hand-cancelled) must release the
+        # slot via a corrective clean-cancel row, else it leaks forever.
+        records = [
+            _intent(),
+            {"type": "cancel", "order_id": "A", "dedup_key": "k1",
+             "status": "gone_before_cancel"},
+        ]
+        client = _FakeClient({"A": _order(cum=0, state="ORDER_STATE_EXPIRED")})
+        rows = fills.sync(records, client, set(), 5)
+        assert len(rows) == 1
+        assert rows[0]["type"] == "cancel" and rows[0]["status"] == "cancelled"
+        assert rows[0]["source"] == "venue_terminal_no_fill"
+
     def test_retrieve_error_retries_next_pass(self) -> None:
         client = _FakeClient({})  # every retrieve raises
         checked: set[str] = set()

@@ -246,10 +246,14 @@ class TestOpenExposure:
         from gridbot.executor.ledger import open_exposure
 
         records = [
-            {"type": "order_intent", "status": "placed", "dedup_key": "a", "ts_ns": 1},
-            {"type": "order_intent", "status": "placed", "dedup_key": "b", "ts_ns": 2},
-            {"type": "cancel", "status": "cancelled", "dedup_key": "a", "ts_ns": 3},
-            {"type": "cancel", "status": "cancelled", "dedup_key": "b", "ts_ns": 4},
+            {"type": "order_intent", "status": "placed", "dedup_key": "a",
+             "order_id": "A1", "ts_ns": 1},
+            {"type": "order_intent", "status": "placed", "dedup_key": "b",
+             "order_id": "B1", "ts_ns": 2},
+            {"type": "cancel", "status": "cancelled", "dedup_key": "a",
+             "order_id": "A1", "ts_ns": 3},
+            {"type": "cancel", "status": "cancelled", "dedup_key": "b",
+             "order_id": "B1", "ts_ns": 4},
             # "b" partially filled BEFORE its clean cancel: contracts are
             # held to settlement, so its slot must stay counted.
             {"type": "fill", "dedup_key": "b", "price": 0.5, "shares": 2.0, "ts_ns": 3},
@@ -260,9 +264,29 @@ class TestOpenExposure:
         from gridbot.executor.ledger import open_exposure
 
         records = [
-            {"type": "order_intent", "status": "placed", "dedup_key": "b", "ts_ns": 1},
-            {"type": "cancel", "status": "cancelled", "dedup_key": "b", "ts_ns": 2},
+            {"type": "order_intent", "status": "placed", "dedup_key": "b",
+             "order_id": "B1", "ts_ns": 1},
+            {"type": "cancel", "status": "cancelled", "dedup_key": "b",
+             "order_id": "B1", "ts_ns": 2},
             {"type": "fill", "dedup_key": "b", "price": 0.5, "shares": 2.0, "ts_ns": 2},
             {"type": "settle", "dedup_key": "b", "won": False, "ts_ns": 3},
         ]
+        assert open_exposure(records) == 0
+
+    def test_reentry_second_order_stays_counted(self) -> None:
+        # glm trade-path review finding 2: one key, two orders — the first
+        # entry's clean cancel must not hide the second entry's exposure.
+        from gridbot.executor.ledger import open_exposure
+
+        records = [
+            {"type": "order_intent", "status": "placed", "dedup_key": "k",
+             "order_id": "O1", "ts_ns": 1},
+            {"type": "cancel", "status": "cancelled", "dedup_key": "k",
+             "order_id": "O1", "ts_ns": 2},
+            {"type": "order_intent", "status": "placed", "dedup_key": "k",
+             "order_id": "O2", "ts_ns": 3},  # re-entry, still resting
+        ]
+        assert open_exposure(records) == 1
+        records.append({"type": "cancel", "status": "cancelled",
+                        "dedup_key": "k", "order_id": "O2", "ts_ns": 4})
         assert open_exposure(records) == 0

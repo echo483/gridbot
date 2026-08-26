@@ -182,6 +182,13 @@ def sync(records: list[dict], client, checked: set[str], now_ns: int) -> list[di
     """
     new_rows: list[dict] = []
 
+    gone_orders = {
+        str(row.get("order_id"))
+        for row in records
+        if isinstance(row, dict) and row.get("type") == "cancel"
+        and row.get("status") == "gone_before_cancel" and row.get("order_id")
+    }
+
     retrieves = 0
     for intent in fill_candidates(records, checked):
         if retrieves >= MAX_RETRIEVES_PER_PASS:
@@ -194,6 +201,16 @@ def sync(records: list[dict], client, checked: set[str], now_ns: int) -> list[di
             log.warning("order retrieve %s failed: %s", oid, type(exc).__name__)
             continue
         order = (resp or {}).get("order") or {}
+        terminal = order.get("state") in TERMINAL_STATES
+        if not terminal:
+            # A live order's cumQuantity can still grow; writing a fill row
+            # now would freeze an understated quantity forever (ledger fills
+            # are first-wins — glm review 08-26, finding 4). The TTL cancel
+            # makes every order terminal within minutes; wait for that.
+            if _num(order.get("cumQuantity")) > 0:
+                log.info("partial fill in progress on %s (%s) — recording at "
+                         "terminal state", intent.get("market_slug"), oid)
+            continue
         row = fill_row(intent, order, now_ns)
         if row:
             new_rows.append(row)
@@ -201,9 +218,22 @@ def sync(records: list[dict], client, checked: set[str], now_ns: int) -> list[di
                         intent.get("market_slug"), intent.get("us_side"),
                         row["shares"], row["price"],
                         " (partial)" if row["partial"] else "")
-            checked.add(oid)
-        elif order.get("state") in TERMINAL_STATES:
-            checked.add(oid)  # terminal, nothing executed — never ask again
+        elif oid in gone_orders:
+            # gone_before_cancel but the venue says terminal with ZERO
+            # executed (expired / hand-cancelled): without this corrective
+            # row the exposure slot leaks forever (glm review 08-26,
+            # finding 8). A clean-cancel row releases it via the normal
+            # ledger semantics.
+            new_rows.append({
+                "type": "cancel", "order_id": oid,
+                "dedup_key": intent.get("dedup_key"),
+                "market_slug": intent.get("market_slug"),
+                "status": "cancelled", "source": "venue_terminal_no_fill",
+                "ts_ns": now_ns,
+            })
+            log.warning("order %s was gone_before_cancel but venue shows "
+                        "terminal with no fill — exposure released", oid)
+        checked.add(oid)
 
     all_rows = records + new_rows
     fills = _rows_of(all_rows, "fill")
