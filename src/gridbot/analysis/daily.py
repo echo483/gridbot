@@ -76,25 +76,39 @@ def gather_evidence() -> str:
 def ask_claude(evidence: str, max_tokens: int) -> str:
     key = config.require("ANTHROPIC_API_KEY")
     model = os.environ.get("GRIDBOT_ANALYSIS_MODEL", DEFAULT_MODEL)
-    resp = httpx.post(
-        ANTHROPIC_URL,
-        headers={
-            "x-api-key": key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json={
-            "model": model,
-            "max_tokens": max_tokens,
-            "system": SYSTEM,
-            "messages": [{"role": "user", "content": evidence}],
-        },
-        timeout=120.0,
-    )
-    if resp.status_code >= 300:
-        raise RuntimeError(f"anthropic API HTTP {resp.status_code}")
-    blocks = resp.json().get("content") or []
-    return "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+
+    def call(budget: int) -> tuple[str, str | None]:
+        resp = httpx.post(
+            ANTHROPIC_URL,
+            headers={
+                "x-api-key": key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": model,
+                "max_tokens": budget,
+                "system": SYSTEM,
+                "messages": [{"role": "user", "content": evidence}],
+            },
+            timeout=120.0,
+        )
+        if resp.status_code >= 300:
+            raise RuntimeError(f"anthropic API HTTP {resp.status_code}")
+        data = resp.json()
+        blocks = data.get("content") or []
+        text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+        return text, data.get("stop_reason")
+
+    text, stop = call(max_tokens)
+    if not text and stop == "max_tokens":
+        # Claude 5 models think by default and thinking counts against
+        # max_tokens: long evidence can consume the whole budget before any
+        # text block appears (observed 2026-08-25: 200 OK, 0 text chars).
+        text, stop = call(max_tokens * 3)
+    if not text:
+        raise RuntimeError(f"empty analysis output (stop_reason={stop})")
+    return text
 
 
 def split_output(text: str) -> tuple[str, str]:
@@ -111,7 +125,7 @@ def split_output(text: str) -> tuple[str, str]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dry-run", action="store_true", help="print only; no file, no telegram")
-    ap.add_argument("--max-tokens", type=int, default=1500)
+    ap.add_argument("--max-tokens", type=int, default=3000)
     args = ap.parse_args()
 
     text = ask_claude(gather_evidence(), args.max_tokens)
