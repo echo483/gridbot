@@ -35,6 +35,10 @@ class OrderIntent:
     shares: float
     stake_usd: float
     dedup_key: str
+    # Polymarket US mapping (empty until a US market matcher attaches one;
+    # the wire layer refuses to place without it — fail closed).
+    market_slug: str = ""
+    us_side: str = ""
 
     def record(self) -> dict:
         """JSON-serializable form for the intent ledger."""
@@ -51,6 +55,8 @@ class OrderIntent:
             "shares": round(self.shares, 2),
             "stake_usd": round(self.stake_usd, 2),
             "dedup_key": self.dedup_key,
+            "market_slug": self.market_slug,
+            "us_side": self.us_side,
         }
 
 

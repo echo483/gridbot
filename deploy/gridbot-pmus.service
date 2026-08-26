@@ -1,0 +1,12 @@
+# Polymarket US esports watch — oneshot, every 5 min via gridbot-pmus.timer.
+# Public gateway only (no auth, no orders): records esports events + BBO to
+# data/pmus/, so we know the moment the venue's CS2/LoL series go live.
+[Unit]
+Description=gridbot Polymarket US esports watch lane (read-only)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ops/gridbot
+ExecStart=/home/ops/.local/bin/uv run python scripts/pmus_watch.py --once
+NoNewPrivileges=true

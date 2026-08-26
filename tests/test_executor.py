@@ -102,3 +102,25 @@ class TestBuildIntent:
         b = build_intent(_instance(), 25.0)
         assert a is not None and b is not None
         assert a.dedup_key == b.dedup_key
+
+
+class TestPmusWire:
+    def test_place_fails_closed_without_us_mapping(self) -> None:
+        # An intent with no US market slug must be refused BEFORE any client
+        # construction — no credentials are touched.
+        from gridbot.executor import pmus
+
+        intent = build_intent(_instance(), 25.0)
+        assert intent is not None
+        assert pmus.place(intent) == "rejected:no_us_market_mapping"
+        assert pmus._client is None  # never built
+
+    def test_place_refuses_sub_contract_quantity(self) -> None:
+        from dataclasses import replace
+
+        from gridbot.executor import pmus
+
+        intent = build_intent(_instance(), 25.0)
+        assert intent is not None
+        tiny = replace(intent, market_slug="cs2-a-vs-b", us_side="long", shares=0.4)
+        assert pmus.place(tiny) == "rejected:quantity_below_one_contract"

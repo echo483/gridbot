@@ -3,7 +3,7 @@
 dry_run (default): every intent is appended to the intent ledger with
 status "dry_run" — the byte-identical decision path a live session takes,
 minus the wire call. live (armed only): the same intent goes through the
-clob isolation layer and the ack/error is recorded next to it.
+Polymarket US wire layer (pmus.py) and the ack/error is recorded next to it.
 
 The engine re-checks the arming gate EVERY cycle: pulling keys from the
 keyring or unsetting GRIDBOT_LIVE mid-flight drops it back to dry_run on
@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from gridbot import config
-from gridbot.executor import clob, limits
+from gridbot.executor import limits, pmus
 from gridbot.executor.intents import build_intent
 from gridbot.instruments.shadow import Follow
 
@@ -69,7 +69,7 @@ class Engine:
         if self.open_count >= limits.max_open_positions():
             status = "skipped_max_open"
         elif armed.live:
-            status = clob.place(intent)
+            status = pmus.place(intent)
             if status == "placed":
                 self.open_count += 1
         else:
