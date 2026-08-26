@@ -146,7 +146,17 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
    resolved maps; simplicity tiebreak frozen (B0>B10>B20 on |dECE|<=0.01).
    Slow-loop analysis only — armed lane unchanged until a pre-registered
    amendment cites the verdict.
-8. Clock-stratified P_map calibration read. cs2agent (read-only cross-check,
+8. Re-entry-after-clean-cancel amendment candidate (user-endorsed 08-26
+   first armed night, observed cost: 3 later in-band chances at better
+   prices blocked on the AURORA map1 book after a clean TTL cancel).
+   Pre-register before adopting: does a CLEAN cancel release the book's
+   dedup slot for one re-entry? Against: churn into a book that refuses
+   to fill. For: more fill attempts per map at ≥4pt value prices.
+9. Sell-side exit path (future build, user principle "cut losers"): held
+   positions currently ride to settlement BOTH ways — no sell wire, no
+   exit rule exists. Any exit logic must be its own pre-registered
+   instrument; requires sell order support in pmus wire first.
+10. Clock-stratified P_map calibration read. cs2agent (read-only cross-check,
    08-26) measured ~3x within-round Brier gradient on our 08-25 capture
    (0.22 earliest poll → 0.07 latest, n=232 rounds / 8 series). Our q is
    event-sampled at first threshold crossing (calibrated AT that event,
