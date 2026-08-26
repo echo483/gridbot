@@ -95,12 +95,23 @@ def _run(kind: str, prompt: str, timeout: int) -> tuple[int, str]:
     return res.returncode, res.stdout
 
 
-def pair(spec_file: str, artifacts: list[str], timeout: int) -> int:
+def pair(spec_file: str, artifacts: list[str], timeout: int,
+         reviewer: str = "review") -> int:
     """A2A development relay (user directive 08-26): glm-5.3-flash BUILDS,
-    Opus 5 REVIEWS the actual artifacts, the builder REVISES from the
-    review. Claude verifies before anything lands — the relay replaces
-    neither tests nor the human-side review gate. Opus stalls fall back
-    to glm-5.3 (observed >25min hang via hermes once)."""
+    the reviewer lane REVIEWS the actual artifacts, the builder REVISES
+    from the review. Claude verifies before anything lands — the relay
+    replaces neither tests nor the human-side review gate.
+
+    Reviewer choice is a COST decision (user 08-26 late eve — opus eats
+    credits fast, input tokens are the driver since review bundles carry
+    the whole spec + artifacts):
+    - reviewer="review" (opus xhigh): engine/config/trade-path code and
+      anything that decides a registration. Worth it.
+    - reviewer="review2" (glm-5.3:floor high): routine analysis scripts,
+      connectivity checks, second passes. Also the automatic fallback
+      when opus stalls (observed >25min hang via hermes once).
+    Anything deferrable to Claude-account usage (Claude's own review or
+    an account-side subagent) should go there instead of paid API."""
     spec = Path(spec_file).read_text()
 
     rc, _ = _run("programming", spec, timeout)
@@ -118,11 +129,12 @@ def pair(spec_file: str, artifacts: list[str], timeout: int) -> int:
         "cite lines, one-line verdict at the end. Spec:\n\n" + spec
         + "\n\nARTIFACTS:\n\n" + bundle
     )
-    rc, review = _run("review", review_prompt, min(timeout, 1200))
+    rc, review = _run(reviewer, review_prompt, min(timeout, 1200))
     if rc != 0 or not review.strip():
-        print("pair: opus review failed/stalled — falling back to review2",
+        fallback = "review2" if reviewer != "review2" else "programming"
+        print(f"pair: {reviewer} failed/stalled — falling back to {fallback}",
               file=sys.stderr)
-        rc, review = _run("review2", review_prompt, timeout)
+        rc, review = _run(fallback, review_prompt, timeout)
     if not review.strip():
         print("pair: no review produced; artifacts stand UNREVIEWED", file=sys.stderr)
         return 1
@@ -150,12 +162,17 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--artifact", action="append", default=[],
                     help="pair mode: expected artifact path (repeatable)")
+    ap.add_argument("--reviewer", choices=["review", "review2"],
+                    default="review",
+                    help="pair mode reviewer lane: review=opus xhigh "
+                         "(critical code), review2=glm-5.3 high (routine)")
     args = ap.parse_args()
 
     if args.kind == "pair":
         if not args.artifact:
             ap.error("pair mode needs at least one --artifact")
-        return pair(args.prompt_file, args.artifact, args.timeout)
+        return pair(args.prompt_file, args.artifact, args.timeout,
+                    args.reviewer)
 
     rc, out = _run(args.kind, Path(args.prompt_file).read_text(), args.timeout)
     if args.out:
