@@ -62,8 +62,10 @@ def main() -> None:
     for r in orders:
         by[r.get("status", "?")] = by.get(r.get("status", "?"), 0) + 1
     placed = by.get("placed", 0)
-    freed = by.get("cancelled", 0)
-    print(f"ledger: {by if by else 'no orders yet'} | resting≈{max(0, placed - freed - by.get('gone_before_cancel', 0))}")
+    cxl = [r for r in it if r.get("type") == "cancel"]
+    freed = sum(1 for r in cxl if r.get("status") == "cancelled")
+    gone = sum(1 for r in cxl if r.get("status") == "gone_before_cancel")
+    print(f"ledger: {by if by else 'no orders yet'} | clean-cancel {freed} | likely-fill {gone} | resting≈{max(0, placed - freed - gone)}")
     for r in orders[-4:]:
         print(f"  {r.get('status'):>18} {str(r.get('market_slug'))[-28:]} {r.get('us_side')} @{r.get('price')} x{r.get('shares')} oid={str(r.get('order_id'))[:12]}")
     for r in it[-6:]:

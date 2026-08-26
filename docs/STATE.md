@@ -125,6 +125,13 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
    cap binds; then raise caps discussion). Anchor PnL accounting at the FILL
    tick, not the post tick — fills are a selected sample (cs2agent
    H-MAKER-ANCHOR1: fill-anchored ~0.38/$100 worse, uniformly).
+1b. Reconcile false-alarm fix (OBSERVED first armed night, order
+   C3RBPBKHTFSK): fetch_venue_orders returns [] on any fetch error and
+   diff() reads [] as "venue empty" → phantom gone_from_venue (disproven
+   by the subsequent CLEAN cancel). Fix: return None on error and SKIP
+   the diff; optionally require 2 consecutive gone sightings. Fail
+   direction was safe (false alarm, TTL cancel is the real guard) — do
+   NOT hot-patch mid-armed-session.
 2. First-night analysis: qualification rate, fill rate, realized edge vs
    the 4pt design margin; rerun quant_eval; feed H-MAPENTRY1 bar.
 3. BO1 detection (GRID format field) to unlock match-winner books.
