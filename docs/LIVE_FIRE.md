@@ -105,6 +105,17 @@ mechanism (model under-confident in-band → book rarely sits below our
 too-low fair); in-band entries filling READILY is the adverse-selection
 warning. Judge fill RATE per in-band crossing, not fill count.
 
+**Re-entry (frozen + user-approved 2026-08-26, H-MAPENTRY1-REENTRY1):**
+a venue-confirmed unfilled TTL cancel (`cancelled`) releases that book's
+dedup key for exactly ONE more entry at a later qualifying crossing,
+re-priced fresh; `gone_before_cancel` and any key with a ledger fill row
+never release; hard limit 2 lifetime placed entries per key (ledger-
+derived, restart-safe). Expect up to ~2× placements per in-band book vs
+night 1. Fill truth now comes from the engine's fills sync (venue
+`orders.retrieve` + resolutions → `fill`/`settle` ledger rows every
+~60s) — a partial fill hidden behind a clean cancel is counted as held
+exposure until settlement.
+
 Cap rationale at the $26 bankroll: $3/order ≈ quarter-Kelly on the
 strongest calibrated cell; 2 open max ≈ 23% deployed worst-case. Every
 order the armed engine can place is: H-MAPENTRY1 (registered), frozen
