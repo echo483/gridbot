@@ -156,7 +156,15 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
    positions currently ride to settlement BOTH ways — no sell wire, no
    exit rule exists. Any exit logic must be its own pre-registered
    instrument; requires sell order support in pmus wire first.
-10. Clock-stratified P_map calibration read. cs2agent (read-only cross-check,
+10. Clock-stratified P_map calibration read.
+11. TIMING PROFILE (user priority 08-26: "get the timing of the predictive
+   model down"): morning analysis extracts (a) signal→quote latency per
+   order (grid_ts_ns → ts_ns → placement), (b) PMUS reprice lag from
+   postquote drift curves — NOTE the 13-27s lead was measured on INTL
+   books; PMUS absorption is first measured TONIGHT, (c) TTL calibration
+   (150s vs measured absorption time), (d) trust windows: within-round
+   (clock strata) + within-map (progress strata, H-MAPENTRY2). Output
+   feeds a pre-registered timing-aware entry v2. cs2agent (read-only cross-check,
    08-26) measured ~3x within-round Brier gradient on our 08-25 capture
    (0.22 earliest poll → 0.07 latest, n=232 rounds / 8 series). Our q is
    event-sampled at first threshold crossing (calibrated AT that event,
