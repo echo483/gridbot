@@ -39,18 +39,35 @@ from pathlib import Path
 
 ROUTES: dict[str, tuple[str, str | None]] = {
     # kind -> (model, provider-override or None)
-    # User 08-26: glm-5.3-flash (released from stealth 'ox-alpha' the same
-    # day) is the primary builder — cheap, use it hard.
+    #
+    # provider "openrouter" = tell hermes which GATEWAY to use (its native
+    # resolution mis-routed glm/opus early on). provider None = NO --provider
+    # flag: hermes resolves its own provider for that model — deliberate for
+    # deepseek-0731, where hermes-native routing works and picks from the
+    # widest/fastest provider pool (verified in logs 08-26). Don't pin it.
+    #
+    # ":floor" = OpenRouter price-sorted provider routing (passes through
+    # hermes' OpenAI-compatible endpoint verbatim; smoke-tested 08-26).
+    # User 08-26: z-ai serving via Novita AI / GMI Cloud is 50% off — :floor
+    # lands on the discounters automatically.
+    #
+    # Opus 5 doctrine (user 08-26 eve): use it wherever it MATTERS — review
+    # with hard reasoning first and foremost, light-but-important uses fine —
+    # but SPARING, the API is expensive (Fable rides the Claude Code account).
+    #
     # Judge agents by ARTIFACTS, not transcripts: the hermes -z transcript
     # channel renders as mojibake for several models while the files they
     # write are clean (verified twice: deepseek scorer 50/50 tests,
     # glm-5.3-flash wave_detect correct on review).
-    "programming": ("z-ai/glm-5.3-flash", "openrouter"),
-    "draft": ("z-ai/glm-5.3-flash", "openrouter"),
+    #
+    # (Hermes-side config, NOT ours to manage here: hermes default =
+    # glm-5.3-flash, fallback = qwen3.8-max — user-confirmed 08-26 eve.)
+    "programming": ("z-ai/glm-5.3-flash:floor", "openrouter"),
+    "draft": ("z-ai/glm-5.3-flash:floor", "openrouter"),
     "fast": ("deepseek/deepseek-v4-flash-0731", None),
     "classification": ("deepseek/deepseek-v4-flash-0731", None),
     "review": ("anthropic/claude-opus-5", "openrouter"),
-    "review2": ("z-ai/glm-5.3", "openrouter"),
+    "review2": ("z-ai/glm-5.3:floor", "openrouter"),
     "programming2": ("deepseek/deepseek-v4-flash-0731", None),  # backup builder
 }
 
