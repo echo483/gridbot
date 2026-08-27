@@ -260,6 +260,27 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
    MAJORs fixed (24h-window readers, Follow eager read-through 60131f5);
    deferred MINORS: F8 analysis date-stamp one day ahead, F9 capture_qa
    fingerprint flips at rollover, F11 corpus [-days:] slices files not days.
+1e. Deferred audit findings (08-27 coherence audit; each deliberate, none
+   blocking at $3 stakes — BLOCKERs/MAJORs F1-F8 are fixed or in the
+   confirmation-row relay; F6 awaits a user decision on cap semantics):
+   (1) F9 orphan-fill blindness: a crash between wire ack and outcome row
+   leaves an order no module can see fill (exposure counts only
+   status==placed; reconcile skips no-oid rows; fill_candidates needs an
+   order_id; manual-exit needs a fill row). Resting orphans heal via
+   adoption; one that FILLS inside the ~60s pre-adoption window has zero
+   ledger representation. Fix: on adoption, retrieve state and pair the
+   slug with its dangling wire_pending to synthesize placed(+fill) rows.
+   (2) M1 reconcile matches status=="placed" without type=="order_intent"
+   (latent; mirror the ledger's both-field filter). (3) M2
+   released_this_pass suppression is dead code (real suppression = the
+   fetched_list guard; delete branch + comment). (4) M3 first-cycle
+   ledger-read exception leaves caps open_count=0/_daily_loss=0 —
+   fail-OPEN direction (treat first-cycle failure as gate-blocking).
+   (5) M4 disarmed RESTART stops truth ingestion (no pmus client → no
+   reconcile/fills/adoption until re-arm; mid-run disarm is covered).
+   (6) M5 _fill_totals marks an oid seen before validating the row
+   (unreachable via current writers). (7) M6 one duplicate reconcile row
+   per restart (report-only).
 11e. NIGHT-3 RESULTS + INFERENCE (08-27 overnight armed, venue-verified,
    balance $26.49 flat): 29 placed / 9 fills / 8 resolutions — 4W-4L(+pair),
    overnight net -$0.76 after late riders lost (day net +$3.23 with the
