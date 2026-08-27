@@ -200,3 +200,29 @@ def test_pos_size_parses_real_venue_netposition() -> None:
     real = {"netPosition": "5", "qtyBought": "5", "qtySold": "0",
             "cost": {"value": "2.8300", "currency": "USD"}, "expired": False}
     assert 5.0 in _row_sizes(real)
+
+
+def test_two_sided_slug_never_manual_exit_released() -> None:
+    # Audit F2: both sides of one slug filled and unsettled — slug-level
+    # flatness (venue may NET the sides) proves nothing about either;
+    # neither key may be release-candidate until one side settles.
+    from gridbot.executor.fills import _release_candidates
+
+    records = [
+        {"type": "order_intent", "status": "placed", "order_id": "L1",
+         "dedup_key": "kL", "market_slug": "m1", "us_side": "long"},
+        {"type": "fill", "order_id": "L1", "dedup_key": "kL",
+         "price": 0.66, "shares": 4.0, "ts_ns": 1},
+        {"type": "order_intent", "status": "placed", "order_id": "S1",
+         "dedup_key": "kS", "market_slug": "m1", "us_side": "short"},
+        {"type": "fill", "order_id": "S1", "dedup_key": "kS",
+         "price": 0.52, "shares": 5.0, "ts_ns": 1},
+    ]
+    now = 1 + 200_000_000_000  # both fills well past the age guard
+    assert _release_candidates(records, [], set(), now) == []
+    # One side settles -> the OTHER becomes a candidate again.
+    records.append({"type": "settle", "dedup_key": "kS",
+                    "source": "venue_resolution", "won": False,
+                    "venue_pnl": -2.6, "ts_ns": now})
+    cands = _release_candidates(records, [], set(), now)
+    assert [c.get("dedup_key") for c in cands] == ["kL"]

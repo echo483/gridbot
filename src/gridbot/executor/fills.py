@@ -559,6 +559,22 @@ def _release_candidates(
     terminal_oids |= _order_ids(records, "cancel", status="cancelled")
     terminal_oids |= checked
 
+    # Slugs whose UNSETTLED filled keys span BOTH us_sides: slug-level
+    # flatness cannot prove either side flat (audit F2 — the venue may
+    # net 5 YES + 5 NO to netPosition 0 while both positions are held;
+    # releasing both would free capacity on live inventory and orphan
+    # both PnLs). Defer every candidate on such slugs until at least
+    # one side gains real terminal truth.
+    sides_by_slug: dict[str, set[str]] = {}
+    for key, rows in placed_by_key.items():
+        if key in settled_keys or key not in latest_fill_ts:
+            continue
+        first = rows[0]
+        slug, side = first.get("market_slug"), first.get("us_side")
+        if isinstance(slug, str) and isinstance(side, str):
+            sides_by_slug.setdefault(slug, set()).add(side)
+    two_sided = {s for s, sides in sides_by_slug.items() if len(sides) > 1}
+
     out = []
     for key in sorted(placed_by_key):
         if key in settled_keys:
@@ -566,6 +582,8 @@ def _release_candidates(
         ts = latest_fill_ts.get(key)
         if ts is None or now_ns - ts < MANUAL_EXIT_MIN_FILL_AGE_NS:
             continue
+        if placed_by_key[key][0].get("market_slug") in two_sided:
+            continue  # two-sided slug: flatness is unprovable per side
         resting = any(
             not oid or str(oid) not in terminal_oids
             for row in placed_by_key[key]
