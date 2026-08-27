@@ -75,7 +75,13 @@ ROUTES: dict[str, tuple[str, str | None, str | None]] = {
     "classification": ("deepseek/deepseek-v4-flash-0731", None, "low"),
     "review": ("anthropic/claude-opus-5", "openrouter", "xhigh"),
     "review2": ("z-ai/glm-5.3:floor", "openrouter", "high"),
-    "programming2": ("deepseek/deepseek-v4-flash-0731", None, "medium"),  # backup builder
+    # deepseek-0731 expansion (user 08-27: top of many categories, avoid
+    # one-sidedness; its observed weakness is the hermes AGENT/tool
+    # harness, not intelligence — so it gets hands-on-keyboard lanes,
+    # never tool-driving cron jobs):
+    "programming2": ("deepseek/deepseek-v4-flash-0731", None, "high"),  # full alternate builder — rotate real builds here, judge by artifacts
+    "search": ("deepseek/deepseek-v4-flash-0731", None, "medium"),      # retrieval/digest/extract over pasted material — its #1 category per user
+    "analysis": ("deepseek/deepseek-v4-flash-0731", None, "medium"),    # slow-loop data reads, log digestion, report drafts
 }
 
 
