@@ -130,8 +130,28 @@ def _fill_totals(records: list[dict]) -> dict[str, tuple[float, float, int]]:
 
 
 def _settles(records: list[dict]) -> dict[str, dict]:
-    """Map dedup_key -> first settle row (first wins)."""
-    return _first_by_key(records, "settle")
+    """Map dedup_key -> the key's most TRUSTWORTHY settle row.
+
+    First-wins among equal sources, but a signed-venue-truth row
+    (``venue_resolution``) outranks an earlier zero-PnL manual-exit
+    release (fills.py 08-27 finding f6: the release must never
+    permanently block a late resolution from restating true PnL).
+    Returns the same KEY SET either way, so open-position/exposure
+    semantics are unchanged — only which row represents the settle.
+    """
+    fallback: dict[str, dict] = {}
+    preferred: dict[str, dict] = {}
+    for row in records:
+        if not isinstance(row, dict) or row.get("type") != "settle":
+            continue
+        key = row.get("dedup_key")
+        if not isinstance(key, str) or not key:
+            continue
+        if key not in fallback:
+            fallback[key] = row
+        if row.get("source") != "manual_exit_position_closed":
+            preferred.setdefault(key, row)
+    return {k: preferred.get(k, v) for k, v in fallback.items()}
 
 
 def _price(row: dict) -> float | None:
@@ -202,7 +222,21 @@ def open_exposure(records: list[dict]) -> int:
         Number of placed orders with no own clean cancel and no settle.
     """
     settled = set(_settles(records))
-    filled = set(_fills(records))
+    # The fill override on a clean cancel is ORDER-scoped when the fill
+    # row names an order_id (audit F5): after a successful re-entry the
+    # SIBLING order O1 has its own clean cancel while the key carries
+    # O2's fill — key-scoping held O1 open forever, double-counting one
+    # capacity slot per successful re-entry fill. Keyless fill rows fall
+    # back to key scope (fail closed).
+    filled_oids: set[str] = set()
+    filled_keys_keyless: set[object] = set()
+    for row in records:
+        if isinstance(row, dict) and row.get("type") == "fill":
+            foid = row.get("order_id")
+            if foid:
+                filled_oids.add(str(foid))
+            else:
+                filled_keys_keyless.add(row.get("dedup_key"))
     cancelled_orders = {
         str(row.get("order_id"))
         for row in records
@@ -219,7 +253,9 @@ def open_exposure(records: list[dict]) -> int:
         if key in settled:
             continue
         oid = row.get("order_id")
-        if oid and str(oid) in cancelled_orders and key not in filled:
+        if (oid and str(oid) in cancelled_orders
+                and str(oid) not in filled_oids
+                and key not in filled_keys_keyless):
             continue
         n += 1
     return n
@@ -246,6 +282,16 @@ def realized_pnl(records: list[dict]) -> list[tuple[str, float, int]]:
     out: list[tuple[str, float, int]] = []
     for key in sorted(set(placed) & set(settles)):
         srow = settles[key]
+        # Manual-exit releases carry venue_pnl=None and won=None by design
+        # (exposure release only, fills.py 08-27): they must not zero out a
+        # position's PnL. A falsifiable preference, per repo discipline:
+        # the signed-venue-truth source (source="venue_resolution") is
+        # preferred WHEN PRESENT; if it never arrives the None-pnl release
+        # remains an explicit null result with exactly 0 contribution. A
+        # wrong released key can always be repaired from the same ledger
+        # history that produced it.
+        if srow.get("source") == "manual_exit_position_closed":
+            continue
         ts = srow.get("ts_ns")
         ts = ts if isinstance(ts, int) else 0
         # The venue's own realized number is the truth when present — the

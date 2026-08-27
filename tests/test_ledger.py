@@ -356,3 +356,34 @@ def test_manual_exit_settle_releases_without_pnl():
     assert open_positions(records) == []        # slot released
     assert open_exposure(records) == 0          # capacity slot freed
 
+
+
+class TestOrderScopedFillOverride:
+    def test_cancelled_sibling_of_filled_reentry_releases(self) -> None:
+        # Audit F5: O1 clean-cancelled (venue-confirmed unfilled), key
+        # released, re-entry O2 FILLED. O1 must not be held open by the
+        # key-scoped fill — exposure is exactly the one real position.
+        from gridbot.executor.ledger import open_exposure
+
+        records = [
+            {"type": "order_intent", "status": "placed", "order_id": "O1",
+             "dedup_key": "k1"},
+            {"type": "cancel", "order_id": "O1", "status": "cancelled"},
+            {"type": "order_intent", "status": "placed", "order_id": "O2",
+             "dedup_key": "k1"},
+            {"type": "fill", "order_id": "O2", "dedup_key": "k1",
+             "price": 0.5, "shares": 5.0, "ts_ns": 1},
+        ]
+        assert open_exposure(records) == 1  # O2 only
+
+    def test_keyless_fill_row_falls_back_to_key_scope(self) -> None:
+        from gridbot.executor.ledger import open_exposure
+
+        records = [
+            {"type": "order_intent", "status": "placed", "order_id": "O1",
+             "dedup_key": "k1"},
+            {"type": "cancel", "order_id": "O1", "status": "cancelled"},
+            {"type": "fill", "dedup_key": "k1", "price": 0.5, "shares": 5.0,
+             "ts_ns": 1},  # no order_id -> fail closed: O1 stays held
+        ]
+        assert open_exposure(records) == 1

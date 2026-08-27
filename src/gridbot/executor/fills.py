@@ -470,7 +470,7 @@ def _resolvable_pools(
     all_rows = records + fresh_fills
     fills_by_key = _rows_of(all_rows, "fill")
     truth_settled: set[str] = set()
-    released_keys: set[str] = set()
+    released_at: dict[str, int] = {}
     for row in records:
         if not (isinstance(row, dict) and row.get("type") == "settle"):
             continue
@@ -478,19 +478,25 @@ def _resolvable_pools(
         if not (isinstance(key, str) and key):
             continue
         if row.get("source") == MANUAL_EXIT_SOURCE:
-            released_keys.add(key)
+            # Anchor the recheck window to the RELEASE row's own timestamp —
+            # anchoring to the first placed intent (audit F7) expired keys
+            # released >24h after entry the moment they were released, so a
+            # late resolution could never upgrade the zero-PnL row.
+            ts = row.get("ts_ns")
+            released_at[key] = ts if isinstance(ts, int) else 0
         else:
             truth_settled.add(key)
+    released_keys = set(released_at)
     placed = _placed_intents(records)
     pools: dict[str, dict[str, list[dict]]] = {}
     for key in set(fills_by_key) & set(placed) - truth_settled:
         bucket = "released" if key in released_keys else "fresh"
         slug = placed[key].get("market_slug")
-        ts = placed[key].get("ts_ns")
         if not (isinstance(slug, str) and slug):
             continue
-        if (bucket == "released" and isinstance(ts, int)
-                and now_ns - ts > RESOLUTION_RECHECK_NS):
+        rel_ts = released_at.get(key, 0)
+        if (bucket == "released" and rel_ts
+                and now_ns - rel_ts > RESOLUTION_RECHECK_NS):
             continue  # release too old to keep re-queried — see RESOLUTION_RECHECK_NS
         pools.setdefault(slug, {"fresh": [], "released": []})[bucket].append(
             placed[key])

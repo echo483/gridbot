@@ -40,7 +40,22 @@ def open_ledger_orders(records: list[dict]) -> dict[str, dict]:
     releases: that order likely filled; surfacing it is this pass's job.
     """
     settled = _keys_of(records, "settle")
-    filled = _keys_of(records, "fill")
+    # Order-scoped fill override, mirroring ledger.open_exposure (audit
+    # F5): a clean-cancelled sibling of a FILLED re-entry order must not
+    # stay in the open view forever. Keyless fill rows fall back to key
+    # scope (fail closed).
+    filled_oids = {
+        str(row.get("order_id"))
+        for row in records
+        if isinstance(row, dict) and row.get("type") == "fill"
+        and row.get("order_id")
+    }
+    filled_keys_keyless = {
+        row.get("dedup_key")
+        for row in records
+        if isinstance(row, dict) and row.get("type") == "fill"
+        and not row.get("order_id")
+    }
     cancelled = {
         str(row.get("order_id"))
         for row in records
@@ -59,7 +74,8 @@ def open_ledger_orders(records: list[dict]) -> dict[str, dict]:
         key = row.get("dedup_key")
         if key in settled:
             continue
-        if str(oid) in cancelled and key not in filled:
+        if (str(oid) in cancelled and str(oid) not in filled_oids
+                and key not in filled_keys_keyless):
             continue
         out[str(oid)] = row
     return out

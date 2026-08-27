@@ -116,3 +116,20 @@ class TestRun:
         with caplog.at_level(logging.DEBUG, logger="gridbot.executor.reconcile"):
             run([_placed("A", "k1"), _placed("B", "k2")], client, last=first)
         assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+def test_cancelled_sibling_of_filled_reentry_leaves_open_view() -> None:
+    # Audit F5 mirror of ledger: reconcile must not list the cancelled
+    # sibling as gone-from-venue forever after a re-entry fill.
+    from gridbot.executor.reconcile import open_ledger_orders
+
+    records = [
+        {"type": "order_intent", "status": "placed", "order_id": "O1",
+         "dedup_key": "k1"},
+        {"type": "cancel", "order_id": "O1", "status": "cancelled"},
+        {"type": "order_intent", "status": "placed", "order_id": "O2",
+         "dedup_key": "k1"},
+        {"type": "fill", "order_id": "O2", "dedup_key": "k1",
+         "price": 0.5, "shares": 5.0, "ts_ns": 1},
+    ]
+    assert set(open_ledger_orders(records)) == {"O2"}
