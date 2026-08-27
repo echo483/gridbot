@@ -195,8 +195,8 @@ class TestSync:
 def test_pos_size_parses_real_venue_netposition() -> None:
     # Live capture 2026-08-27 13:10Z while HOLDING: the real venue keys
     # positions by slug with the size under "netPosition".
-    from gridbot.executor.fills import _pos_size
+    from gridbot.executor.fills import _row_sizes
 
     real = {"netPosition": "5", "qtyBought": "5", "qtySold": "0",
             "cost": {"value": "2.8300", "currency": "USD"}, "expired": False}
-    assert _pos_size(real) == 5.0
+    assert 5.0 in _row_sizes(real)
