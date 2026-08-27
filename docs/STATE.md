@@ -260,7 +260,24 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
    MAJORs fixed (24h-window readers, Follow eager read-through 60131f5);
    deferred MINORS: F8 analysis date-stamp one day ahead, F9 capture_qa
    fingerprint flips at rollover, F11 corpus [-days:] slices files not days.
-12. Knowledge-graph lane (user-led, queued 08-26 eve, task #29): the user
+11e. NIGHT-3 RESULTS + INFERENCE (08-27 overnight armed, venue-verified,
+   balance $26.49 flat): 29 placed / 9 fills / 8 resolutions — 4W-4L(+pair),
+   overnight net -$0.76 after late riders lost (day net +$3.23 with the
+   evening +$3.99). THE SPLITS (n=10 fills, describe-only, study running):
+   (a) DISCOUNT: every winner entered >=11pts under fair (11/20/21/30);
+   every loser sub-9pts (6.6/7.9/8.5) — a >=10pt floor separates them
+   PERFECTLY at this n; (b) both losing shorts were mid-band (~0.59 fair)
+   model-flip fades entered mid-map; (c) the XDM-NASE loss was entered
+   within 10min of a >=25pt shock (post-shock turbulence); (d) early-map
+   (r<=5) high-conviction longs 3-1, mid-map entries 1-3. IN BUILD:
+   entry_quality.py study (full would-trade population, all 3 armed days)
+   → evidence for pre-registering DISCOUNT-FLOOR + POST-SHOCK-FREEZE
+   amendments; second-side gate (Q15) in build w/ opus review, ships as
+   H-MAPENTRY1-SECONDSIDE1. Also live-evidenced tonight: capacity
+   overshoot via hidden-fill window (1d-d, 4 concurrent positions ~$8);
+   venue outage arc (create endpoint down ~4.5h, 4 triggers lost, fail-soft
+   perfect); manual-exit E2E validated incl netPosition field (live held
+   capture).
    wants to learn KG engineering and co-develop a gridbot knowledge graph.
    They research first; do NOT start building until they kick it off.
    Carry-in when it starts: this STATE.md, docs/experiments/registry.jsonl
