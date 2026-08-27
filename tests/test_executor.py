@@ -273,10 +273,12 @@ class TestBandGate:
     def test_pure_band_edges(self) -> None:
         from gridbot.executor.intents import us_band_gated
 
-        assert us_band_gated(0.49) is True
+        assert us_band_gated(0.39) is True
+        assert us_band_gated(0.40) is False
         assert us_band_gated(0.50) is False
         assert us_band_gated(0.80) is False
-        assert us_band_gated(0.81) is True
+        assert us_band_gated(0.90) is False
+        assert us_band_gated(0.91) is True
         assert us_band_gated(None) is True  # fail closed
         assert us_band_gated("0.7") is True
 
@@ -307,7 +309,7 @@ class TestBandGate:
             pmus, "place", lambda i: (calls.append(i) or ("placed", "OID1"))
         )
         eng = self._engine(tmp_path, monkeypatch)
-        status = eng.handle(_mapentry_row(), limits.ArmingState(dry_run=False))
+        status = eng.handle(_mapentry_row(p_map=0.95), limits.ArmingState(dry_run=False))
         assert status == "skipped:band_gate"
         assert calls == []  # wire never touched
         assert eng.resting == {}
@@ -323,12 +325,12 @@ class TestBandGate:
         assert [r["status"] for r in rows] == [
             "skipped:band_gate", "wire_pending", "placed"
         ]
-        assert rows[0]["p_map"] == 0.87
+        assert rows[0]["p_map"] == 0.95
         assert rows[0]["live"] is True
 
     def test_dry_run_gates_identically(self, tmp_path, monkeypatch) -> None:
         eng = self._engine(tmp_path, monkeypatch)
-        status = eng.handle(_mapentry_row(), limits.ArmingState(dry_run=True))
+        status = eng.handle(_mapentry_row(p_map=0.95), limits.ArmingState(dry_run=True))
         assert status == "skipped:band_gate"
         rows = self._rows(tmp_path)
         assert rows[0]["status"] == "skipped:band_gate"

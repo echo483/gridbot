@@ -118,19 +118,24 @@ def build_intent(instance: dict, stake_cap_usd: float) -> OrderIntent | None:
     )
 
 
-US_BAND_GATE = (0.50, 0.80)
+US_BAND_GATE = (0.40, 0.90)
 
 
 def us_band_gated(p_map: object) -> bool:
-    """Executor risk policy (frozen 2026-08-26 pre-first-fire): place US map
-    entries only while P_map is inside US_BAND_GATE.
+    """Executor risk policy: place US map entries only while P_map is inside
+    US_BAND_GATE.
 
-    External diagnostic (cs2agent ADR-0038, our 32-series pinned holdout):
-    the race aggregation over-forecasts above ~0.8 — entries at P_map>=0.8
-    measured -8..-16 pts settled edge, 0.50-0.80 positive at every
-    threshold. Policy layer only: the H-MAPENTRY1 recording population and
-    frozen bar are untouched; gated rows are still ledgered for evidence.
-    Returns True when placement must be blocked; missing p_map fails closed.
+    EXPERIMENT (temporary, user directive 2026-08-27): band widened from the
+    frozen 2026-08-26 (0.50, 0.80) to (0.40, 0.90) — symmetric +/-10pt — to
+    observe model predictive ability more broadly. This is a TEST amendment,
+    NOT an edge claim; expect lower average edge. The extreme tails remain
+    gated because the race aggregation over-forecasts near p_map ~0/1, where
+    -8..-16 pts settled edge was measured (cs2agent ADR-0038 diagnostic).
+    Reversible by reverting this one constant.
+
+    Policy layer only: the H-MAPENTRY1 recording population and frozen bar are
+    untouched; gated rows are still ledgered for evidence. Returns True when
+    placement must be blocked; missing p_map fails closed.
     """
     if not isinstance(p_map, (int, float)) or isinstance(p_map, bool):
         return True
