@@ -42,10 +42,14 @@ def main() -> int:
     from gridbot import config
     config.DATA_DIR = tmp  # isolated ledger; never touches real data/
 
-    from gridbot.executor.intents import US_BAND_GATE
-from gridbot.executor import engine as engine_mod
+    from gridbot.executor import engine as engine_mod
     from gridbot.executor import ledger as ledger_mod
     from gridbot.executor import limits, pmus
+    from gridbot.executor.intents import US_BAND_GATE
+
+    # Assert the LIVE band — a hardcoded copy here drifted silently when the
+    # band was widened to (0.40, 0.90) and flagged legal placements.
+    BAND_LO, BAND_HI = US_BAND_GATE
 
     oid_counter = [0]
 
