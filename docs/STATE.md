@@ -293,15 +293,31 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
    (r<=5) high-conviction longs 3-1, mid-map entries 1-3. IN BUILD:
    entry_quality.py study (full would-trade population, all 3 armed days)
    → evidence for pre-registering DISCOUNT-FLOOR + POST-SHOCK-FREEZE
-   amendments; second-side gate (Q15) in build w/ opus review, ships as
-   H-MAPENTRY1-SECONDSIDE1. Also live-evidenced tonight: capacity
-   overshoot via hidden-fill window (1d-d, 4 concurrent positions ~$8);
-   venue outage arc (create endpoint down ~4.5h, 4 triggers lost, fail-soft
-   perfect); manual-exit E2E validated incl netPosition field (live held
-   capture).
+   amendments — STUDY LANDED (2e78112): n=45 population CONTRADICTS the
+   fills read (>=20pt discounts wr .33/-.08 edge WORST; 10-20pt .86/+.18
+   best; early-phase .46 negative) so NO amendments registered. Study
+   caveats (code-review 08-27): would-trade population diverges from the
+   engine on band-gate/seen ordering + a stricter identity gate, and fills
+   tagging is not 1:1 — treat splits as directional, not gospel. SHIPPED:
+   second-side gate H-MAPENTRY1-SECONDSIDE1 (d041ede, registry #21 — NOT
+   queue Q15, which is the separate analysis-only two-sidedness item) +
+   post-review hardening: inflight vetoes terminal, trusted-settle-only
+   slug release, same-cycle error-ack block, oid-resolved bad_cancel
+   forgiveness. Known gate-state asymmetries (accepted): restart drops the
+   in-process errack map (ledger inflight covers it next refresh); dry_run
+   never wires so error-ack paths exercise armed-only. Also live-evidenced
+   tonight: capacity overshoot via hidden-fill window (1d-d, 4 concurrent
+   positions ~$8); venue outage arc (create endpoint down ~4.5h, 4
+   triggers lost, fail-soft perfect); manual-exit E2E validated incl
+   netPosition field (live held capture).
+12. Knowledge-graph lane (user-led, task #29, SCOPED 08-27): the user
    wants to learn KG engineering and co-develop a gridbot knowledge graph.
    They research first; do NOT start building until they kick it off.
-   Carry-in when it starts: this STATE.md, docs/experiments/registry.jsonl
+   Scoped with the user 08-27: purpose = AGENT CONTEXT ENGINE (what an
+   agent needs to know, queryable), interface = MCP server (absorbs task
+   #19), runtime/STATE-mapping nodes are the core; proposed stack Kuzu
+   (embedded Cypher); deepseek = bulk extractor lane. Spec doc awaits the
+   user's nod. Carry-in: this STATE.md, docs/experiments/registry.jsonl
    (hypotheses/verdicts = natural nodes+edges), the capture corpus
    relations (series↔maps↔markets↔orders↔fills↔settles), the gotchas
    section, and Claude memory. Slow-loop only (iron rail 1).

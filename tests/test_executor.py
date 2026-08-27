@@ -773,7 +773,8 @@ class TestSecondSide:
                            "market_slug": self.SLUG, "price": 0.5, "shares": 4.0,
                            "ts_ns": 1})
         eng.ledger.append({"type": "settle", "dedup_key": key, "market_slug": self.SLUG,
-                           "won": False, "venue_pnl": -2.0, "ts_ns": 2})
+                           "won": False, "venue_pnl": -2.0,
+                           "source": "venue_resolution", "ts_ns": 2})
         eng.resting.clear()  # filled+settled order no longer rests
         self._refresh(eng)
         assert eng._slug_sides_open == {}
@@ -954,3 +955,54 @@ class TestSecondSide:
         assert eng._slug_sides_open == {}  # empty slug skipped on build too
         assert eng.handle(_instance(round_number=9), limits.ArmingState(dry_run=True)) \
             == "dry_run"  # not "skipped:second_side"
+
+    def test_inflight_key_never_terminal_despite_clean_orders(self, tmp_path,
+                                                              monkeypatch) -> None:
+        # code-review f1: a key with venue-confirmed clean cancels on its
+        # PLACED oids can still hold a live order via an error:* ack (the
+        # ambiguous re-entry attempt) — inflight must veto terminal.
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(self._long(), armed) == "placed"
+        key = next(iter(eng.resting.values()))["dedup_key"]
+        self._sweep_all(eng, engine_mod, monkeypatch)  # clean-cancelled
+        assert eng._slug_sides_open == {}  # genuinely terminal
+        # a later ambiguous ack on the SAME key (re-entry attempt):
+        eng.ledger.append({"type": "order_intent", "status": "error:ambiguous_ack",
+                           "dedup_key": key, "market_slug": self.SLUG,
+                           "us_side": "long", "price": 0.66, "shares": 4.0})
+        self._refresh(eng)
+        assert eng._slug_sides_open == {self.SLUG: {"long"}}
+
+    def test_error_ack_blocks_opposite_side_same_cycle(self, tmp_path,
+                                                       monkeypatch) -> None:
+        # code-review f4: an error:* wire ack may be live on venue; the
+        # opposite side must be blocked IN THE SAME cycle burst, before any
+        # ledger refresh runs.
+        from gridbot.executor import pmus
+
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        monkeypatch.setattr(pmus, "place",
+                            lambda _i: ("error:ambiguous_ack", None))
+        assert eng.handle(self._long(), armed).startswith("error:")
+        assert eng.handle(self._short(), armed) == "skipped:second_side"
+        assert self.SLUG in eng._errack_block
+
+    def test_bad_cancel_forgiven_by_corrective_clean_cancel(self, tmp_path,
+                                                            monkeypatch) -> None:
+        # code-review f6: gone_before_cancel poisons the key only until the
+        # fills sweep writes the corrective venue_terminal_no_fill clean
+        # cancel for the SAME oid — then the key is genuinely terminal.
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(self._long(), armed) == "placed"
+        key = next(iter(eng.resting.values()))["dedup_key"]
+        self._sweep_all(eng, engine_mod, monkeypatch, outcome="gone")
+        assert eng._slug_sides_open == {self.SLUG: {"long"}}  # poisoned
+        eng.ledger.append({"type": "cancel", "dedup_key": key, "order_id": "OID1",
+                           "status": "cancelled",
+                           "source": "venue_terminal_no_fill", "ts_ns": 3})
+        self._refresh(eng)
+        assert eng._slug_sides_open == {}  # forgiven: venue-confirmed no-fill
+        assert eng.handle(self._short(), armed) == "placed"

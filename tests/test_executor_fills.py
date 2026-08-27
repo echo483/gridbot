@@ -254,6 +254,18 @@ def test_filled_sides_by_slug_joins_side_from_intent_row() -> None:
          "price": 0.5, "shares": 3.0, "partial": False, "source": "venue_order",
          "ts_ns": 1},
         {"type": "settle", "dedup_key": "kT", "won": True, "venue_pnl": 1.4,
-         "ts_ns": 2},
+         "source": "venue_resolution", "ts_ns": 2},
+        # a MANUAL-EXIT settle is an accounting close, not venue resolution —
+        # its slug must stay side-held (code-review f3, fail closed):
+        {"type": "order_intent", "status": "placed", "order_id": "M1",
+         "dedup_key": "kM", "market_slug": "m3", "us_side": "short",
+         "price": 0.4, "shares": 5.0},
+        {"type": "fill", "order_id": "M1", "dedup_key": "kM", "market_slug": "m3",
+         "price": 0.4, "shares": 5.0, "partial": False, "source": "venue_order",
+         "ts_ns": 1},
+        {"type": "settle", "dedup_key": "kM", "won": None, "venue_pnl": None,
+         "source": fills.MANUAL_EXIT_SOURCE, "ts_ns": 2},
     ]
-    assert fills.filled_sides_by_slug(records) == {"m1": {"long", "short"}}
+    assert fills.filled_sides_by_slug(records) == {
+        "m1": {"long", "short"}, "m3": {"short"},
+    }

@@ -78,6 +78,25 @@ place considering the trade." Later item; model continues freely until then.
 
 Priority below Queue 13 (fill acceptance) per user: "comes later."
 
+## Queue 15 — market-selection signal: book two-sidedness as a tradability gate (user observation, night 2)
+
+User noticed the only games with PMUS mapping tonight were ones where "the
+other games are one sided and somewhat untradable" — possibly deliberate
+listing behavior by the venue. Observation to test, not assume:
+
+- Measure per-mapped-market: pre-match and in-play quote depth/two-sidedness,
+  spread stability, and whether untradeable (one-sided, no bids) books
+  correlate with certain match classes (tier, region, heavily-favored
+  favorites). The Voca-FV map2 post-resolve dead book is an instance.
+- If predictive of fill futility, add a **tradability pre-gate** before
+  placement: skip markets whose recent book history shows persistent
+  one-sidedness (saves TTL slots + ledger noise), while keeping genuinely
+  thin-but-two-sided books tradeable.
+- Data source: books capture already on disk (pm/ws snapshots) — analysis
+  lane, no engine change until measured.
+
+Priority: below Queues 13/14. Owner: Claude Code / Hermes analysis.
+
 ## Rails
 
 - All four remain maker-only: we never cross the ask (no chasing).

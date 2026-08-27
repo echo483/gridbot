@@ -66,6 +66,13 @@ ACTIVITY_PAGE_LIMIT = 50
 # Settle-row source of the manual-exit release (shared with the ledger's
 # truth-preference in ledger._settles — keep the literal in sync).
 MANUAL_EXIT_SOURCE = "manual_exit_position_closed"
+# The signed-venue-truth settle source — the ONLY source ledger._settles
+# trusts to outrank a manual-exit release row (explicit trusted set).
+VENUE_RESOLUTION_SOURCE = "venue_resolution"
+# Every source ledger._settles may trust over a manual-exit release row.
+# "venue_resolution_backfill" exists in the night-1 ledger (08-26 manual
+# backfill of venue truth) — real signed PnL, equally trustworthy.
+TRUSTED_SETTLE_SOURCES = (VENUE_RESOLUTION_SOURCE, "venue_resolution_backfill")
 
 # A fill younger than this is still inside its own entry/re-entry window;
 # positions truth pulled before it can be stale about it (review f5: the
@@ -165,7 +172,7 @@ def settle_row(intent_row: dict, resolution: dict, ts_ns: int) -> dict | None:
         # realized_pnl uses venue_pnl so the number stays honest either way.
         "voided": pnl == 0,
         "venue_pnl": round(pnl, 6),
-        "source": "venue_resolution",
+        "source": VENUE_RESOLUTION_SOURCE,
         "ts_ns": ts,
     }
 
@@ -486,11 +493,10 @@ def _resolvable_pools(
             released_at[key] = ts if isinstance(ts, int) else 0
         else:
             truth_settled.add(key)
-    released_keys = set(released_at)
     placed = _placed_intents(records)
     pools: dict[str, dict[str, list[dict]]] = {}
     for key in set(fills_by_key) & set(placed) - truth_settled:
-        bucket = "released" if key in released_keys else "fresh"
+        bucket = "released" if key in released_at else "fresh"
         slug = placed[key].get("market_slug")
         if not (isinstance(slug, str) and slug):
             continue
@@ -525,7 +531,7 @@ def _newest_fill_ts(records: list[dict], fresh_fills: list[dict]) -> dict[str, i
     return out
 
 
-def filled_sides_by_slug(records: list[dict]) -> dict[str, set[str]]:
+def filled_sides_by_slug(records: list[dict], extra_rows: tuple | list = ()) -> dict[str, set[str]]:
     """``{slug: {us_side}}`` for the slug's FILLED-and-unsettled keys.
 
     THE shared derivation of the hold->side join (STATE 1e invariant,
@@ -538,19 +544,25 @@ def filled_sides_by_slug(records: list[dict]) -> dict[str, set[str]]:
     and the engine's second-side gate consume this one function so the
     invariant cannot drift into two parallel copies.
     """
-    placed_by_key: dict[str, list[dict]] = {}
-    for row in records:
-        if (isinstance(row, dict) and row.get("type") == "order_intent"
-                and row.get("status") == "placed"
-                and isinstance(row.get("dedup_key"), str)):
-            placed_by_key.setdefault(row["dedup_key"], []).append(row)
-    settled_keys = set(_rows_of(records, "settle"))
+    first_placed = _placed_intents(records)
+    # Terminal here means the POSITION is closed with venue truth. A
+    # manual-exit settle (None pnl, venue-flat inference) is an accounting
+    # close, not venue resolution — it must NOT free the slug for the
+    # opposite side (code-review f3): trusted settle sources only.
+    settled_keys = {
+        k for k, row in _rows_of(records, "settle").items()
+        if row.get("source") in TRUSTED_SETTLE_SOURCES
+    }
     filled_keys = set(_rows_of(records, "fill"))
+    for row in extra_rows:
+        if isinstance(row, dict) and row.get("type") == "fill":
+            k = row.get("dedup_key")
+            if isinstance(k, str) and k:
+                filled_keys.add(k)
     out: dict[str, set[str]] = {}
-    for key, rows in placed_by_key.items():
+    for key, first in first_placed.items():
         if key in settled_keys or key not in filled_keys:
             continue
-        first = rows[0]
         slug, side = first.get("market_slug"), first.get("us_side")
         if not (isinstance(slug, str) and slug
                 and isinstance(side, str) and side):
@@ -602,7 +614,7 @@ def _release_candidates(
     # filled_sides_by_slug helper (a fill row has no us_side); fresh_fills
     # from this pass count as fills, so they are folded into the input.
     two_sided = {
-        s for s, sides in filled_sides_by_slug(records + fresh_fills).items()
+        s for s, sides in filled_sides_by_slug(records, fresh_fills).items()
         if len(sides) > 1
     }
 

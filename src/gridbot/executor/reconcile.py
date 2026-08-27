@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import logging
 
+from gridbot.executor.ledger import fill_scopes as ledger_fill_scopes
+
 log = logging.getLogger("gridbot.executor.reconcile")
 
 
@@ -40,22 +42,11 @@ def open_ledger_orders(records: list[dict]) -> dict[str, dict]:
     releases: that order likely filled; surfacing it is this pass's job.
     """
     settled = _keys_of(records, "settle")
-    # Order-scoped fill override, mirroring ledger.open_exposure (audit
-    # F5): a clean-cancelled sibling of a FILLED re-entry order must not
-    # stay in the open view forever. Keyless fill rows fall back to key
-    # scope (fail closed).
-    filled_oids = {
-        str(row.get("order_id"))
-        for row in records
-        if isinstance(row, dict) and row.get("type") == "fill"
-        and row.get("order_id")
-    }
-    filled_keys_keyless = {
-        row.get("dedup_key")
-        for row in records
-        if isinstance(row, dict) and row.get("type") == "fill"
-        and not row.get("order_id")
-    }
+    # Order-scoped fill override — the ONE shared derivation lives in
+    # ledger.fill_scopes (audit F5 + altitude review: two hand-mirrored
+    # copies of a live release predicate is how the cap and the reconcile
+    # view silently split).
+    filled_oids, filled_keys_keyless = ledger_fill_scopes(records)
     cancelled = {
         str(row.get("order_id"))
         for row in records

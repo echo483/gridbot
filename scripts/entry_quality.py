@@ -109,8 +109,13 @@ __all__ = [
 
 DEFAULT_SHOCK = 0.25
 DEFAULT_SHOCK_WINDOW_S = 600
-US_TICK = 0.01          # Polymarket US orderPriceMinTickSize (mirrors intents.py)
-ENTRY_CEILING = 0.90    # DEFAULT_ENTRY_CEILING (mirrors intents.py)
+# Live engine constants — literal mirrors drift (replay_harness did; this
+# file did too: its old 0.90 ignored per-hypothesis ceilings and its price
+# check admitted sub-tick prices the engine refuses).
+from gridbot.executor.intents import (  # noqa: E402
+    DEFAULT_ENTRY_CEILING, US_BAND_GATE, US_TICK,
+)
+ENTRY_CEILING = DEFAULT_ENTRY_CEILING  # live engine constant — a literal mirror drifted in replay_harness once already
 NS_PER_S = 1_000_000_000
 
 # Maximum bytes scanned per mapentry line before it is treated as corrupt
@@ -192,7 +197,10 @@ def entry_price(side_ask: float, entry_price_max: float) -> float | None:
     price = round(
         min(float(side_ask) - US_TICK, float(entry_price_max), ENTRY_CEILING), 4
     )
-    return price if 0.0 < price < 1.0 else None
+    # Engine-faithful validity (code-review f10a): build_us_intent refuses
+    # price < US_TICK — a sub-tick price must not join the would-trade
+    # population NOR consume the dedup key.
+    return price if US_TICK <= price < 1.0 else None
 
 
 def discount_pts(p_map: float, price: float) -> float:
@@ -413,7 +421,10 @@ def has_pre_shock(
         a_ts, a_p = seq[j - 1]
         if a_ts < start:
             break
-        if abs(seq[j][1] - a_p) >= threshold:
+        # 6dp rounding before the boundary test (code-review f11): a true
+        # 25pt jump like 0.70-0.45 is 0.24999999999999994 in binary — the
+        # freeze evidence must not flip on which decimals capture emitted.
+        if round(abs(seq[j][1] - a_p), 6) >= threshold:
             return True
     return False
 
@@ -723,6 +734,7 @@ def main(argv: list[str] | None = None) -> int:
         "strata": strata,
         "fills_subset": fills_subset,
         "params": {
+            "live_us_band_gate": list(US_BAND_GATE),
             "files": list(args.files),
             "winners": args.winners,
             "fills": args.fills,

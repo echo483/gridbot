@@ -30,6 +30,8 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from gridbot.executor.fills import MANUAL_EXIT_SOURCE, TRUSTED_SETTLE_SOURCES
+
 
 def load_records(root: Path) -> list[dict]:
     """Read every intents-*.jsonl file under ``root``.
@@ -58,6 +60,28 @@ def load_records(root: Path) -> list[dict]:
             if isinstance(row, dict):
                 records.append(row)
     return records
+
+
+def fill_scopes(records: list[dict]) -> tuple[set[str], set[object]]:
+    """(filled order_ids, dedup_keys of KEYLESS fill rows).
+
+    THE shared order-scoped fill-override scan (audit F5): a clean cancel
+    releases an order only when no fill row names ITS order_id — after a
+    successful re-entry the cancelled sibling must not be held open by the
+    key's fill. Keyless fill rows fall back to key scope (fail closed).
+    Consumed by open_exposure here AND reconcile.open_ledger_orders — one
+    derivation, so the release predicate cannot drift into two copies.
+    """
+    filled_oids: set[str] = set()
+    keyless_keys: set[object] = set()
+    for row in records:
+        if isinstance(row, dict) and row.get("type") == "fill":
+            foid = row.get("order_id")
+            if foid:
+                filled_oids.add(str(foid))
+            else:
+                keyless_keys.add(row.get("dedup_key"))
+    return filled_oids, keyless_keys
 
 
 def _first_by_key(
@@ -149,7 +173,11 @@ def _settles(records: list[dict]) -> dict[str, dict]:
             continue
         if key not in fallback:
             fallback[key] = row
-        if row.get("source") != "manual_exit_position_closed":
+        # Explicit TRUSTED set (audit: preferring any source that merely
+        # ISN'T the manual-exit sentinel was fail-open — an unknown future
+        # release source would outrank real venue truth). Only signed venue
+        # resolutions outrank a release row.
+        if row.get("source") in TRUSTED_SETTLE_SOURCES:
             preferred.setdefault(key, row)
     return {k: preferred.get(k, v) for k, v in fallback.items()}
 
@@ -222,21 +250,7 @@ def open_exposure(records: list[dict]) -> int:
         Number of placed orders with no own clean cancel and no settle.
     """
     settled = set(_settles(records))
-    # The fill override on a clean cancel is ORDER-scoped when the fill
-    # row names an order_id (audit F5): after a successful re-entry the
-    # SIBLING order O1 has its own clean cancel while the key carries
-    # O2's fill — key-scoping held O1 open forever, double-counting one
-    # capacity slot per successful re-entry fill. Keyless fill rows fall
-    # back to key scope (fail closed).
-    filled_oids: set[str] = set()
-    filled_keys_keyless: set[object] = set()
-    for row in records:
-        if isinstance(row, dict) and row.get("type") == "fill":
-            foid = row.get("order_id")
-            if foid:
-                filled_oids.add(str(foid))
-            else:
-                filled_keys_keyless.add(row.get("dedup_key"))
+    filled_oids, filled_keys_keyless = fill_scopes(records)
     cancelled_orders = {
         str(row.get("order_id"))
         for row in records
@@ -290,7 +304,7 @@ def realized_pnl(records: list[dict]) -> list[tuple[str, float, int]]:
         # remains an explicit null result with exactly 0 contribution. A
         # wrong released key can always be repaired from the same ledger
         # history that produced it.
-        if srow.get("source") == "manual_exit_position_closed":
+        if srow.get("source") == MANUAL_EXIT_SOURCE:
             continue
         ts = srow.get("ts_ns")
         ts = ts if isinstance(ts, int) else 0

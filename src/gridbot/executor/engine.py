@@ -136,6 +136,10 @@ class Engine:
         # the ledger each cycle (restart-safe), so the second-side gate
         # never enters a slug side while the OPPOSITE side is open.
         self._slug_sides_open: dict[str, set[str]] = {}
+        # slug -> (us_side, monotonic) for error:* acks this session; the
+        # in-cycle half of the second-side gate until the ledger view
+        # (inflight) covers the key on the next refresh (code-review f4).
+        self._errack_block: dict[str, tuple[str, float]] = {}
 
     def handle(self, record: dict, armed: limits.ArmingState) -> str | None:
         """Process one shadow record; returns the outcome status or None."""
@@ -215,6 +219,15 @@ class Engine:
                 return None
             self.seen.add(intent.dedup_key)
             status, order_id = pmus.place(intent)
+            if status.startswith("error:") and intent.market_slug:
+                # A failed/ambiguous ack may still be live on venue: block
+                # the opposite side WITHIN this cycle burst (code-review f4).
+                # NOT a resting entry — the sweep would cancel a synthetic id
+                # and pollute bad_cancel; a dedicated short-lived block that
+                # the ledger inflight view supersedes from the next refresh.
+                self._errack_block[intent.market_slug] = (
+                    intent.us_side, time.monotonic()
+                )
             if status == "placed":
                 self.open_count += 1
                 self._placed_counts[intent.dedup_key] = (
@@ -258,7 +271,12 @@ class Engine:
         filled: set[str] = set()
         filled_orders: set[str] = set()
         settled: set[str] = set()
-        bad_cancel: set[str] = set()  # gone_before_cancel / error cancels
+        # (key, oid-or-None) for gone_before_cancel / error cancels;
+        # resolved to the bad_cancel key set AFTER the scan (code-review f6):
+        # a bad cancel is forgiven once the SAME oid shows venue-confirmed
+        # terminal evidence — the corrective venue_terminal_no_fill clean
+        # cancel (fills sweep) or a fill row. Oid-less bad rows stay poison.
+        bad_cancel_rows: list[tuple[str, str | None]] = []
         placed_by_key: dict[str, set[str]] = {}
         clean_orders: set[str] = set()
         # Possibly-LIVE-but-never-terminally-evidenced keys (STATE 1e / review
@@ -268,6 +286,7 @@ class Engine:
         # though no placed+oid placement row records them — the side view must
         # count them (fail closed), exactly as the cap accounting does.
         inflight: set[str] = set()
+        intent_by_key: dict[str, dict] = {}
         for row in records:
             if not isinstance(row, dict):
                 continue
@@ -286,8 +305,12 @@ class Engine:
                 if s == "cancelled" and row.get("order_id"):
                     clean_orders.add(str(row["order_id"]))
                 elif s != "cancelled":
-                    bad_cancel.add(key)
+                    oid = row.get("order_id")
+                    bad_cancel_rows.append(
+                        (key, str(oid) if oid else None)
+                    )
             elif t == "order_intent":
+                intent_by_key.setdefault(key, row)  # first row per key, any status (side join)
                 if s == "wire_pending":
                     open_pend[key] = open_pend.get(key, 0) + 1
                 elif s == "placed" or s.startswith("error:"):
@@ -307,6 +330,11 @@ class Engine:
                     open_pend[key] -= 1
         # A dangling wire_pending (no paired outcome) is a possibly-live order.
         inflight |= {k for k, v in open_pend.items() if v > 0}
+        bad_cancel: set[str] = {
+            k for k, oid in bad_cancel_rows
+            if oid is None or (oid not in clean_orders
+                               and oid not in filled_orders)
+        }
         self._placed_counts = {
             k: hard.get(k, 0) + open_pend.get(k, 0)
             for k in set(hard) | set(open_pend)
@@ -332,20 +360,13 @@ class Engine:
         # filled_sides_by_slug derivation (fills.py, reused verbatim per F6)
         # may read a fill's side. Instance-lane intents (empty slug/side) are
         # skipped here and in the gate (D4).
-        # intent_by_key grabs the FIRST order_intent row per key across ALL
-        # statuses (placed, wire_pending, error:*) — every one of those rows
-        # carries market_slug/us_side via record(), so a possibly-live pending
-        # key resolves its side just like a placed key (review finding 2).
-        intent_by_key: dict[str, dict] = {}
-        for row in records:
-            if (isinstance(row, dict) and row.get("type") == "order_intent"
-                    and isinstance(row.get("dedup_key"), str)
-                    and row["dedup_key"] not in intent_by_key):
-                intent_by_key[row["dedup_key"]] = row
-        slug_sides_open = {
-            s: set(sides)
-            for s, sides in fills_mod.filled_sides_by_slug(records).items()
-        }
+        # intent_by_key was filled inside the single scan above: the FIRST
+        # order_intent row per key across ALL statuses — every one carries
+        # market_slug/us_side via record(), so a possibly-live pending key
+        # resolves its side just like a placed key (review finding 2).
+        # The helper's fresh dict is mutated directly (it builds new sets
+        # per call — the copy the first version made was pure waste).
+        slug_sides_open = fills_mod.filled_sides_by_slug(records)
         # Non-terminal keys = placed candidates plus inflight. Settled keys and
         # rejected-only keys never show up here (rejected is not placed, not
         # inflight, and has no dangling pending — a rejection closes the key).
@@ -357,6 +378,8 @@ class Engine:
                 oids <= clean_orders
                 and oids <= self._fill_checked   # venue-confirmed zero-fill
                 and key not in bad_cancel
+                and key not in inflight  # a re-entry's ambiguous ack may be
+                                         # live on venue (code-review f1)
             ):
                 continue  # every order venue-confirmed clean + unfilled -> terminal
             intent = intent_by_key.get(key)
@@ -401,12 +424,20 @@ class Engine:
         open_sides = self._slug_sides_open.get(slug)
         if open_sides and any(s != side for s in open_sides):
             return True  # opposite side open in the ledger view
+        err = self._errack_block.get(slug)
+        if err is not None:
+            err_side, err_mono = err
+            if time.monotonic() - err_mono > 300.0:
+                del self._errack_block[slug]  # ledger view owns it by now
+            elif err_side != side:
+                return True  # possibly-live error ack on the other side
         for info in self.resting.values():
             if info.get("slug") != slug:
                 continue
-            rest_side = info.get("us_side")
-            if rest_side is None or rest_side != side:
-                return True  # adopted orphan (unknown) or opposite — fail closed
+            if info.get("us_side") != side:
+                # covers both the opposite side and the adopted orphan
+                # (us_side None != any valid side) — fail closed
+                return True
         return False
 
     def _confirm_releases(self) -> None:
@@ -577,7 +608,7 @@ class Engine:
         except Exception:
             log.exception("reconcile pass failed (engine continues)")
 
-    def _adopt_venue_orders(self, report: dict, records: list[dict] | None = None) -> None:
+    def _adopt_venue_orders(self, report: dict, records: list[dict]) -> None:
         """ADOPTION (glm review f1/f3): every live venue order must be under
         THIS process's TTL sweep. Prior-session ledger orders and unknown
         orphans (create errors that were really acks; single-account rail
@@ -589,7 +620,7 @@ class Engine:
         # unknown/orphan key stores us_side=None (blocks every side on the
         # slug until the sweep cancels it — fail closed).
         side_by_key: dict[str, str] = {}
-        for row in records or []:
+        for row in records:
             if (isinstance(row, dict) and row.get("type") == "order_intent"
                     and isinstance(row.get("dedup_key"), str)
                     and row["dedup_key"] not in side_by_key
