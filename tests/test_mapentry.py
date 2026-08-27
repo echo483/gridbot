@@ -119,6 +119,38 @@ class TestVenueJoin:
         assert out["9"]["match"] == {"s": 2}
         assert "10" not in out  # unmatched rows are not joinable
 
+    def test_match_survives_utc_day_rollover(self, tmp_path) -> None:
+        # 00:00Z opens a new day file; the venue can no longer re-match an
+        # in-play series (its event left the discovery lanes), so today's
+        # rows come back match=None. Yesterday's match must still serve —
+        # reading only the newest file blinded the 08-27 armed slate.
+        yesterday = [
+            {"type": "grid_pmus_mapping", "grid_series_id": "9",
+             "match": {"s": 1}, "us_markets": {"map1": {"market_slug": "m"}}},
+        ]
+        today = [
+            {"type": "grid_pmus_mapping", "grid_series_id": "9",
+             "match": None, "us_markets": {}},
+            {"type": "grid_pmus_mapping", "grid_series_id": "11",
+             "match": {"s": 3}},
+        ]
+        (tmp_path / "mappings-20260826.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in yesterday) + "\n")
+        (tmp_path / "mappings-20260827.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in today) + "\n")
+        out = load_latest_mappings(tmp_path)
+        assert out["9"]["match"] == {"s": 1}   # yesterday's match survives
+        assert out["11"]["match"] == {"s": 3}  # today's new match also seen
+
+    def test_todays_rematch_beats_yesterdays(self, tmp_path) -> None:
+        (tmp_path / "mappings-20260826.jsonl").write_text(json.dumps(
+            {"type": "grid_pmus_mapping", "grid_series_id": "9",
+             "match": {"s": "old"}}) + "\n")
+        (tmp_path / "mappings-20260827.jsonl").write_text(json.dumps(
+            {"type": "grid_pmus_mapping", "grid_series_id": "9",
+             "match": {"s": "new"}}) + "\n")
+        assert load_latest_mappings(tmp_path)["9"]["match"] == {"s": "new"}
+
 
 class TestBook:
     def test_parse_bbo(self) -> None:

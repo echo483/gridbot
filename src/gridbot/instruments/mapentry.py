@@ -72,19 +72,28 @@ def map_win_prob(a: int, b: int, q: float) -> float | None:
 
 
 def load_latest_mappings(pmus_dir: Path) -> dict[str, dict]:
-    """grid_series_id -> newest matched mapping row from the latest day file."""
+    """grid_series_id -> newest matched mapping row across the last TWO day files.
+
+    Two files, not one: a match made before UTC midnight must survive the day
+    rollover. The venue's discovery lanes stop listing an event once its games
+    go live, so the post-midnight refresh cannot re-match an in-play series —
+    reading only ``files[-1]`` blinded the whole 08-27 armed slate at 00:00Z
+    (every signal skipped no_pmus_mapping while yesterday's file held valid
+    matches). Oldest-first iteration keeps "later snapshot wins".
+    """
     files = sorted(pmus_dir.glob("mappings-*.jsonl"))
     if not files:
         return {}
     out: dict[str, dict] = {}
-    with open(files[-1]) as fh:
-        for line in fh:
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if rec.get("type") == "grid_pmus_mapping" and rec.get("match"):
-                out[str(rec.get("grid_series_id"))] = rec  # later snapshot wins
+    for path in files[-2:]:
+        with open(path) as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("type") == "grid_pmus_mapping" and rec.get("match"):
+                    out[str(rec.get("grid_series_id"))] = rec  # later snapshot wins
     return out
 
 
