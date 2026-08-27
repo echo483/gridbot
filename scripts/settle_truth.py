@@ -27,6 +27,13 @@ install_log_redaction()  # this process reads trading keys (security review 08-2
 def main() -> None:
     day = sys.argv[1] if len(sys.argv) > 1 else f"{datetime.now(UTC):%Y%m%d}"
     ledger_path = config.DATA_DIR / "executor" / f"intents-{day}.jsonl"
+    if len(sys.argv) <= 1 and not ledger_path.exists():
+        # Just after UTC midnight today's file may not exist yet — fall back
+        # to the most recent day so unattended runs still report truth.
+        latest = sorted((config.DATA_DIR / "executor").glob("intents-*.jsonl"))
+        if latest:
+            ledger_path = latest[-1]
+            day = ledger_path.stem.split("-")[-1]
     rows = [json.loads(l) for l in ledger_path.read_text().splitlines() if l.strip()]
     placed = [r for r in rows if r.get("type") == "order_intent" and r.get("status") == "placed"]
     print(f"ledger {day}: {len(placed)} placed orders")

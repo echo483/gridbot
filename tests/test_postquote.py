@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 from gridbot.instruments import postquote
 from gridbot.instruments.postquote import Sampler, mid, oriented, samples_from_row
+
+# The sampler writes to TODAY's dated file — a hardcoded date here passes on
+# the day the test is written and breaks at the next UTC midnight.
+TODAY = f"{datetime.now(UTC):%Y%m%d}"
 
 
 def _qrow(**over) -> dict:
@@ -38,7 +43,7 @@ class FakeBooks:
 def _sampler(tmp_path, books=None) -> Sampler:
     shadow = tmp_path / "shadow"
     shadow.mkdir()
-    (shadow / "mapentry-20260826.jsonl").write_text("")
+    (shadow / f"mapentry-{TODAY}.jsonl").write_text("")
     return Sampler(books=books or FakeBooks(), out_dir=shadow,
                    shadow_dir=shadow, from_start=True)
 
@@ -74,7 +79,7 @@ class TestPure:
 
 class TestSampler:
     def _feed(self, sampler: Sampler, row: dict) -> None:
-        path = sampler.follow.directory / "mapentry-20260826.jsonl"
+        path = sampler.follow.directory / f"mapentry-{TODAY}.jsonl"
         with open(path, "a") as fh:
             fh.write(json.dumps(row) + "\n")
 
@@ -87,7 +92,7 @@ class TestSampler:
         assert s.poll_once(1030.0) == 1  # +30s due
         assert s.poll_once(1220.0) == 2  # +60 and +120 due together
         out = [json.loads(x) for x in
-               (tmp_path / "shadow" / "postquote-20260826.jsonl")
+               (tmp_path / "shadow" / f"postquote-{TODAY}.jsonl")
                .read_text().splitlines()]
         assert [r["dt_s"] for r in out] == [30.0, 60.0, 120.0]
         assert all(r["oriented_move"] == 0.02 for r in out)
@@ -99,7 +104,7 @@ class TestSampler:
         s.poll_once(1000.0)
         s.poll_once(1300.0)
         out = [json.loads(x) for x in
-               (tmp_path / "shadow" / "postquote-20260826.jsonl")
+               (tmp_path / "shadow" / f"postquote-{TODAY}.jsonl")
                .read_text().splitlines()]
         assert all(r["oriented_move"] == -0.02 for r in out)
 
@@ -109,7 +114,7 @@ class TestSampler:
         s.poll_once(1000.0)
         s.poll_once(1300.0)
         out = [json.loads(x) for x in
-               (tmp_path / "shadow" / "postquote-20260826.jsonl")
+               (tmp_path / "shadow" / f"postquote-{TODAY}.jsonl")
                .read_text().splitlines()]
         assert all(r["oriented_move"] is None and r["mid"] is None for r in out)
 
