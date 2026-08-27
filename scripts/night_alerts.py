@@ -62,18 +62,28 @@ def main() -> None:
     seen: set[str] = set()
     last_beat = time.monotonic()
     counts = {"placed": 0, "fills": 0}
+    counts_day = f"{datetime.now(UTC):%Y%m%d}"
     while True:
         day = f"{datetime.now(UTC):%Y%m%d}"
+        if day != counts_day:
+            # The process is long-lived; without this the heartbeat counts
+            # accumulate across nights (reported "18 placed" when the day's
+            # ledger had 4 — nights 1+2 summed).
+            counts_day = day
+            counts = {"placed": 0, "fills": 0}
         path = DATA / "executor" / f"intents-{day}.jsonl"
         if path.exists():
             if path not in offsets:
                 offsets[path] = path.stat().st_size  # alerts are for NEW events; skip backlog
                 continue
             off = offsets.get(path, 0)
-            with open(path) as fh:
+            # Binary offsets: len() of a decoded str counts characters, not
+            # bytes — any multi-byte name would desync the seek position.
+            with open(path, "rb") as fh:
                 fh.seek(off)
-                chunk = fh.read()
-                offsets[path] = off + len(chunk)
+                raw = fh.read()
+                offsets[path] = off + len(raw)
+            chunk = raw.decode("utf-8", "replace")
             for line in chunk.splitlines():
                 try:
                     r = json.loads(line)
