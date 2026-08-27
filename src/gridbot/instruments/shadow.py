@@ -43,27 +43,53 @@ class Follow:
         self._stuck = 0  # consecutive empty polls while a partial is held
         self._open_latest(seek_end=not from_start)
 
-    def _latest(self) -> Path | None:
+    def _files(self) -> list[Path]:
         # Date-named files only — a stray sibling (prefix-backup.jsonl)
         # sorts after every date lexicographically and would latch the
         # tail forever (code-review f13).
-        files = sorted(
+        return sorted(
             f for f in self.directory.glob(f"{self.prefix}-*.jsonl")
             if re.fullmatch(rf"{re.escape(self.prefix)}-\d{{8}}\.jsonl", f.name)
         )
+
+    def _latest(self) -> Path | None:
+        files = self._files()
         return files[-1] if files else None
 
-    def _open_latest(self, seek_end: bool) -> None:
-        latest = self._latest()
-        if latest is None or latest == self.path:
-            return
+    def _next_after(self, current: Path) -> Path | None:
+        """Next day file strictly after ``current``. Matched by NAME so the
+        semantics survive the current file vanishing from the listing —
+        falling back to ``files[-1]`` here would silently reintroduce the
+        skipped-day defect (F6) if a retention job ever unlinks day files."""
+        for f in self._files():
+            if f.name > current.name:
+                return f
+        return None
+
+    def _open(self, path: Path | None, seek_end: bool) -> bool:
+        if path is None or path == self.path:
+            return False
         if self.fh:
             self.fh.close()
-        self.path = latest
+        self.path = path
         self._partial = ""  # never splice fragments across day files
-        self.fh = open(latest)  # noqa: SIM115 — long-lived tail handle
+        self.fh = open(path)  # noqa: SIM115 — long-lived tail handle
         if seek_end:
             self.fh.seek(0, 2)
+        return True
+
+    def _open_latest(self, seek_end: bool) -> bool:
+        # Pick a starting point only: newest file on first open, else the next
+        # file after the current one (recovers a closed/replaced handle).
+        # Steady-state rollover is not done here — lines() crosses exhausted
+        # day files EAGERLY (read-through) so no poll is spent idling.
+        target = self._latest() if self.path is None else self._next_after(self.path)
+        return self._open(target, seek_end=seek_end)
+
+    def _open_next(self) -> bool:
+        if self.path is None:
+            return False
+        return self._open(self._next_after(self.path), seek_end=False)
 
     def lines(self, max_lines: int = 1000) -> list[dict]:
         if self.fh is None:
@@ -74,7 +100,15 @@ class Follow:
         for _ in range(max_lines):
             line = self.fh.readline()
             if not line:
-                break
+                # Current file at EOF. Cross into the next day file within
+                # this same call when one exists (read-through): rolling only
+                # on a later idle poll costs an empty poll per boundary and,
+                # worse, lets two consecutive idle cycles terminate --replay
+                # while an EMPTY intermediate day file still sits between us
+                # and the newest day — its neighbours were then never read.
+                if self._partial or not self._open_next():
+                    break
+                continue
             if not line.endswith("\n"):
                 # Torn read: the writer is mid-append (reproduced: ~61/20k
                 # records lost without this). Carry the fragment and finish
@@ -90,7 +124,7 @@ class Follow:
         if not out:
             if not self._partial:
                 self._stuck = 0
-                self._open_latest(seek_end=False)  # day rollover, if any
+                self._open_latest(seek_end=False)  # catch up, if any
             else:
                 # A final line torn forever (writer killed mid-append at day
                 # end) must not block rollover eternally (code-review f13):

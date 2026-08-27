@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import statistics
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -37,11 +37,30 @@ def rows(path: Path) -> list[dict]:
     return out
 
 
+def rows_both_days(directory: Path, stem: str, day: str) -> list[dict]:
+    """Day plus day-1 rows, oldest first (day files partition at UTC midnight)."""
+    cur = date.fromisoformat(f"{day[:4]}-{day[4:6]}-{day[6:8]}")
+    prev = f"{cur - timedelta(days=1):%Y%m%d}"
+    out = []
+    for d in (prev, day):
+        out.extend(rows(directory / f"{stem}-{d}.jsonl"))
+    return out
+
+
 def main() -> None:
-    day = sys.argv[1] if len(sys.argv) > 1 else f"{datetime.now(UTC):%Y%m%d}"
-    intents = rows(DATA / "executor" / f"intents-{day}.jsonl")
-    mapentry = rows(DATA / "shadow" / f"mapentry-{day}.jsonl")
-    postquote = rows(DATA / "shadow" / f"postquote-{day}.jsonl")
+    explicit = len(sys.argv) > 1
+    day = sys.argv[1] if explicit else f"{datetime.now(UTC):%Y%m%d}"
+    # Cross-midnight sessions split rows across day files (mapentry row
+    # pre-midnight, its intent post-midnight), so an unattended no-arg run
+    # must join across the boundary; an explicit day stays single-file.
+    if explicit:
+        intents = rows(DATA / "executor" / f"intents-{day}.jsonl")
+        mapentry = rows(DATA / "shadow" / f"mapentry-{day}.jsonl")
+        postquote = rows(DATA / "shadow" / f"postquote-{day}.jsonl")
+    else:
+        intents = rows_both_days(DATA / "executor", "intents", day)
+        mapentry = rows_both_days(DATA / "shadow", "mapentry", day)
+        postquote = rows_both_days(DATA / "shadow", "postquote", day)
 
     me_by_key: dict[tuple, dict] = {}
     for r in mapentry:
@@ -77,7 +96,7 @@ def main() -> None:
               f"min {min(sig_lat):.0f} | median {statistics.median(sig_lat):.0f} | "
               f"max {max(sig_lat):.0f}")
     if ages:
-        print(f"quote lifetime s (n={len(ages)}): all {sorted(set(round(a) for a in ages))}")
+        print(f"quote lifetime s (n={len(ages)}): all {sorted({round(a) for a in ages})}")
 
     # postquote drift, split by side, oriented (+ = book moved in our favor)
     moves: dict[tuple[str, int], list[float]] = {}
@@ -89,7 +108,7 @@ def main() -> None:
             moves.setdefault((str(side), int(off)), []).append(float(m))
     if moves:
         print("\npost-quote oriented drift (mean, + = toward our position):")
-        for (side, off) in sorted(moves):
+        for side, off in sorted(moves):
             vals = moves[(side, off)]
             print(f"  {side:>5} +{off:>3}s: {statistics.mean(vals):+.4f} (n={len(vals)})")
 

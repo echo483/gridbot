@@ -10,10 +10,16 @@ import json
 import shutil
 import subprocess
 from collections import Counter
-from datetime import UTC, datetime
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from gridbot import config
+
+# The digest runs 05:00Z — hours past UTC midnight — for the prior PT
+# evening, so a single today-file read reports only the post-midnight tail
+# and silently drops the 17:00-24:00 PT trading window.
+WINDOW_HOURS = 24
 
 
 def _service_state() -> str:
@@ -24,10 +30,6 @@ def _service_state() -> str:
         check=False,
     )
     return r.stdout.strip() or "unknown"
-
-
-def _day_stem(directory: Path, stem: str) -> Path:
-    return directory / f"{stem}-{datetime.now(UTC).strftime('%Y%m%d')}.jsonl"
 
 
 def _iter_jsonl(path: Path):
@@ -41,14 +43,36 @@ def _iter_jsonl(path: Path):
                 continue
 
 
+def _window_rows(directory: Path, stem: str) -> Iterator[dict]:
+    """Yield rows from the last 24h, reading every day file the window spans.
+
+    UTC-midnight day partitioning means one window can cross two files; file
+    selection is by date (cheap) and each row is then filtered by ts_ns.
+    """
+    now = datetime.now(UTC)
+    since = now - timedelta(hours=WINDOW_HOURS)
+    lo = since.strftime("%Y%m%d")
+    for path in sorted(directory.glob(f"{stem}-*.jsonl")):
+        day = path.stem.split("-")[-1]
+        if len(day) != 8 or not day.isdigit() or day < lo:
+            continue
+        for row in _iter_jsonl(path):
+            ts = row.get("ts_ns") if isinstance(row, dict) else None
+            # Float-tolerant: a float ts_ns still filters fine, and dropping
+            # untimestamped rows would silently under-count vs the old
+            # single-file read.
+            if isinstance(ts, (int, float)) and not isinstance(ts, bool) \
+                    and since < datetime.fromtimestamp(ts / 1e9, tz=UTC) <= now:
+                yield row
+
+
 def _grid_stats() -> list[str]:
-    path = _day_stem(config.DATA_DIR / "grid", "series_state")
     polls = 0
     errors = 0
     stale = 0
     series_by_title: dict[str, set] = {}
     live_seen: set[str] = set()
-    for row in _iter_jsonl(path):
+    for row in _window_rows(config.DATA_DIR / "grid", "series_state"):
         kind = row.get("type")
         if kind == "ss":
             polls += 1
@@ -68,16 +92,15 @@ def _grid_stats() -> list[str]:
 
 
 def _pm_stats() -> list[str]:
-    books = _day_stem(config.DATA_DIR / "pm", "books")
     n_ws = n_snap = 0
-    for row in _iter_jsonl(books):
+    for row in _window_rows(config.DATA_DIR / "pm", "books"):
         t = row.get("type")
         if t == "ws":
             n_ws += 1
         elif t in ("rest_books", "rest_book"):
             n_snap += 1
     active = Counter()
-    for row in _iter_jsonl(_day_stem(config.DATA_DIR / "pm", "catalog")):
+    for row in _window_rows(config.DATA_DIR / "pm", "catalog"):
         v = float(row.get("volume24hr") or 0)
         if v > 0:
             active[row.get("question") or row.get("event_title") or "?"] = int(v)
@@ -89,7 +112,7 @@ def _pm_stats() -> list[str]:
 
 def _shadow_stats() -> list[str]:
     counts = Counter()
-    for row in _iter_jsonl(_day_stem(config.DATA_DIR / "shadow", "instances")):
+    for row in _window_rows(config.DATA_DIR / "shadow", "instances"):
         if row.get("type") == "instance":
             counts[row.get("hypothesis_id") or "?"] += 1
     lines = ["shadow today: " + (

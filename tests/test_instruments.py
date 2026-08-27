@@ -231,3 +231,57 @@ def test_follow_carries_torn_lines(tmp_path) -> None:
         fh.write('2}\n')
     assert follow.lines() == [{"b": 2}]  # fragment completed on a later poll
     follow.close()
+
+
+def test_follow_rollover_reads_through_without_an_empty_poll(tmp_path) -> None:
+    """Day-boundary F6 + audit review F1.
+
+    A reader suspended across a full UTC day finds day2 AND day3 already
+    written; draining must happen read-through — one poll crosses both files
+    (bounded by max_lines) instead of wasting an idle poll per boundary.
+    ShadowEngine.replay exits after two consecutive idle cycles, so an empty
+    intermediate day file followed by roll-on-idle terminated replay before
+    the newest day was ever reached.
+    """
+    from gridbot.instruments.shadow import Follow
+
+    (tmp_path / "series_state-20260826.jsonl").write_text('{"day": 1}\n')
+    follow = Follow(tmp_path, "series_state", from_start=True)
+    assert follow.lines() == [{"day": 1}]  # day1 drained
+    (tmp_path / "series_state-20260827.jsonl").write_text('{"day": 2}\n')
+    (tmp_path / "series_state-20260828.jsonl").write_text('{"day": 3}\n')
+    assert follow.lines() == [{"day": 2}, {"day": 3}]  # crosses both in one poll
+    follow.close()
+
+
+def test_follow_rollover_survives_empty_intermediate_day_file(tmp_path) -> None:
+    """Replay-break scenario from the adversarial review: daemon restarted at
+    00:00Z wrote nothing to day2 before day3 began — read-through must still
+    reach day3 with no idle polls to accumulate."""
+    from gridbot.instruments.shadow import Follow
+
+    (tmp_path / "series_state-20260826.jsonl").write_text('{"day": 1}\n')
+    follow = Follow(tmp_path, "series_state", from_start=True)
+    assert follow.lines() == [{"day": 1}]
+    (tmp_path / "series_state-20260827.jsonl").write_text("")  # empty day file
+    (tmp_path / "series_state-20260828.jsonl").write_text('{"day": 3}\n')
+    assert follow.lines() == [{"day": 3}]
+    follow.close()
+
+
+def test_follow_torn_tail_blocks_read_through_until_resolved(tmp_path) -> None:
+    """A held partial must finish in its own file before any later day file is
+    entered (day files are disjoint, so the fragment cannot belong there),
+    while a complete-but-unread tail still reads through immediately."""
+    from gridbot.instruments.shadow import Follow
+
+    day1 = tmp_path / "series_state-20260826.jsonl"
+    day1.write_text('{"day": 1}\n{"torn": ')
+    follow = Follow(tmp_path, "series_state", from_start=True)
+    assert follow.lines() == [{"day": 1}]  # torn tail carried, no read-through
+    (tmp_path / "series_state-20260827.jsonl").write_text('{"day": 2}\n')
+    assert follow.lines() == []  # partial still pending: stay on day1
+    with open(day1, "a") as fh:
+        fh.write('1}\n')
+    assert follow.lines() == [{"torn": 1}, {"day": 2}]  # finish day1, cross over
+    follow.close()

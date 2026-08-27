@@ -24,19 +24,50 @@ from gridbot.redaction import install_log_redaction  # noqa: E402
 install_log_redaction()  # this process reads trading keys (security review 08-26)
 
 
+def _union_placed(paths: list[Path]) -> list[dict]:
+    """Placed intents across files, oldest-first, deduped by order_id."""
+    seen: set[str] = set()
+    out: list[dict] = []
+    for path in paths:
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if r.get("type") != "order_intent" or r.get("status") != "placed":
+                continue
+            # Skip id-less rows: deduping them under str(None) would swallow
+            # every subsequent one.
+            oid = r.get("order_id")
+            if not oid:
+                continue
+            oid = str(oid)
+            if oid not in seen:
+                seen.add(oid)
+                out.append(r)
+    return out
+
+
 def main() -> None:
-    day = sys.argv[1] if len(sys.argv) > 1 else f"{datetime.now(UTC):%Y%m%d}"
-    ledger_path = config.DATA_DIR / "executor" / f"intents-{day}.jsonl"
-    if len(sys.argv) <= 1 and not ledger_path.exists():
-        # Just after UTC midnight today's file may not exist yet — fall back
-        # to the most recent day so unattended runs still report truth.
-        latest = sorted((config.DATA_DIR / "executor").glob("intents-*.jsonl"))
-        if latest:
-            ledger_path = latest[-1]
-            day = ledger_path.stem.split("-")[-1]
-    rows = [json.loads(l) for l in ledger_path.read_text().splitlines() if l.strip()]
-    placed = [r for r in rows if r.get("type") == "order_intent" and r.get("status") == "placed"]
-    print(f"ledger {day}: {len(placed)} placed orders")
+    explicit = len(sys.argv) > 1
+    day = sys.argv[1] if explicit else f"{datetime.now(UTC):%Y%m%d}"
+    ledger_dir = config.DATA_DIR / "executor"
+    if explicit:
+        rows = [json.loads(l) for l in (ledger_dir / f"intents-{day}.jsonl").read_text().splitlines() if l.strip()]
+        placed = [r for r in rows if r.get("type") == "order_intent" and r.get("status") == "placed"]
+        src = day
+    else:
+        # A session spanning UTC midnight writes post-midnight rows to
+        # today's file — whose mere existence used to exclude every order
+        # placed BEFORE midnight (yesterday's file) from this pull. Union
+        # the last two day files instead; an explicit day stays single-file.
+        paths = sorted(ledger_dir.glob("intents-*.jsonl"))[-2:]
+        placed = _union_placed(paths)
+        src = (" + ".join(p.stem.removeprefix("intents-") for p in paths)
+               or day)
+    print(f"ledger {src}: {len(placed)} placed orders")
 
     from polymarket_us import PolymarketUS
 

@@ -45,16 +45,26 @@ def _gamma(path: str, params: dict | None = None):
     return r.json()
 
 
-def today_mappings(day: str) -> list[dict]:
-    """Deduped GRID series with PMUS markets from today's mapping snapshot."""
-    path = config.DATA_DIR / "pmus" / f"mappings-{day}.jsonl"
+def today_mappings() -> list[dict]:
+    """Deduped GRID series with PMUS markets across the last TWO mapping days.
+
+    Two files, not one, oldest-first so the later snapshot wins: the venue
+    drops in-play events from discovery, so after 00:00Z a series matched
+    before midnight never reappears in the new day's snapshot — reading only
+    today's file left the sampler blind to the overnight slate.
+    """
+    files = sorted((config.DATA_DIR / "pmus").glob("mappings-*.jsonl"))[-2:]
     out: dict[str, dict] = {}
-    if not path.exists():
-        return []
-    for line in path.open():
-        m = json.loads(line)
-        if m.get("us_markets") and m.get("grid_teams"):
-            out[str(m["grid_series_id"])] = m
+    for path in files:
+        for line in path.open():
+            try:
+                m = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if m.get("us_markets") and m.get("grid_teams"):
+                # .get like load_latest_mappings: a malformed row must not
+                # kill the sampler mid-write.
+                out[str(m.get("grid_series_id"))] = m  # later snapshot wins
     return list(out.values())
 
 
@@ -142,7 +152,7 @@ def sample(day: str) -> int:
     path = out_dir / f"reference-{day}.jsonl"
     n = 0
     with path.open("a") as fh:
-        for m in today_mappings(day):
+        for m in today_mappings():
             teams = m["grid_teams"]
             ev = find_intl_event(teams, m.get("grid_start"))
             row = {
