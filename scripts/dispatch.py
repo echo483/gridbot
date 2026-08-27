@@ -102,7 +102,7 @@ def _run(kind: str, prompt: str, timeout: int) -> tuple[int, str]:
 
 
 def pair(spec_file: str, artifacts: list[str], timeout: int,
-         reviewer: str = "review") -> int:
+         reviewer: str = "review", builder: str = "programming") -> int:
     """A2A development relay (user directive 08-26): glm-5.3-flash BUILDS,
     the reviewer lane REVIEWS the actual artifacts, the builder REVISES
     from the review. Claude verifies before anything lands — the relay
@@ -120,7 +120,7 @@ def pair(spec_file: str, artifacts: list[str], timeout: int,
     an account-side subagent) should go there instead of paid API."""
     spec = Path(spec_file).read_text()
 
-    rc, _ = _run("programming", spec, timeout)
+    rc, _ = _run(builder, spec, timeout)
     missing = [a for a in artifacts if not Path(a).exists()]
     if missing:
         print(f"pair: builder did not produce {missing}; aborting", file=sys.stderr)
@@ -152,7 +152,7 @@ def pair(spec_file: str, artifacts: list[str], timeout: int,
         "paths. If you reject a finding, say why in a code comment.\n\nSPEC:\n"
         + spec + "\n\nCURRENT FILES:\n" + bundle + "\n\nREVIEW FINDINGS:\n" + review
     )
-    _run("programming", revise_prompt, timeout)
+    _run(builder, revise_prompt, timeout)
     print("=== REVIEW TRAIL ===")
     print(review)
     print("pair: relay complete — verify artifacts + run tests before landing",
@@ -168,6 +168,10 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--artifact", action="append", default=[],
                     help="pair mode: expected artifact path (repeatable)")
+    ap.add_argument("--builder", choices=["programming", "programming2"],
+                    default="programming",
+                    help="pair mode builder lane: programming=glm-flash, "
+                         "programming2=deepseek-0731 (alternate-builder rotation)")
     ap.add_argument("--reviewer", choices=["review", "review2"],
                     default="review",
                     help="pair mode reviewer lane: review=opus xhigh "
@@ -178,7 +182,7 @@ def main() -> int:
         if not args.artifact:
             ap.error("pair mode needs at least one --artifact")
         return pair(args.prompt_file, args.artifact, args.timeout,
-                    args.reviewer)
+                    args.reviewer, args.builder)
 
     rc, out = _run(args.kind, Path(args.prompt_file).read_text(), args.timeout)
     if args.out:
