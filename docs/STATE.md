@@ -230,6 +230,24 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
    change needed: join mapentry rows to instance rows on
    (src_hypothesis_id, series_id, map_number, round_number, dedup_extra);
    clock_seconds lives on the instance row.
+11b. Queue 13+14 spec (docs/superpowers/specs/2026-08-27-entry-gate-loosening.md,
+   drafted by the hermes gateway agent from user directives night 2, owner
+   Claude): 13 = fill-acceptance widening — user observation elevated to
+   primary: quote distance must consider the ACTIVE book, not just frozen
+   fair (candidate: inside-spread quote at same fair−4 edge floor); backtest
+   would-fill (a) vs (b) on tonight's rows BEFORE any PR. 14 = smart exits
+   (user 08-27: "exit when the bid is at an acceptable place considering the
+   trade" — night-2's winner was closed MANUALLY at 0.99, +$3.99); design
+   sketch in spec; explicitly "comes later"; pre-register exit cells first.
+11c. MANUAL-CLOSE RECONCILIATION (found live night 2): the user sold the
+   filled shim-elu position by hand at 0.99; the ledger (fill, no settle)
+   keeps counting it as open exposure → one of max_open=2 slots consumed
+   for the rest of the session (4 in-band entries skipped:capacity while it
+   + resting orders held slots). Venue truth: flat. Fix candidate: fills.sync
+   consults venue positions (position=0 on a filled key with no resolution →
+   write a manual-exit release row with realized PnL from activities). Also:
+   night_alerts heartbeat printed "18 placed" when ledger had 4 — count bug,
+   cosmetic, fix with 11c.
 12. Knowledge-graph lane (user-led, queued 08-26 eve, task #29): the user
    wants to learn KG engineering and co-develop a gridbot knowledge graph.
    They research first; do NOT start building until they kick it off.
