@@ -239,15 +239,27 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
    (user 08-27: "exit when the bid is at an acceptable place considering the
    trade" — night-2's winner was closed MANUALLY at 0.99, +$3.99); design
    sketch in spec; explicitly "comes later"; pre-register exit cells first.
-11c. MANUAL-CLOSE RECONCILIATION (found live night 2): the user sold the
-   filled shim-elu position by hand at 0.99; the ledger (fill, no settle)
-   keeps counting it as open exposure → one of max_open=2 slots consumed
-   for the rest of the session (4 in-band entries skipped:capacity while it
-   + resting orders held slots). Venue truth: flat. Fix candidate: fills.sync
-   consults venue positions (position=0 on a filled key with no resolution →
-   write a manual-exit release row with realized PnL from activities). Also:
-   night_alerts heartbeat printed "18 placed" when ledger had 4 — count bug,
-   cosmetic, fix with 11c.
+11c. MANUAL-CLOSE RECONCILIATION — SHIPPED 08-27 dev window (7694553) after
+   an opus review found 2 BLOCKERs + 5 MAJORs in the first cut (dict-shaped
+   positions payload, availablePositions, resolution-precedence, order-scoped
+   skip, newest-fill aging, revisable settle — all fixed). RESIDUAL RISK ON
+   RECORD: the only positions() capture was taken FLAT, so the held-position
+   field/shape is unverified — VALIDATION TASK: at the next armed fill,
+   pull client.portfolio.positions() read-only WHILE HOLDING, confirm the
+   shape, disable the pass if it mismatches. night_alerts count bug also
+   fixed (cumulative across nights + rollover alert-loss, dedup v3).
+11d. DEV-WINDOW 08-27 RESULTS (all committed): Queue 13 backtest first
+   numbers (n=37 evals: rule a 20% fill/-0.20 edge-per-fill; inside-spread b
+   37%/-0.13; edge-per-opportunity -0.040 vs -0.047 — ADVERSE-SELECTION
+   signature: would-filled quotes lose on average; numbers only, no rule
+   change licensed). Post-shock lag study (scripts/postshock_lag.py; 230
+   shocks/52 priced: DOWN shocks leave the book +15.1c ABOVE model, ~29s
+   median convergence, 44% converge — candidate SHORT-side mechanism;
+   UP shocks +3.2c — book nearly caught up). H-WAVE1 accumulation pass 1
+   (7 waves, bvm -14c, 2 priced both won). Rollover audit: 11 findings, all
+   MAJORs fixed (24h-window readers, Follow eager read-through 60131f5);
+   deferred MINORS: F8 analysis date-stamp one day ahead, F9 capture_qa
+   fingerprint flips at rollover, F11 corpus [-days:] slices files not days.
 12. Knowledge-graph lane (user-led, queued 08-26 eve, task #29): the user
    wants to learn KG engineering and co-develop a gridbot knowledge graph.
    They research first; do NOT start building until they kick it off.
