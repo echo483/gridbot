@@ -26,8 +26,10 @@ from scripts.mapentry2_score import (
     _winning_target,
     band_settled_edge,
     brier_score,
+    build_scoring_dataset,
     compute_candidate_p,
     compute_p_map,
+    cross_check_oracle,
     ece_score,
     is_valid_terminal,
     load_data,
@@ -67,6 +69,26 @@ def _row(
         "b": b,
         "q_round": q_round,
         "p_map": p_map,
+    }
+
+
+def _verdict(
+    series_id: str = "S1",
+    map_number: int = 1,
+    winner: str = "Alpha",
+    loser: str = "Bravo",
+    winner_score: int = 13,
+    loser_score: int = 4,
+) -> dict:
+    """A grid_winners.py entry (one map verdict)."""
+    return {
+        "series_id": series_id,
+        "map_number": map_number,
+        "winner": winner,
+        "loser": loser,
+        "winner_score": winner_score,
+        "loser_score": loser_score,
+        "overtime": winner_score > 13,
     }
 
 
@@ -385,12 +407,15 @@ class TestScoringPipeline:
                                   a=r, b=0, q_round=0.65, p_map=0.65))
             rows.append(_row("S1", map_number=i + 1, round_number=13,
                               a=13, b=0, team="Alpha", opponent="Bravo"))
-        result = run_scoring_pipeline(rows)
+        winners = {f"S1:{i + 1}": _verdict(map_number=i + 1) for i in range(10)}
+        result = run_scoring_pipeline(rows, winners)
         assert result["verdict"] == "insufficient_n"
         assert result["n_maps"] < 60
 
     def test_impossible_score_excluded(self):
-        """Maps with impossible scores are excluded."""
+        """Maps with impossible terminal scores never appear in the grid
+        winners feed (grid_winners.py MR12 validation filters them out), so
+        the scorer excludes them as no_grid_verdict rather than guessing."""
         rows = []
         # 10 regulation maps
         for i in range(10):
@@ -399,15 +424,16 @@ class TestScoringPipeline:
                                   a=r, b=0, q_round=0.65, p_map=0.65))
             rows.append(_row("S1", map_number=i + 1, round_number=13,
                               a=13, b=0, team="Alpha", opponent="Bravo"))
-        # 1 impossible-score map (13-12)
+        winners = {f"S1:{i + 1}": _verdict(map_number=i + 1) for i in range(10)}
+        # 1 impossible-score map (13-12): no valid grid verdict will exist.
         rows.append(_row("S2", map_number=99, round_number=1, a=0, b=0))
         rows.append(_row("S2", map_number=99, round_number=25, a=13, b=12))
         rows.append(_row("S2", map_number=99, round_number=25,
                           team="Bravo", opponent="Alpha", a=12, b=13))
-        result = run_scoring_pipeline(rows)
+        result = run_scoring_pipeline(rows, winners)
         assert result["n_excluded"] >= 1
         excluded_reasons = [e["reason"] for e in result["excluded_maps"]]
-        assert any("impossible" in r for r in excluded_reasons)
+        assert any(r == "no_grid_verdict" for r in excluded_reasons)
 
     def test_ot_counts_as_resolved(self):
         """OT map counts toward n_maps (AMEND2)."""
@@ -421,7 +447,8 @@ class TestScoringPipeline:
         rows.append(_row("S1", map_number=1, round_number=25,
                           team="Bravo", opponent="Alpha", a=14, b=16))
 
-        result = run_scoring_pipeline(rows)
+        winners = {"S1:1": _verdict(winner_score=16, loser_score=14)}
+        result = run_scoring_pipeline(rows, winners)
         assert result["n_maps"] == 1  # OT map counts
         assert result["n_excluded"] == 0
 
@@ -432,7 +459,8 @@ class TestScoringPipeline:
             rows.append(_row("S1", 1, r, a=0, b=r, q_round=0.4, p_map=0.35))
         rows.append(_row("S1", 1, 13, team="Bravo", opponent="Alpha", a=13, b=0))
         rows.append(_row("S1", 1, 13, team="Alpha", opponent="Bravo", a=0, b=13))
-        result = run_scoring_pipeline(rows)
+        winners = {"S1:1": _verdict(winner="Bravo", loser="Alpha")}
+        result = run_scoring_pipeline(rows, winners)
         # Bravo won, Alpha lost
         assert result["per_candidate"]["A"]["n"] >= 1
 
@@ -462,7 +490,7 @@ class TestScoringPipeline:
 class TestEdgeCases:
     def test_no_data(self):
         """Empty row list → insufficient_n."""
-        result = run_scoring_pipeline([])
+        result = run_scoring_pipeline([], {})
         assert result["verdict"] == "insufficient_n"
         assert result["n_maps"] == 0
 
@@ -497,7 +525,13 @@ class TestEdgeCases:
             rows.append(_row("S1" if i < 60 else "S2",
                               map_number=i + 1, round_number=13,
                               a=13, b=0, team="Alpha", opponent="Bravo"))
-        result = run_scoring_pipeline(rows)
+        winners = {
+            f"{'S1' if i < 60 else 'S2'}:{i + 1}": _verdict(
+                series_id="S1" if i < 60 else "S2", map_number=i + 1,
+            )
+            for i in range(65)
+        }
+        result = run_scoring_pipeline(rows, winners)
         assert result["n_maps"] >= 60
         for c in ["A", "B0", "B10", "B20"]:
             assert c in result["per_candidate"]
@@ -506,8 +540,94 @@ class TestEdgeCases:
     def test_band_arm_consistency(self):
         """Band arms exist only when n >= 60."""
         # Few maps -> no band
-        result_small = run_scoring_pipeline([_row("S1", 1, 1, a=0, b=0)])
+        result_small = run_scoring_pipeline(
+            [_row("S1", 1, 1, a=0, b=0)], {"S1:1": _verdict()},
+        )
         assert "band_arms" not in result_small or result_small["band_arms"] == {}
+
+
+# ============================================================
+# grid_winners verdict feed (scoring oracle)
+# ============================================================
+
+class TestGridVerdictScoring:
+    def test_missing_map_no_grid_verdict(self):
+        """A map absent from the winners feed is excluded, never guessed."""
+        rows = [
+            _row("S1", 1, 1, a=0, b=0, q_round=0.6, p_map=0.55),
+            _row("S1", 1, 13, a=13, b=0),
+        ]
+        ds = build_scoring_dataset(rows, "A", {})
+        assert ds["n_maps"] == 0
+        assert ds["n_excluded"] == 1
+        exc = ds["excluded_details"]
+        assert exc[0]["series_id"] == "S1"
+        assert exc[0]["map_number"] == 1
+        assert exc[0]["reason"] == "no_grid_verdict"
+
+    def test_outcome_matches_winner_and_loser(self):
+        """Winner team-side scores 1.0; loser team-side scores 0.0."""
+        rows = [
+            _row("S1", 1, 3, team="Alpha", opponent="Bravo", a=5, b=3,
+                 q_round=0.6, p_map=0.7),
+            _row("S1", 1, 3, team="Bravo", opponent="Alpha", a=3, b=5,
+                 q_round=0.4, p_map=0.3),
+        ]
+        winners = {"S1:1": _verdict(winner="Alpha", loser="Bravo")}
+        ds = build_scoring_dataset(rows, "A", winners)
+        assert ds["n_maps"] == 1
+        assert ds["n_excluded"] == 0
+        pairs = ds["series_to_records"]["S1"]
+        assert len(pairs) == 2
+        by_outcome = {prob: out for prob, out in pairs}
+        assert by_outcome[0.7] == 1.0  # Alpha (winner) at p=0.7
+        assert by_outcome[0.3] == 0.0  # Bravo (loser) at p=0.3
+
+    def test_team_not_in_verdict_skipped(self):
+        """A team-side in neither winner nor loser sack is skipped, not guessed."""
+        rows = [
+            _row("S1", 1, 3, team="Alpha", opponent="Bravo", a=5, b=3,
+                 q_round=0.6, p_map=0.7),
+            _row("S1", 1, 3, team="Charlie", opponent="Delta", a=4, b=4,
+                 q_round=0.5, p_map=0.5),
+        ]
+        winners = {"S1:1": _verdict(winner="Alpha", loser="Bravo")}
+        ds = build_scoring_dataset(rows, "A", winners)
+        # Alpha side resolved; Charlie side skipped — and the skip lives in
+        # the SEPARATE side-level list (review MAJOR#2), never inflating the
+        # map-level exclusion count.
+        assert ds["n_maps"] == 1
+        assert ds["n_excluded"] == 0
+        recs = ds["series_to_records"]
+        assert len(recs["S1"]) == 1
+        assert recs["S1"][0] == (0.7, 1.0)
+        skipped = ds["skipped_team_sides"]
+        assert len(skipped) == 1
+        assert skipped[0]["reason"] == "team_not_in_verdict"
+        assert skipped[0]["team"] == "Charlie"
+
+    def test_oracle_disagreement_grid_authoritative(self):
+        """When the internal oracle contradicts the grid verdict, the
+        disagreement is reported and the grid verdict still decides."""
+        rows = []
+        for r in range(1, 13):
+            rows.append(_row("S1", 1, r, team="Alpha", opponent="Bravo",
+                             a=r, b=0, q_round=0.65, p_map=0.65))
+        # Internal oracle reads this terminal row as Alpha winning 13-0.
+        rows.append(_row("S1", 1, 13, team="Alpha", opponent="Bravo", a=13, b=0))
+        # But the grid verdict says Bravo won.
+        winners = {"S1:1": _verdict(winner="Bravo", loser="Alpha")}
+
+        result = run_scoring_pipeline(rows, winners)
+        assert result["oracle_disagreements"]["count"] == 1
+        assert result["oracle_disagreements"]["maps"] == ["S1:1"]
+
+        # Grid verdict is authoritative: the Alpha side must score 0.0.
+        ds = build_scoring_dataset(rows, "A", winners)
+        assert ds["n_maps"] == 1
+        assert ds["n_excluded"] == 0
+        recs = ds["series_to_records"]
+        assert recs["S1"] and all(out == 0.0 for _, out in recs["S1"])
 
 
 # ============================================================

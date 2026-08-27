@@ -5,12 +5,28 @@ mapentry2_score.py — Retrospective scorer for H-MAPENTRY2 candidate aggregatio
 Evaluates candidates A (v1) and B{0.0,0.10,0.20} against the frozen hypothesis
 spec, producing verdict JSON to stdout.  Stdlib only.
 
+Map winners come from the captured GRID stream: scripts/grid_winners.py emits
+the first-observation verdict file (--out); its "winners" sub-dict is fed to
+this scorer via the REQUIRED --winners PATH argument (keys are
+"<series_id>:<map_number>").  Maps without a grid verdict are excluded with
+reason "no_grid_verdict" — winners are never guessed from mapentry score
+columns.  The legacy row-score oracle (resolve_map_oracle) is DEMOTED to a
+post-hoc cross-check: disagreements with the grid feed are reported under
+"oracle_disagreements" but never change a verdict; the grid feed alone is
+authoritative.  Reported map counts only include maps that produced at least
+one scored observation — see the STATUS UPDATE note below for the exact
+counting semantics.
+
 Usage:
-    uv run python scripts/mapentry2_score.py data/shadow/mapentry-20260826.jsonl
+    uv run python scripts/grid_winners.py <capture.jsonl> [...] \
+        --out data/shadow/grid-winners-20260826.json
+    uv run python scripts/mapentry2_score.py data/shadow/mapentry-20260826.jsonl \
+        --winners data/shadow/grid-winners-20260826.json
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import random
@@ -33,22 +49,34 @@ CANDIDATE_LAMBDAS: dict[str, float] = {
 BOOTSTRAP_ITER = 2000
 BOOTSTRAP_SEED = 26
 
+# ── STATUS UPDATE (2026-08-26) ─────────────────────────────────────────────
+# The grid_winners feed (scripts/grid_winners.py --out, a first-observation
+# oracle over series_state day files) is now wired and MANDATORY: scoring
+# resolves every map winner from it via the required --winners PATH argument.
+# resolve_map_oracle (rows-score-derived, previously used as the scoring
+# oracle) is DEMOTED to a cross-check — its "final" scores stop at the last
+# qualifying CROSSING and read impossible on real capture; it must never
+# decide a verdict.  Disagreements with the grid feed are reported under
+# "oracle_disagreements" for auditing only (n_cross_checked reports how many
+# maps were actually comparable there — 0 means "nothing to compare", not
+# agreement).
+#
+# Counting semantics (post adversarial review):
+#   * n_maps counts only maps that yielded at least one scored observation
+#     on the shared candidate set, so the n >= 60 pre-registration gate can
+#     never be satisfied by maps contributing zero observations, and
+#     n_resolved == n_maps by construction.
+#   * Map-level exclusions (no_grid_verdict / malformed_verdict /
+#     null_loser / no_scoring_row) and side-level skips
+#     (team_not_in_verdict) are reported in SEPARATE lists so a stray
+#     team-side can never distort map-level counters.
+#   * A malformed or partial winners entry is diagnosed into its own
+#     exclusion reason instead of raising a bare KeyError mid-scoring.
+
 # ── Race-13 DP ─────────────────────────────────────────────────────────────
 
 _dp_cache: dict[int, list[list[float]]] = {}
 
-
-# ── DRAFT STATUS (2026-08-26, Claude review of DeepSeek v4 flash output) ───
-# Authored by deepseek/deepseek-v4-flash via Hermes from the frozen
-# H-MAPENTRY2(+AMEND1/2) registry text; 50 tests pass; DP/ECE/bootstrap
-# machinery reviewed and sound. KNOWN DEFECT (from the dispatch prompt,
-# not the model): resolve_map_oracle derives "final" scores from mapentry
-# rows, which stop at the last qualifying CROSSING — on real capture all
-# 69 maps read as impossible_score. The registry requires winners from
-# the captured GRID stream (first-observation oracle over series_state
-# day files). Do NOT score verdicts with this until the oracle is fed
-# from the GRID stream and candidate A is validated against the recorded
-# p_map per row (both queued, STATE 7).
 
 def _fmt_key(p: float) -> int:
     """Quantise p_fut to avoid cache explosion from FP noise."""
@@ -93,7 +121,6 @@ def compute_p_map(a: int, b: int, q_round: float, p_fut: float) -> float | None:
     win = q_round * dp[a + 1][b] + (1.0 - q_round) * dp[a][b + 1]
     return win
 
-
 # ── Oracle ─────────────────────────────────────────────────────────────────
 
 def _winning_target(loser_score: int) -> int:
@@ -105,9 +132,9 @@ def _winning_target(loser_score: int) -> int:
     if loser_score < 12:
         return 13
     # OT period k starts at 12 + 3k:
-    #   l=12-14 → target 16  (period 1)
-    #   l=15-17 → target 19  (period 2)
-    #   l=18-20 → target 22  (period 3)  …
+    #   l=12-14 -> target 16  (period 1)
+    #   l=15-17 -> target 19  (period 2)
+    #   l=18-20 -> target 22  (period 3)  ...
     period = (loser_score - 12) // 3 + 1
     return 13 + 3 * period
 
@@ -126,6 +153,19 @@ def is_valid_terminal(high: int, low: int) -> bool:
     return high >= target
 
 
+def _safe_int(v: Any) -> int | None:
+    """Coerce integer field, returning None on missing/bad/null values."""
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (ValueError, TypeError):
+        return None
+    if math.isfinite(f):
+        return int(f)
+    return None
+
+
 def resolve_map_oracle(rows: list[dict]) -> dict[str, Any]:
     """From all rows for one (series_id, map_number), determine terminal score
     and winner, validating against impossible-score patterns.
@@ -141,10 +181,17 @@ def resolve_map_oracle(rows: list[dict]) -> dict[str, Any]:
         return {"valid": False, "reason": "no_rows"}
 
     # Use the row with the highest total rounds (most advanced state).
-    best_row = max(rows, key=lambda r: (r.get("a", 0) or 0) + (r.get("b", 0) or 0))
+    best_row = max(rows, key=lambda r: (_safe_int(r.get("a")) or -1) + (_safe_int(r.get("b")) or -1))
 
-    max_a = int(best_row.get("a", 0))
-    max_b = int(best_row.get("b", 0))
+    max_a = _safe_int(best_row.get("a"))
+    max_b = _safe_int(best_row.get("b"))
+    if max_a is None or max_b is None:
+        return {
+            "valid": False,
+            "max_a": max_a,
+            "max_b": max_b,
+            "reason": "bad_score_fields",
+        }
     high, low = (max_a, max_b) if max_a >= max_b else (max_b, max_a)
 
     if not is_valid_terminal(high, low):
@@ -157,7 +204,7 @@ def resolve_map_oracle(rows: list[dict]) -> dict[str, Any]:
 
     # Determine which team won.
     if max_a > max_b:
-        # The 'team' side in best_row has more rounds → wins
+        # The 'team' side in best_row has more rounds -> wins
         winner_name = str(best_row.get("team", ""))
         loser_name = str(best_row.get("opponent", ""))
         team_won = True
@@ -220,7 +267,7 @@ def compute_candidate_p(
 
     Candidate A: uses the recorded p_map directly (this is the actual v1 value
     that was computed at crossing time).  Candidates B{0,10,20}: race-to-13 DP
-    with p_fut(λ) = 0.5 + λ·((a+4)/(a+b+8) − 0.5).
+    with p_fut(lambda) = 0.5 + lam*((a+4)/(a+b+8) - 0.5).
     """
     if candidate == "A":
         # A's p_map must be provided externally (recorded value).
@@ -233,7 +280,6 @@ def compute_candidate_p(
     p_fut_base = (a + 4.0) / (a + b + 8.0) if (a + b) else 0.5
     p_fut = 0.5 + lam * (p_fut_base - 0.5)
     return compute_p_map(a, b, q_round, p_fut)
-
 
 # ── Metrics ────────────────────────────────────────────────────────────────
 
@@ -280,7 +326,7 @@ def _quintile_bins(
 def ece_score(probs: list[float], outcomes: list[float], n_bins: int = 5) -> float:
     """Quintile (5 equal-count bin) Expected Calibration Error.
 
-    AMEND1: quintile everywhere — the 0.08 absolute reference, dECE criterion,
+    AMEND1: quintile everywhere - the 0.08 absolute reference, dECE criterion,
     and reliability tables are all quintile.  (10-bin runs silently harden the
     bar and are NOT adopted.)
     """
@@ -355,13 +401,6 @@ def paired_bootstrap_delta(
         return (float("nan"), (float("nan"), float("nan")), [])
 
     rng = random.Random(seed)
-
-    series_list_a = [
-        (sid, series_to_records_a.get(sid, [])) for sid in series_ids
-    ]
-    series_list_b = [
-        (sid, series_to_records_b.get(sid, [])) for sid in series_ids
-    ]
 
     def _eval(
         idx_list: list[int],
@@ -448,24 +487,218 @@ def band_settled_edge(
     return {"n": n_total, "mean": round(mean_edge, 6), "ci": [round(ci_lo, 6), round(ci_hi, 6)]}
 
 
+
 # ── Main scoring pipeline ──────────────────────────────────────────────────
+
+def _validate_verdict_entry(entry: Any) -> str | None:
+    """Return a failure reason for a winners-file entry, or None if usable.
+
+    REVIEW MAJOR#5: main() validates only that "winners" is a dict; partial or
+    malformed entries used to crash later with a bare KeyError at
+    winners_entry["winner"] / ["loser"].  Diagnose them up front instead.
+    grid_winners.py can legitimately emit loser=None (loser.get("name") on a
+    missing name), so a present-but-null loser gets its own reason too — that
+    losing team-side must not be misreported as a stray third team.
+    """
+    if not isinstance(entry, dict):
+        return "malformed_verdict"
+    winner = entry.get("winner")
+    if not isinstance(winner, str) or not winner:
+        return "malformed_verdict"
+    loser = entry.get("loser")
+    if loser is None:
+        return "null_loser"
+    if not isinstance(loser, str) or not loser:
+        return "malformed_verdict"
+    return None
+
+
+def _resolve_rows(
+    rows: list[dict],
+    winners: dict[str, dict],
+) -> tuple[
+    dict[tuple[str, int], list[dict]],   # by_map
+    list[dict],                          # map_exclusions
+    int,                                 # n_candidates_total (verdict-bearing maps)
+    set[str],                            # keys blocked by malformed/null verdicts
+]:
+    """One grouping/validation pass shared by every candidate and the cross-check.
+
+    Returns the map-grouped rows, the MAP-level exclusion details, the number
+    of maps carrying a grid verdict, and keys whose verdict failed validation.
+    """
+    by_map: dict[tuple[str, int], list[dict]] = defaultdict(list)
+    for r in rows:
+        sid = str(r.get("series_id", ""))
+        mn = int(r.get("map_number", 0))
+        by_map[(sid, mn)].append(r)
+
+    excluded_details: list[dict] = []
+    blocked_keys: set[str] = set()
+    n_verdict_maps = 0
+
+    for (sid, mn), map_rows in by_map.items():
+        key = f"{sid}:{mn}"
+        winners_entry = winners.get(key)
+        if not winners_entry:
+            excluded_details.append({
+                "series_id": sid,
+                "map_number": mn,
+                "reason": "no_grid_verdict",
+                # Keep the dict shape used by the legacy oracle entries.
+                "max_a": None,
+                "max_b": None,
+            })
+            continue
+        reason = _validate_verdict_entry(winners_entry)
+        if reason is not None:
+            excluded_details.append({
+                "series_id": sid,
+                "map_number": mn,
+                "reason": reason,
+                "max_a": None,
+                "max_b": None,
+            })
+            blocked_keys.add(key)
+            continue
+        n_verdict_maps += 1
+
+    return by_map, excluded_details, n_verdict_maps, blocked_keys
+
+
+def _team_sides(by_map: dict[tuple[str, int], list[dict]]) -> dict[tuple[str, int, str], list[dict]]:
+    """Split each map's rows into per-team-side groups."""
+    sides: dict[tuple[str, int, str], list[dict]] = defaultdict(list)
+    for (sid, mn), map_rows in by_map.items():
+        for r in map_rows:
+            sides[(sid, mn, str(r.get("team", "")))].append(r)
+    return sides
+
+
+def _side_probabilities(a: int, b: int, q_round: float, p_map_rec: float | None) -> bool:
+    """True iff BOTH candidate families can score this observation.
+
+    REVIEW MAJOR#4: A uses the recorded p_map while B recomputes from
+    (a, b, q_round); without a shared eligibility test the two families could
+    be scored on different observation sets, silently breaking the paired
+    bootstrap's pairing.  Require a finite recorded p_map AND a computable B0
+    probability up front, so all candidates see exactly the same sides.
+    """
+    if p_map_rec is None:
+        return False
+    return compute_candidate_p(a, b, q_round, "B0") is not None
+
+
+def resolve_map_and_side_level(
+    rows: list[dict],
+    winners: dict[str, dict],
+) -> dict[str, Any]:
+    """Single resolution pass: outcome assignment + shared probability extraction.
+
+    Runs once over the capture rows (REVIEW MINOR#6: previously this work was
+    repeated five times, once per candidate plus a redundant re-derivation of
+    the counters, letting counter drift creep in).  Produces per-side records
+    {prob_A, prob_B} plus level-tagged exclusion/skip lists that the pipeline
+    aggregates.
+    """
+    by_map, map_excl, n_verdict_maps, blocked_keys = _resolve_rows(rows, winners)
+    sides = _team_sides(by_map)
+
+    skipped_team_sides: list[dict] = []
+    per_side: dict[tuple[str, int, str], dict[str, float]] = {}
+
+    for (sid, mn, team_name), team_rows in sides.items():
+        key = f"{sid}:{mn}"
+        if key in blocked_keys:
+            continue  # already reported as a map-level exclusion
+        if not winners.get(key):
+            continue  # no verdict -> map-level no_grid_verdict already recorded
+        winners_entry = winners[key]
+
+        # Outcome strictly from the grid verdict (authoritative).
+        # REVIEW MAJOR#5: guarded access instead of winners_entry["winner"].
+        wname = winners_entry.get("winner")
+        lname = winners_entry.get("loser")
+        if team_name == wname:
+            outcome = 1.0
+        elif team_name == lname:
+            outcome = 0.0
+        else:
+            # This team-side is neither the winner nor the loser per the
+            # grid stream — never guess a side for it.  Side-level skip,
+            # reported separately from map-level exclusions (MAJOR#2).
+            skipped_team_sides.append({
+                "series_id": sid,
+                "map_number": mn,
+                "reason": "team_not_in_verdict",
+                "team": team_name,
+            })
+            continue
+
+        # Find the LAST pre-terminal row for this team.
+        # Pre-terminal: max(a,b) < 13, not (12,12); i.e., the game hasn't yet
+        # reached a regulation terminal state.  REVIEW MINOR#8: coerce a/b
+        # through _safe_int — r.get("a", 0) does NOT cover an explicit null
+        # (build_row emits "a": None), which raised TypeError before.
+        pre_term = []
+        for r in team_rows:
+            av = _safe_int(r.get("a"))
+            bv = _safe_int(r.get("b"))
+            if av is None or bv is None:
+                continue
+            if av >= 13 or bv >= 13:
+                continue
+            if av == 12 and bv == 12:
+                continue
+            pre_term.append((r, av, bv))
+        if not pre_term:
+            continue
+
+        last_row, a, b = max(pre_term, key=lambda t: t[0].get("round_number", 0) or 0)
+
+        q_round_s = _safe_float(last_row.get("q_round"))
+        if q_round_s is None:
+            continue
+        p_map_rec = _safe_float(last_row.get("p_map"))
+
+        if not _side_probabilities(a, b, q_round_s, p_map_rec):
+            continue  # not scorable for the full shared candidate set
+
+        assert p_map_rec is not None
+        probs = {"A": p_map_rec}
+        for c in CANDIDATE_LAMBDAS:
+            pc = compute_candidate_p(a, b, q_round_s, c)
+            assert pc is not None  # guaranteed by _side_probabilities for B0 path
+            probs[c] = float(pc)
+        per_side[(sid, mn, team_name)] = {"outcome": outcome, **probs}
+
+    resolved_map_keys = sorted({f"{k[0]}:{k[1]}" for k in per_side})
+    return {
+        "per_side": per_side,
+        "resolved_map_keys": resolved_map_keys,
+        "n_resolved_maps": len(resolved_map_keys),
+        "n_verdict_maps": n_verdict_maps,
+        "excluded_details": map_excl,
+        "skipped_team_sides": skipped_team_sides,
+    }
+
 
 def build_scoring_dataset(
     rows: list[dict],
     candidate: str,
-) -> tuple[
-    dict[str, list[tuple[float, float]]],
-    int,
-    int,
-    list[dict],
-    list[dict],
-]:
+    winners: dict[str, dict],
+) -> dict[str, Any]:
     """Build series-clustered (prob, outcome) records for one candidate.
 
-    Returns (series_to_records, n_maps, n_excluded, excluded_details, unresolved_maps).
+    Returns {"series_to_records": ..., "n_maps": ..., "n_excluded": ...,
+             "excluded_details": [...], "skipped_team_sides": [...]}.
+
+    `winners` is the "winners" sub-dict of a grid_winners.py --out file,
+    keyed by "<series_id>:<map_number>".  It is the authoritative source of
+    map winners; scoring never derives a winner from mapentry score columns.
 
     Per map-side: uses the LAST pre-terminal row (highest round_number where
-    the game is still in progress — max(a,b) < 13 and not (12,12)).
+    the game is still in progress - max(a,b) < 13 and not (12,12)).
 
     # AMBIGUITY: The H-MAPENTRY2 spec defines candidate computations as
     # "q at first threshold crossing" (the q_round field), but does not
@@ -474,126 +707,88 @@ def build_scoring_dataset(
     # This means the scored probability may differ from the "first crossing"
     # p_map that determined the entry.  The impact is expected to be small
     # (p_map near the terminal boundary converges toward 0/1).
+
+    Counting (post-review semantics):
+      * n_maps counts maps that yielded at least one scored observation for
+        the SHARED candidate eligibility set — REVIEW MAJOR#3: counting on
+        verdict presence alone let maps whose every side was dropped by the
+        pre-terminal filter or null q_round/p_map satisfy the n >= 60 gate;
+        that is a pre-registered PASS declared off observations that do not
+        exist.  Consequently n_resolved == n_maps (REVIEW MAJOR#1: the old
+        `n_maps - n_excluded` mixed disjoint populations and understated the
+        corpus).
+      * side-level skips are reported separately (REVIEW MAJOR#2).
     """
-    # Group rows by (series_id, map_number)
-    by_map: dict[tuple[str, int], list[dict]] = defaultdict(list)
-    for r in rows:
-        sid = str(r.get("series_id", ""))
-        mn = int(r.get("map_number", 0))
-        by_map[(sid, mn)].append(r)
+    resolution = resolve_map_and_side_level(rows, winners)
+    per_side = resolution["per_side"]
 
-    # Group maps by series
-    series_to_maps: dict[str, list[tuple[str, int]]] = defaultdict(list)
-    for (sid, mn) in by_map:
-        series_to_maps[sid].append((sid, mn))
-
-    excluded_details: list[dict] = []
-    unresolved_maps: list[dict] = []
-
-    # Candidate-specific records: series -> [(prob, outcome)]
     series_records: dict[str, list[tuple[float, float]]] = defaultdict(list)
-    n_maps = 0
+    for (sid, _mn, _team), rec in per_side.items():
+        series_records[sid].append((rec[candidate], rec["outcome"]))
 
+    return {
+        "series_to_records": dict(series_records),
+        "n_maps": resolution["n_resolved_maps"],
+        "n_excluded": len(resolution["excluded_details"]),
+        "excluded_details": resolution["excluded_details"],
+        "skipped_team_sides": resolution["skipped_team_sides"],
+    }
+
+
+def cross_check_oracle(
+    by_map: dict[tuple[str, int], list[dict]],
+    winners: dict[str, dict],
+    blocked_keys: set[str],
+) -> tuple[int, list[str]]:
+    """Demoted cross-check: where BOTH the grid verdict and the internal
+    row-score oracle resolve a map to a winner, count and report the keys
+    (sid:mn) where they disagree.
+
+    Returns (n_compared, disagreeing_keys).  REVIEW MINOR#7: the comparison
+    denominator is reported so {"count": 0} cannot be mistaken for agreement
+    when the internal oracle produced nothing comparable (its scores stop at
+    the last qualifying crossing, so today it resolves none of the
+    verdict-matched maps).  Informational only — the grid verdict is
+    authoritative and never changed by a disagreement.
+    """
+    disagreements: list[str] = []
+    n_compared = 0
     for (sid, mn), map_rows in by_map.items():
-        # Resolve winner via oracle
-        oracle = resolve_map_oracle(map_rows)
-        if not oracle["valid"]:
-            excluded_details.append({
-                "series_id": sid,
-                "map_number": mn,
-                "reason": oracle.get("reason", "oracle_invalid"),
-                "max_a": oracle.get("max_a"),
-                "max_b": oracle.get("max_b"),
-            })
+        key = f"{sid}:{mn}"
+        if key in blocked_keys:
             continue
-
-        n_maps += 1
-
-        # Determine terminal state: game is over when max(a,b) >= target
-        # and target > min(a,b)
-        term_a = oracle["max_a"]
-        term_b = oracle["max_b"]
-        team_won = oracle["team_won"]
-
-        # Group rows by team (the side that p_map predicts FOR)
-        by_team: dict[str, list[dict]] = defaultdict(list)
-        for r in map_rows:
-            team_name = str(r.get("team", ""))
-            by_team[team_name].append(r)
-
-        map_has_prob = False
-        for team_name, team_rows in by_team.items():
-            # Find the LAST pre-terminal row for this team
-            # Pre-terminal: max(a,b) < 13, not (12,12); i.e., the game
-            # hasn't yet reached a regulation terminal state.
-            pre_term = [
-                r for r in team_rows
-                if r.get("a", 0) < 13 and r.get("b", 0) < 13
-                and not (r.get("a", 0) == 12 and r.get("b", 0) == 12)
-            ]
-            if not pre_term:
-                continue
-
-            # Take the highest round_number
-            last_row = max(pre_term, key=lambda r: int(r.get("round_number", 0)))
-
-            a = int(last_row.get("a", 0))
-            b = int(last_row.get("b", 0))
-            q_round_s = _safe_float(last_row.get("q_round"))
-            if q_round_s is None:
-                continue
-
-            if candidate == "A":
-                prob = _safe_float(last_row.get("p_map"))
-                if prob is None:
-                    continue
-            else:
-                prob = compute_candidate_p(a, b, q_round_s, candidate)
-                if prob is None:
-                    continue
-
-            # Determine outcome: did this team win?
-            a_col = int(last_row.get("a", 0))
-            b_col = int(last_row.get("b", 0))
-            # a is team's score, b is opponent's score in this row
-            # But the max_a/max_b are over all rows.  Since team_col
-            # consistently maps to the team name, we can check:
-            # did this team name's total score exceed the opponent's?
-            outcome = 1.0 if team_won else 0.0
-
-            # Edge case: team and opponent may have swapped mid-map
-            # (different rows have different team/opponent assignments).
-            # Use the oracle which gives the definitive team_vs_opponent result.
-            if team_name == oracle["winner"]:
-                outcome = 1.0
-            elif team_name == oracle["loser"]:
-                outcome = 0.0
-            # If team_name is neither (shouldn't happen), skip
-
-            series_records[sid].append((prob, outcome))
-            map_has_prob = True
-
-        if not map_has_prob:
-            # Map contributed no probability-outcome pairs (e.g., only OT
-            # state entries)
-            pass
-
-    return series_records, n_maps, len(excluded_details), excluded_details, unresolved_maps
+        winners_entry = winners.get(key)
+        if not winners_entry:
+            continue  # no grid verdict -> nothing to cross-check
+        oracle = resolve_map_oracle(map_rows)
+        if not oracle.get("valid"):
+            continue  # internal oracle unresolved -> no comparison possible
+        n_compared += 1
+        if oracle.get("winner") != winners_entry["winner"]:
+            disagreements.append(key)
+    return n_compared, disagreements
 
 
-def run_scoring_pipeline(rows: list[dict]) -> dict[str, Any]:
+def run_scoring_pipeline(rows: list[dict], winners: dict[str, dict]) -> dict[str, Any]:
     """Full H-MAPENTRY2 scoring pipeline.
 
     Returns a result dict with JSON-serialisable fields.
     """
-    # Build datasets for all candidates
+    by_map, _, _, blocked_keys = _resolve_rows(rows, winners)
+    resolution = resolve_map_and_side_level(rows, winners)
+
+    # Build datasets for all candidates off the SAME shared observation set.
     datasets: dict[str, Any] = {}
     for c in ["A", *CANDIDATE_LAMBDAS]:
-        recs, n_maps, n_exc, exc_details, _ = build_scoring_dataset(rows, c)
-        datasets[c] = recs
+        datasets[c] = {
+            sid: [(rec[c], rec["outcome"]) for rec in recs]
+            for sid, recs in _series_sided(resolution["per_side"]).items()
+        }
 
-    # The n_maps count is the same for all candidates (same maps, different p)
-    _, n_maps, n_excluded, exc_details, _ = build_scoring_dataset(rows, "A")
+    n_maps = resolution["n_resolved_maps"]
+    exc_details = resolution["excluded_details"]
+    n_excluded = len(exc_details)
+    skipped = resolution["skipped_team_sides"]
 
     verdict = "insufficient_n" if n_maps < 60 else None
 
@@ -618,16 +813,9 @@ def run_scoring_pipeline(rows: list[dict]) -> dict[str, Any]:
     pairwise: dict[str, Any] = {}
     if n_maps >= 60:
         for c in CANDIDATE_LAMBDAS:
-            d_ece, ci_ece, _ = paired_bootstrap_delta(
-                datasets["A"], datasets[c], ece_score,
-            )
-            d_brier, ci_brier, _ = paired_bootstrap_delta(
-                datasets["A"], datasets[c], brier_score,
-            )
-            wins = (
-                d_ece < 0 and ci_ece[1] < 0
-                and d_brier < 0 and ci_brier[1] < 0
-            )
+            d_ece, ci_ece, _ = paired_bootstrap_delta(datasets["A"], datasets[c], ece_score)
+            d_brier, ci_brier, _ = paired_bootstrap_delta(datasets["A"], datasets[c], brier_score)
+            wins = d_ece < 0 and ci_ece[1] < 0 and d_brier < 0 and ci_brier[1] < 0
             pairwise[c] = {
                 "dECE": round(d_ece, 6),
                 "dECE_ci": [round(ci_ece[0], 6), round(ci_ece[1], 6)],
@@ -636,43 +824,45 @@ def run_scoring_pipeline(rows: list[dict]) -> dict[str, Any]:
                 "wins": wins,
             }
 
-        # Determine winner with simplicity tiebreak
-        winners = [c for c in CANDIDATE_LAMBDAS if pairwise[c].get("wins", False)]
-        if winners:
-            # Tiebreak order: B0 > B10 > B20 when |dECE| <= 0.01
-            if len(winners) > 1:
-                # Group by near-tie |dECE| <= 0.01
-                prefer_order = ["B0", "B10", "B20"]
-                # Check if all winners are near-tied
-                min_d = min(pairwise[w]["dECE"] for w in winners)
-                near_tied = [
-                    w for w in winners
-                    if abs(pairwise[w]["dECE"] - min_d) <= 0.01
-                ]
+        winning_lambdas = [c for c in CANDIDATE_LAMBDAS if pairwise[c].get("wins", False)]
+        if winning_lambdas:
+            prefer_order = ["B0", "B10", "B20"]
+            if len(winning_lambdas) > 1:
+                min_d = min(pairwise[w]["dECE"] for w in winning_lambdas)
+                near_tied = [w for w in winning_lambdas if abs(pairwise[w]["dECE"] - min_d) <= 0.01]
                 if len(near_tied) > 1:
                     chosen = min(near_tied, key=lambda w: prefer_order.index(w))
                 else:
-                    chosen = min(winners, key=lambda w: prefer_order.index(w))
+                    chosen = min(winning_lambdas, key=lambda w: prefer_order.index(w))
             else:
-                chosen = winners[0]
+                chosen = winning_lambdas[0]
             verdict = chosen
         else:
             verdict = "no_challenger_wins"
 
     # ── Band sub-hypothesis under A ────────────────────────────────────
-    recs_a = datasets["A"]
     band_arms: dict[str, Any] = {}
     if n_maps >= 60:
+        recs_a = datasets["A"]
         band_arms["A"] = {
             "low_0.50_0.65": band_settled_edge(recs_a, 0.50, 0.65),
             "high_0.65_0.80": band_settled_edge(recs_a, 0.65, 0.801),  # upper inclusive
         }
 
+    n_compared, disagreements = cross_check_oracle(by_map, winners, blocked_keys)
+
     return {
         "n_maps": n_maps,
         "n_excluded": n_excluded,
         "excluded_maps": exc_details,
-        "n_resolved": n_maps - n_excluded,
+        "n_resolved": n_maps,  # == n_maps by construction (see STATUS UPDATE note)
+        "n_skipped_team_sides": len(skipped),
+        "skipped_team_sides": skipped,
+        "oracle_disagreements": {
+            "count": len(disagreements),
+            "maps": disagreements,
+            "n_cross_checked": n_compared,
+        },
         "per_candidate": per_candidate,
         "pairwise_vs_A": pairwise,
         "band_arms": band_arms,
@@ -680,14 +870,46 @@ def run_scoring_pipeline(rows: list[dict]) -> dict[str, Any]:
     }
 
 
+def _series_sided(per_side: dict) -> dict[str, list[dict]]:
+    out: dict[str, list[dict]] = defaultdict(list)
+    for (sid, _mn, _team), rec in per_side.items():
+        out[sid].append(rec)
+    return out
+
+
 # ── CLI entry point ────────────────────────────────────────────────────────
 
 def main() -> None:
-    if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <mapentry.jsonl> [...]", file=sys.stderr)
+    ap = argparse.ArgumentParser(
+        description="H-MAPENTRY2 retrospective scorer (grid_winners-fed).",
+    )
+    ap.add_argument("files", nargs="+", help="mapentry JSONL capture files")
+    ap.add_argument(
+        "--winners",
+        required=True,
+        help="path to grid_winners.py --out verdict JSON (the winners feed)",
+    )
+    args = ap.parse_args()
+
+    try:
+        with open(args.winners) as f:
+            verdict_doc = json.load(f)
+    except OSError as e:
+        print(f"error: cannot read --winners file: {e}", file=sys.stderr)
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"error: invalid --winners JSON: {e}", file=sys.stderr)
         sys.exit(1)
 
-    rows = load_data(sys.argv[1:])
+    if not isinstance(verdict_doc, dict) or not isinstance(verdict_doc.get("winners"), dict):
+        print(
+            "error: --winners file must be a grid_winners.py --out object "
+            'with a "winners" sub-dict',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    rows = load_data(args.files)
     if not rows:
         print(json.dumps({
             "n_maps": 0,
@@ -696,9 +918,10 @@ def main() -> None:
         }))
         sys.exit(0)
 
-    result = run_scoring_pipeline(rows)
+    result = run_scoring_pipeline(rows, verdict_doc["winners"])
     print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":
     main()
+
