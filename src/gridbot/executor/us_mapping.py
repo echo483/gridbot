@@ -209,14 +209,18 @@ def us_markets_for_event(event: dict) -> dict:
 # --- I/O: fetch + snapshot ---------------------------------------------------
 
 
-def fetch_pmus_esports_events(client) -> list[dict]:
-    """All esports events via the two discovery lanes that actually work.
+def fetch_pmus_esports_events(client, team_queries: tuple[str, ...] = ()) -> list[dict]:
+    """All esports events via the three discovery lanes that actually work.
 
     Lane 1: ``search.query`` per series keyword (catches events regardless
     of chronological burial). Lane 2: time-boxed ``events.list`` ordered by
     startTime (catches anything search's ranking misses in the live
-    window). Dedupe by slug. NOTE: the ``seriesSlug`` list-param is ignored
-    server-side — do not "simplify" back to it.
+    window). Lane 3: ``search.query`` per GRID TEAM NAME — the venue DROPS
+    IN-PLAY events from both generic lanes (verified live 2026-08-27:
+    keyword search + events.list returned only future games while team-name
+    search found every live one instantly; the whole live NA slate went
+    unmapped without this lane). Dedupe by slug. NOTE: the ``seriesSlug``
+    list-param is ignored server-side — do not "simplify" back to it.
     """
     events: dict[str, dict] = {}
     now = datetime.now(UTC)
@@ -246,7 +250,40 @@ def fetch_pmus_esports_events(client) -> list[dict]:
                 events.setdefault(str(e["slug"]), e)
     except Exception as exc:  # noqa: BLE001
         log.warning("pmus events.list lane failed: %s", type(exc).__name__)
+    for q in dict.fromkeys(t.strip() for t in team_queries):
+        if len(q) < 3 or q.upper().startswith("TBD"):
+            continue
+        try:
+            resp = client.search.query({"query": q, "limit_per_type": 10})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("pmus team-search lane %r failed: %s", q, type(exc).__name__)
+            continue
+        for e in resp.get("events") or []:
+            if str(e.get("seriesSlug") or "") in ESPORTS_SERIES_SLUGS and e.get("slug"):
+                events.setdefault(str(e["slug"]), e)
     return list(events.values())
+
+
+def live_window_team_names(grid_series: list[dict], now_ts: float) -> tuple[str, ...]:
+    """Team names of series scheduled within (-6h, +2h) of ``now_ts``.
+
+    This is the lane-3 query set: live and imminent series are exactly the
+    ones the venue's generic discovery lanes drop, and bounding the window
+    keeps the per-sweep search-call count small (2 calls per nearby series).
+    """
+    lo, hi = now_ts - 6 * 3600, now_ts + 2 * 3600
+    names: list[str] = []
+    for s in grid_series:
+        if str(s.get("id")) in config.GRID_TEST_SERIES_IDS:
+            continue
+        st = _start_ts(s.get("startTimeScheduled"))
+        if st is None or not (lo <= st <= hi):
+            continue
+        for t in s.get("teams") or []:
+            name = str((t.get("baseInfo") or {}).get("name") or "")
+            if name:
+                names.append(name)
+    return tuple(dict.fromkeys(names))
 
 
 def fetch_grid_series(grid_client_post) -> list[dict]:
@@ -280,8 +317,11 @@ def snapshot(client, grid_post) -> dict:
     match (or ``null``) plus the tradeable US markets of the matched event,
     and returns the coverage counts for logging.
     """
-    events = fetch_pmus_esports_events(client)
     grid_series = fetch_grid_series(grid_post)
+    team_queries = live_window_team_names(
+        grid_series, datetime.now(UTC).timestamp()
+    )
+    events = fetch_pmus_esports_events(client, team_queries)
     matches = join_series(grid_series, events)
     matched = {m["grid_series_id"]: m for m in matches}
     out_dir = config.DATA_DIR / "pmus"

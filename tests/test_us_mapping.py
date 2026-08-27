@@ -139,3 +139,82 @@ class TestTeamNames:
 
     def test_empty(self) -> None:
         assert pmus_team_names({}) == []
+
+
+class TestLiveWindowTeamNames:
+    def test_live_and_imminent_series_only(self) -> None:
+        from gridbot.executor.us_mapping import live_window_team_names
+
+        now = 1_000_000.0
+        h = 3600
+        series = [
+            _grid("1", "Alpha", "Bravo", "1970-01-12T13:46:40Z"),      # ~ now
+            _grid("2", "Charlie", "Delta", "1970-01-12T05:00:00Z"),    # way past
+            _grid("3", "Echo", "Foxtrot", "1970-01-13T13:00:00Z"),     # far future
+        ]
+        # give series 1 a start exactly at `now`, 2 at now-10h, 3 at now+24h
+        import datetime as dt
+
+        def iso(ts: float) -> str:
+            return dt.datetime.fromtimestamp(ts, dt.UTC).isoformat()
+
+        series[0]["startTimeScheduled"] = iso(now)
+        series[1]["startTimeScheduled"] = iso(now - 10 * h)
+        series[2]["startTimeScheduled"] = iso(now + 24 * h)
+        names = live_window_team_names(series, now)
+        assert names == ("Alpha", "Bravo")
+
+    def test_dedup_and_test_series_excluded(self) -> None:
+        from gridbot.executor.us_mapping import live_window_team_names
+        import datetime as dt
+
+        now = 2_000_000.0
+        iso = dt.datetime.fromtimestamp(now, dt.UTC).isoformat()
+        series = [
+            _grid("10", "Alpha", "Bravo", iso),
+            _grid("11", "Alpha", "Gamma", iso),   # Alpha repeats
+            _grid("28", "CS2-1", "CS2-2", iso),   # GRID test fixture id
+        ]
+        names = live_window_team_names(series, now)
+        assert names == ("Alpha", "Bravo", "Gamma")
+
+
+class TestTeamSearchLane:
+    class _Client:
+        """search.query returns a LIVE event only for team-name queries —
+        mirrors the venue behavior verified 2026-08-27 (generic keyword
+        lanes drop in-play events)."""
+
+        def __init__(self) -> None:
+            outer = self
+            self.queries: list[str] = []
+
+            class _Search:
+                def query(self, params):
+                    q = params["query"]
+                    outer.queries.append(q)
+                    if q == "NuTorious":
+                        return {"events": [_event(
+                            "cs2-nt-ot-2026-08-27", "NuTorious",
+                            "Overtake Sector", "2026-08-27T01:00:00Z")]}
+                    return {"events": []}
+
+            class _Events:
+                def list(self, params):
+                    return {"events": []}
+
+            self.search = _Search()
+            self.events = _Events()
+
+    def test_team_queries_surface_live_events(self) -> None:
+        from gridbot.executor.us_mapping import fetch_pmus_esports_events
+
+        client = self._Client()
+        events = fetch_pmus_esports_events(
+            client, ("NuTorious", "Overtake Sector", "TBD-1", "ab", "NuTorious")
+        )
+        assert [e["slug"] for e in events] == ["cs2-nt-ot-2026-08-27"]
+        # TBD-* and short names never queried; duplicates collapsed
+        team_qs = [q for q in client.queries
+                   if q not in ("cs2", "esports", "valorant", "league of legends")]
+        assert team_qs == ["NuTorious", "Overtake Sector"]
