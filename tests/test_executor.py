@@ -418,7 +418,7 @@ class TestStaleSweep:
         ]
 
     def test_fresh_orders_left_alone(self, tmp_path, monkeypatch) -> None:
-        eng, engine_mod, now = self._armed_engine(tmp_path, monkeypatch)
+        eng, _engine_mod, now = self._armed_engine(tmp_path, monkeypatch)
         assert eng.sweep_stale(now + 1) == 0
         assert "OID9" in eng.resting
 
@@ -584,7 +584,6 @@ class TestReentry:
     def test_fill_row_via_ledger_blocks_release(self, tmp_path, monkeypatch) -> None:
         # Derivation coverage: a fill ROW in the ledger (not an injected set)
         # must reach _filled_keys and block the release.
-        import json
 
         eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
         armed = limits.ArmingState(dry_run=False)
@@ -600,7 +599,6 @@ class TestReentry:
     def test_ambiguous_ack_counts_toward_cap(self, tmp_path, monkeypatch) -> None:
         # glm review finding 1: an ambiguous ack may be live on the venue —
         # after restart it must consume a lifetime entry slot.
-        import json
 
         eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
         armed = limits.ArmingState(dry_run=False)
@@ -721,7 +719,7 @@ class TestSecondSide:
         # hand-added side on the fill row.
         import json
 
-        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        eng, _engine_mod, _ = self._armed(tmp_path, monkeypatch)
         armed = limits.ArmingState(dry_run=False)
         assert eng.handle(self._long(), armed) == "placed"
         key = next(iter(eng.resting.values()))["dedup_key"]
@@ -742,7 +740,7 @@ class TestSecondSide:
     def test_blocked_while_opposite_side_rests(self, tmp_path, monkeypatch) -> None:
         # (2) Runtime resting view (D3): an order THIS process placed and
         # still rests on the slug blocks the opposite side even with no fill.
-        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        eng, _engine_mod, _ = self._armed(tmp_path, monkeypatch)
         armed = limits.ArmingState(dry_run=False)
         assert eng.handle(self._long(), armed) == "placed"
         assert any(g["slug"] == self.SLUG and g["us_side"] == "long"
@@ -753,7 +751,7 @@ class TestSecondSide:
         # (3) An ADOPTED ORPHAN carries us_side=None (unknown side, D3): a
         # resting unknown side on the slug blocks EVERY new side — fail
         # closed until the sweep clears the order.
-        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        eng, _engine_mod, _ = self._armed(tmp_path, monkeypatch)
         armed = limits.ArmingState(dry_run=False)
         eng.resting["ORD_ORPHAN"] = {"slug": self.SLUG, "dedup_key": None,
                                      "us_side": None, "placed_mono": -10.0}
@@ -765,7 +763,7 @@ class TestSecondSide:
         # of _slug_sides_open. The order is no longer resting (filled then
         # settled), so clearing resting mirrors venue truth; the opposite
         # side may now enter (its key has no prior entries).
-        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        eng, _engine_mod, _ = self._armed(tmp_path, monkeypatch)
         armed = limits.ArmingState(dry_run=False)
         assert eng.handle(self._long(), armed) == "placed"
         key = next(iter(eng.resting.values()))["dedup_key"]
@@ -795,7 +793,7 @@ class TestSecondSide:
         # slug-keyed gate that forgot to skip falsy slug/side (D4) would
         # collapse them into one bucket and block forever after one fill;
         # they must pass unchanged here even with open presence on a slug.
-        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        eng, _engine_mod, _ = self._armed(tmp_path, monkeypatch)
         assert eng.handle(self._long(), limits.ArmingState(dry_run=False)) == "placed"
         self._refresh(eng)
         assert eng._slug_sides_open != {}
@@ -815,7 +813,7 @@ class TestSecondSide:
         # (8) The gate applies in dry_run exactly as armed (no wire touched).
         import json
 
-        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        eng, _engine_mod, _ = self._armed(tmp_path, monkeypatch)
         assert eng.handle(self._long(), limits.ArmingState(dry_run=False)) == "placed"
         status = eng.handle(self._short(), limits.ArmingState(dry_run=True))
         assert status == "skipped:second_side"
@@ -907,7 +905,7 @@ class TestSecondSide:
         # MINOR review f4: _adopt_venue_orders resolves us_side from the venue
         # order's OWN dedup_key (real adoption path, not a hand-built resting
         # dict). A known-side adopted order blocks only the opposite side.
-        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        eng, _engine_mod, _ = self._armed(tmp_path, monkeypatch)
         key = "H-MAPENTRY1:2995296:2:long:" + self.SLUG
         records = [{
             "type": "order_intent", "status": "placed", "order_id": "OID1",
@@ -928,7 +926,7 @@ class TestSecondSide:
     def test_adopted_orphan_blocks_every_side(self, tmp_path, monkeypatch) -> None:
         # MINOR review f4 + D3: an ADOPTED ORPHAN (dedup_key None, us_side
         # unknown) blocks EVERY new side on the slug until the sweep clears it.
-        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        eng, _engine_mod, _ = self._armed(tmp_path, monkeypatch)
         eng._adopt_venue_orders(
             {"open_orders": [{"id": "ORPH", "slug": self.SLUG, "dedup_key": None}],
              "unknown_orders": []},
@@ -944,7 +942,7 @@ class TestSecondSide:
         # BUILD, not only the gate lookup. An ARMED instance-lane placement (empty
         # slug/side) that later fills must NOT collapse into a slug bucket —
         # otherwise a second instance-lane intent (different book) gets blocked.
-        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        eng, _engine_mod, _ = self._armed(tmp_path, monkeypatch)
         assert eng.handle(_instance(), limits.ArmingState(dry_run=False)) == "placed"
         key = next(iter(eng.resting.values()))["dedup_key"]
         eng.ledger.append({"type": "fill", "dedup_key": key, "order_id": "OID1",
@@ -981,7 +979,7 @@ class TestSecondSide:
         # ledger refresh runs.
         from gridbot.executor import pmus
 
-        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        eng, _engine_mod, _ = self._armed(tmp_path, monkeypatch)
         armed = limits.ArmingState(dry_run=False)
         monkeypatch.setattr(pmus, "place",
                             lambda _i: ("error:ambiguous_ack", None))

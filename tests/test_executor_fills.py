@@ -23,7 +23,7 @@ def _order(cum: int, qty: int = 5, avg: str | None = "0.53",
 
 
 class _FakeClient:
-    def __init__(self, orders: dict[str, dict], resolutions: list[dict] | Exception = ()):  # noqa: B006
+    def __init__(self, orders: dict[str, dict], resolutions: list[dict] | Exception = ()):
         self._orders = orders
         self._res = resolutions
         outer = self

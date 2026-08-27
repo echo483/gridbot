@@ -182,7 +182,7 @@ def _iso_ns(s: object) -> int | None:
     if not isinstance(s, str) or not s:
         return None
     try:
-        return int(datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp() * 1e9)
+        return int(datetime.fromisoformat(s).timestamp() * 1e9)
     except (ValueError, OverflowError):
         return None
 

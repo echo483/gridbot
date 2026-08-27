@@ -88,23 +88,23 @@ from typing import Any
 __all__ = [
     "DEFAULT_SHOCK",
     "DEFAULT_SHOCK_WINDOW_S",
-    "US_TICK",
     "ENTRY_CEILING",
-    "entry_price",
-    "discount_pts",
-    "discount_bucket",
-    "p_map_bucket",
-    "phase_bucket",
+    "US_TICK",
     "band_bucket",
+    "build_shock_sequences",
+    "compute_strata",
+    "discount_bucket",
+    "discount_pts",
+    "entry_price",
+    "has_pre_shock",
+    "load_fills",
     "load_mapentry",
     "load_winners",
-    "load_fills",
-    "build_shock_sequences",
-    "has_pre_shock",
+    "main",
+    "p_map_bucket",
+    "phase_bucket",
     "select_candidates",
     "settle_candidates",
-    "compute_strata",
-    "main",
 ]
 
 DEFAULT_SHOCK = 0.25
@@ -112,9 +112,12 @@ DEFAULT_SHOCK_WINDOW_S = 600
 # Live engine constants — literal mirrors drift (replay_harness did; this
 # file did too: its old 0.90 ignored per-hypothesis ceilings and its price
 # check admitted sub-tick prices the engine refuses).
-from gridbot.executor.intents import (  # noqa: E402
-    DEFAULT_ENTRY_CEILING, US_BAND_GATE, US_TICK,
+from gridbot.executor.intents import (
+    DEFAULT_ENTRY_CEILING,
+    US_BAND_GATE,
+    US_TICK,
 )
+
 ENTRY_CEILING = DEFAULT_ENTRY_CEILING  # live engine constant — a literal mirror drifted in replay_harness once already
 NS_PER_S = 1_000_000_000
 
@@ -451,7 +454,7 @@ def select_candidates(
     by rows that pass price validity (a degenerate price never built an order),
     and dedup runs BEFORE verdict lookup (the engine dedupes at intent time).
     """
-    window_ns = int(round(shock_window_s * NS_PER_S))
+    window_ns = round(shock_window_s * NS_PER_S)
     sequences, positions = build_shock_sequences(rows)
     candidates: list[dict] = []
     reasons = {REASON_MALFORMED: 0, REASON_PRICE: 0, REASON_DUPLICATE: 0}
