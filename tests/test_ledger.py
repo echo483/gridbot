@@ -334,3 +334,25 @@ def test_settle_venue_pnl_preferred_over_formula():
          "ts_ns": 3},
     ]
     assert realized_pnl(records) == [("k", 2.6, 3)]
+
+
+def test_manual_exit_settle_releases_without_pnl():
+    # fills.py manual-exit release (08-27): a settle row with won=None and
+    # venue_pnl=None must release the exposure slot but contribute NOTHING
+    # to realized PnL — no crash, no miscount, conservative for the
+    # daily-loss cap.
+    from gridbot.executor.ledger import _day_of, open_exposure
+
+    records = [
+        {"type": "order_intent", "status": "placed", "dedup_key": "k",
+         "order_id": "O1", "price": 0.42, "shares": 7.0, "ts_ns": 1},
+        {"type": "fill", "dedup_key": "k", "order_id": "O1", "price": 0.42,
+         "shares": 7.0, "ts_ns": 2},
+        {"type": "settle", "dedup_key": "k", "won": None, "venue_pnl": None,
+         "voided": False, "source": "manual_exit_position_closed", "ts_ns": 3},
+    ]
+    assert realized_pnl(records) == []          # 0 to PnL, silently skipped
+    assert daily_loss_usd(records, _day_of(3)) == 0.0
+    assert open_positions(records) == []        # slot released
+    assert open_exposure(records) == 0          # capacity slot freed
+
