@@ -132,18 +132,22 @@ def _fill_totals(records: list[dict]) -> dict[str, tuple[float, float, int]]:
         if not isinstance(key, str) or not key:
             continue
         oid = row.get("order_id")
-        if oid:
-            if str(oid) in seen_orders:
-                continue
-            seen_orders.add(str(oid))
-        else:
-            if key in keyless_seen:
-                continue
-            keyless_seen.add(key)
+        if oid and str(oid) in seen_orders:
+            continue
+        if not oid and key in keyless_seen:
+            continue
         shares = _shares(row)
         price = _price(row)
+        # An invalid row must NOT consume its oid/key first-wins slot — a
+        # malformed first row would suppress the real one forever (audit
+        # M5; unreachable via current writers, kept correct for future
+        # ones). Mark seen only after validation.
         if shares is None or shares <= 0 or price is None:
             continue
+        if oid:
+            seen_orders.add(str(oid))
+        else:
+            keyless_seen.add(key)
         ts = row.get("ts_ns")
         cur = agg.setdefault(key, [0.0, 0.0, ts if isinstance(ts, int) else 0])
         cur[0] += shares

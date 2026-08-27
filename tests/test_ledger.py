@@ -387,3 +387,19 @@ class TestOrderScopedFillOverride:
              "ts_ns": 1},  # no order_id -> fail closed: O1 stays held
         ]
         assert open_exposure(records) == 1
+
+
+def test_fill_totals_malformed_first_row_does_not_suppress_valid() -> None:
+    # audit M5: a malformed fill row (bad shares/price) must not consume the
+    # oid's first-wins slot — the later valid row for the same order counts.
+    records = [
+        {"type": "order_intent", "status": "placed", "order_id": "A",
+         "dedup_key": "k1", "market_slug": "m", "price": 0.5, "shares": 4.0},
+        {"type": "fill", "order_id": "A", "dedup_key": "k1",
+         "price": None, "shares": "garbage", "ts_ns": 1},   # malformed
+        {"type": "fill", "order_id": "A", "dedup_key": "k1",
+         "price": 0.5, "shares": 4.0, "ts_ns": 2},          # real
+    ]
+    from gridbot.executor import ledger as ledger_mod
+    totals = ledger_mod._fill_totals(records)
+    assert totals["k1"][0] == 4.0
