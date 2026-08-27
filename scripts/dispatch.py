@@ -27,6 +27,12 @@ Rules encoded here, not re-decided per call:
   lands; engine/config diffs get an independent `review` pass before
   committing.
 
+Agents as code: every lane has a version-controlled system preamble in
+agents/<lane>.md (fast/search/classification share analysis.md). _run
+prepends it to every prompt, so lane behavior — rails, output contract,
+craft rules — is declarative and reproducible, not re-typed per dispatch.
+Editing a lane's behavior = editing its file, in review like any code.
+
 Run: uv run python scripts/dispatch.py <kind> <prompt-file> [--out FILE]
 """
 
@@ -85,8 +91,25 @@ ROUTES: dict[str, tuple[str, str | None, str | None]] = {
 }
 
 
+AGENTS_DIR = Path(__file__).resolve().parents[1] / "agents"
+# Lanes without their own preamble file share the analysis one (bulk
+# data-work contract); every other kind maps to agents/<kind>.md.
+_SHARED_PREAMBLE = {"fast": "analysis", "search": "analysis",
+                    "classification": "analysis"}
+
+
+def _preamble(kind: str) -> str:
+    path = AGENTS_DIR / f"{_SHARED_PREAMBLE.get(kind, kind)}.md"
+    if not path.exists():
+        print(f"dispatch[{kind}]: no lane preamble at {path} — sending bare",
+              file=sys.stderr)
+        return ""
+    return path.read_text().strip() + "\n\n---\n\nTASK:\n\n"
+
+
 def _run(kind: str, prompt: str, timeout: int) -> tuple[int, str]:
     model, provider, reasoning = ROUTES[kind]
+    prompt = _preamble(kind) + prompt
     cmd = ["hermes", "-m", model]
     if provider:
         cmd += ["--provider", provider]
