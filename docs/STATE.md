@@ -310,14 +310,18 @@ clause closes the lane if <5% of instances ever show a qualifying quote.
    positions ~$8); venue outage arc (create endpoint down ~4.5h, 4
    triggers lost, fail-soft perfect); manual-exit E2E validated incl
    netPosition field (live held capture).
-12. Knowledge-graph lane (user-led, task #29, SCOPED 08-27): the user
-   wants to learn KG engineering and co-develop a gridbot knowledge graph.
-   They research first; do NOT start building until they kick it off.
-   Scoped with the user 08-27: purpose = AGENT CONTEXT ENGINE (what an
-   agent needs to know, queryable), interface = MCP server (absorbs task
-   #19), runtime/STATE-mapping nodes are the core; proposed stack Kuzu
-   (embedded Cypher); deepseek = bulk extractor lane. Spec doc awaits the
-   user's nod. Carry-in: this STATE.md, docs/experiments/registry.jsonl
+12. Knowledge-graph lane (user-led, task #29, APPROVED 08-27 PM —
+   Approach A): purpose = AGENT CONTEXT ENGINE, interface = stdio MCP
+   server mounted in hermes AND Claude (absorbs task #19), store = Kuzu,
+   LangGraph confined to ingest pipelines (the user's learning surface).
+   Locked decisions: pipelines write facts / agents only propose (staging
+   + promotion); full rebuildability from repo sources (DB gitignored,
+   schema+pipelines versioned). SPEC:
+   docs/superpowers/specs/2026-08-27-knowledge-graph-design.md; kickoff
+   prompt for the user's tutor session:
+   2026-08-27-kg-kickoff-prompt.md (same dir). The USER drives the build
+   in a separate session — ops sessions must NOT build ahead in this
+   lane; coordinate via git. Carry-in: this STATE.md, docs/experiments/registry.jsonl
    (hypotheses/verdicts = natural nodes+edges), the capture corpus
    relations (series↔maps↔markets↔orders↔fills↔settles), the gotchas
    section, and Claude memory. Slow-loop only (iron rail 1).
