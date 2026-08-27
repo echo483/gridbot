@@ -615,37 +615,342 @@ class TestReentry:
         assert eng2.handle(_mapentry_row(p_map=0.70), armed) == "skipped:reentry_cap"
 
     def test_filled_sibling_does_not_abandon_unfilled_reentry(
-        self, tmp_path, monkeypatch
-    ) -> None:
-        # qwen review f1 (BLOCKER): entry 1's fill must not make the sweep
-        # skip-cancel unfilled entry 2 on the same key — the skip is
-        # ORDER-scoped, so entry 2 still gets a real venue cancel.
+            self, tmp_path, monkeypatch
+        ) -> None:
+            # qwen review f1 (BLOCKER): entry 1's fill must not make the sweep
+            # skip-cancel unfilled entry 2 on the same key — the skip is
+            # ORDER-scoped, so entry 2 still gets a real venue cancel.
+            from gridbot.executor import pmus
+
+            eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+            armed = limits.ArmingState(dry_run=False)
+            assert eng.handle(_mapentry_row(p_map=0.75), armed) == "placed"  # OID1
+            assert self._sweep_all(eng, engine_mod, monkeypatch) == 1
+            assert eng.handle(_mapentry_row(p_map=0.70), armed) == "placed"  # OID2
+            key = next(iter(eng.resting.values()))["dedup_key"]
+            # fills sync later proves OID1 filled (key becomes fill-bearing)
+            eng._filled_orders.add("OID1")
+            eng._filled_keys.add(key)
+
+            cancelled: list[str] = []
+
+            def _cancel(oid, _slug):
+                cancelled.append(oid)
+                return "cancelled"
+
+            monkeypatch.setattr(pmus, "cancel", _cancel)
+            import time as _time
+
+            eng.sweep_stale(_time.monotonic() + engine_mod.MAKER_TTL_S + 1)
+            assert cancelled == ["OID2"]  # real cancel, not a fabricated skip
+            assert eng.resting == {}
+            # and the fill-bearing key never releases even after confirmation:
+            # it stays seen-blocked (None), never reaching another placement
+            eng._fill_checked.update({"OID1", "OID2"})
+            eng._confirm_releases()
+            assert eng.handle(_mapentry_row(p_map=0.65), armed) is None
+
+
+class TestSecondSide:
+    """STATE 1e invariant (live loss 08-27): never enter one side of a slug
+    while the opposite side has non-terminal presence — the engine held LONG
+    on a slug then bought SHORT of the SAME slug under a different dedup_key
+    (keys differ by us_side), stacking >$1 of contract cost = guaranteed
+    loss. The gate draws on a restart-safe ledger view (D5) plus THIS
+    process's resting orders (D3), and is identical in dry_run."""
+
+    SLUG = "astatc-cs2-ace-unity-2026-08-27-map2"
+
+    def _armed(self, tmp_path, monkeypatch):
+        import time as _time
+
+        from gridbot import config
+        from gridbot.executor import engine as engine_mod
+        from gridbot.executor import pmus
+
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        (tmp_path / "shadow").mkdir()
+        self._oid = 0
+
+        def _place(_i):
+            self._oid += 1
+            return "placed", f"OID{self._oid}"
+
+        monkeypatch.setattr(pmus, "place", _place)
+        eng = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
+        self._tmp = tmp_path
+        return eng, engine_mod, _time.monotonic()
+
+    def _long(self, round_number: int = 7, **over) -> dict:
+        row = _mapentry_row(p_map=0.75, market_slug=self.SLUG, us_side="long",
+                            round_number=round_number)
+        row.update(over)
+        return row
+
+    def _short(self, **over) -> dict:
+        # A SHORT entry on the SAME slug: different dedup_key (key includes
+        # us_side) — precisely the 08-27 situation that must be gated.
+        row = _mapentry_row(us_side="short", side_ask=0.30, entry_price_max=0.35,
+                            market_slug=self.SLUG)
+        row.update(over)
+        return row
+
+    def _refresh(self, eng) -> None:
+        from gridbot.executor import ledger as ledger_mod
+
+        eng._refresh_ledger_state(ledger_mod.load_records(self._tmp / "executor"))
+
+    def _sweep_all(self, eng, engine_mod, monkeypatch, outcome="cancelled"):
+        from gridbot.executor import ledger as ledger_mod
+        from gridbot.executor import pmus
+
+        monkeypatch.setattr(pmus, "cancel", lambda _o, _s: outcome)
+        import time as _time
+
+        n = eng.sweep_stale(_time.monotonic() + engine_mod.MAKER_TTL_S + 1)
+        eng._fill_checked.update(f"OID{i}" for i in range(1, self._oid + 1))
+        eng._confirm_releases()
+        eng._refresh_ledger_state(ledger_mod.load_records(self._tmp / "executor"))
+        return n
+
+    def test_opposite_side_blocked_by_filled_unsettled(self, tmp_path, monkeypatch) -> None:
+        # (1) Opposite side blocked while a fill-without-settle exists on the
+        # slug. The fill row is REALISTIC — NO us_side (review F1/D1): the
+        # side lives only on the placed order_intent row, and the gate must
+        # still find it via the shared filled_sides_by_slug join, not by a
+        # hand-added side on the fill row.
+        import json
+
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(self._long(), armed) == "placed"
+        key = next(iter(eng.resting.values()))["dedup_key"]
+        eng.ledger.append({
+            "type": "fill", "dedup_key": key, "order_id": "OID1",
+            "market_slug": self.SLUG, "price": 0.5, "shares": 4.0,
+            "partial": False, "source": "venue_order", "ts_ns": 1,
+        })
+        self._refresh(eng)
+        assert eng._slug_sides_open == {self.SLUG: {"long"}}
+        assert eng.handle(self._short(), armed) == "skipped:second_side"
+        rows = [json.loads(l) for f in (tmp_path / "executor").glob("intents-*.jsonl")
+                for l in f.read_text().splitlines()]
+        assert rows[-1]["status"] == "skipped:second_side"
+        assert rows[-1]["market_slug"] == self.SLUG  # full row ledgered
+        assert rows[-1]["us_side"] == "short"
+
+    def test_blocked_while_opposite_side_rests(self, tmp_path, monkeypatch) -> None:
+        # (2) Runtime resting view (D3): an order THIS process placed and
+        # still rests on the slug blocks the opposite side even with no fill.
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(self._long(), armed) == "placed"
+        assert any(g["slug"] == self.SLUG and g["us_side"] == "long"
+                   for g in eng.resting.values())
+        assert eng.handle(self._short(), armed) == "skipped:second_side"
+
+    def test_blocked_while_adopted_orphan_rests(self, tmp_path, monkeypatch) -> None:
+        # (3) An ADOPTED ORPHAN carries us_side=None (unknown side, D3): a
+        # resting unknown side on the slug blocks EVERY new side — fail
+        # closed until the sweep clears the order.
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        eng.resting["ORD_ORPHAN"] = {"slug": self.SLUG, "dedup_key": None,
+                                     "us_side": None, "placed_mono": -10.0}
+        assert eng.handle(self._short(), armed) == "skipped:second_side"
+        assert eng.handle(self._long(round_number=8), armed) == "skipped:second_side"
+
+    def test_allowed_after_first_side_settles(self, tmp_path, monkeypatch) -> None:
+        # (4) Once the first side's key SETTLES it is terminal and drops out
+        # of _slug_sides_open. The order is no longer resting (filled then
+        # settled), so clearing resting mirrors venue truth; the opposite
+        # side may now enter (its key has no prior entries).
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(self._long(), armed) == "placed"
+        key = next(iter(eng.resting.values()))["dedup_key"]
+        eng.ledger.append({"type": "fill", "dedup_key": key, "order_id": "OID1",
+                           "market_slug": self.SLUG, "price": 0.5, "shares": 4.0,
+                           "ts_ns": 1})
+        eng.ledger.append({"type": "settle", "dedup_key": key, "market_slug": self.SLUG,
+                           "won": False, "venue_pnl": -2.0, "ts_ns": 2})
+        eng.resting.clear()  # filled+settled order no longer rests
+        self._refresh(eng)
+        assert eng._slug_sides_open == {}
+        assert eng.handle(self._short(), armed) == "placed"
+
+    def test_allowed_after_first_side_clean_cancel(self, tmp_path, monkeypatch) -> None:
+        # (5) A key that is fully clean-cancelled with NO fill is terminal:
+        # it releases the slot, so the other side may enter.
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(self._long(), armed) == "placed"
+        assert self._sweep_all(eng, engine_mod, monkeypatch) == 1
+        assert eng._slug_sides_open == {}
+        assert eng.handle(self._short(), armed) == "placed"
+
+    def test_instance_lane_intents_unaffected(self, tmp_path, monkeypatch) -> None:
+        # (6) Instance-lane intents carry an EMPTY slug and us_side. A
+        # slug-keyed gate that forgot to skip falsy slug/side (D4) would
+        # collapse them into one bucket and block forever after one fill;
+        # they must pass unchanged here even with open presence on a slug.
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        assert eng.handle(self._long(), limits.ArmingState(dry_run=False)) == "placed"
+        self._refresh(eng)
+        assert eng._slug_sides_open != {}
+        assert eng.handle(_instance(), limits.ArmingState(dry_run=True)) == "dry_run"
+
+    def test_same_side_reentry_unaffected(self, tmp_path, monkeypatch) -> None:
+        # (7) Same-side re-entry after a clean cancel stays allowed: the gate
+        # only blocks the OPPOSITE side (and orphans), never the same side.
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(self._long(), armed) == "placed"
+        assert self._sweep_all(eng, engine_mod, monkeypatch) == 1
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(self._long(round_number=8), armed) == "placed"  # same side ok
+
+    def test_dry_run_gates_identically(self, tmp_path, monkeypatch) -> None:
+        # (8) The gate applies in dry_run exactly as armed (no wire touched).
+        import json
+
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        assert eng.handle(self._long(), limits.ArmingState(dry_run=False)) == "placed"
+        status = eng.handle(self._short(), limits.ArmingState(dry_run=True))
+        assert status == "skipped:second_side"
+        rows = [json.loads(l) for f in (tmp_path / "executor").glob("intents-*.jsonl")
+                for l in f.read_text().splitlines()]
+        assert rows[-1]["status"] == "skipped:second_side"
+        assert rows[-1]["live"] is False
+
+    def test_restart_rebuilds_block_from_ledger(self, tmp_path, monkeypatch) -> None:
+        # (9) Restart-safety: a FRESH Engine + the ledger records ALONE must
+        # rebuild the block (ledger view, D5) — no process memory or resting
+        # state to lean on. The short intent is the 08-27 repeat.
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        assert eng.handle(self._long(), limits.ArmingState(dry_run=False)) == "placed"
+        key = next(iter(eng.resting.values()))["dedup_key"]
+        eng.ledger.append({"type": "fill", "dedup_key": key, "order_id": "OID1",
+                           "market_slug": self.SLUG, "price": 0.5, "shares": 4.0,
+                           "ts_ns": 1})
+        eng2 = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
+        self._refresh(eng2)
+        assert eng2._slug_sides_open == {self.SLUG: {"long"}}
+        assert eng2.resting == {}
+        assert eng2.handle(self._short(), limits.ArmingState(dry_run=False)) \
+            == "skipped:second_side"
+
+    def test_ambiguous_ack_restart_blocks_opposite(self, tmp_path, monkeypatch) -> None:
+        # review finding 2 (MAJOR): an error:ambiguous_ack key — MAYBE live on
+        # venue (the reason it consumes a cap slot) — carries no order_id, so
+        # it never enters placed_by_key. After restart the opposite side must
+        # still be blocked (fail closed, same as the cap accounting).
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        key = "H-MAPENTRY1:2995296:2:long:" + self.SLUG
+        for s in ("wire_pending", "error:ambiguous_ack"):
+            eng.ledger.append({
+                "type": "order_intent", "status": s, "order_id": None,
+                "dedup_key": key, "market_slug": self.SLUG, "us_side": "long",
+                "price": 0.79, "shares": 4.0, "ts_ns": 1,
+            })
+        eng2 = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
+        self._refresh(eng2)
+        assert eng2._slug_sides_open == {self.SLUG: {"long"}}
+        assert eng2.handle(self._short(), limits.ArmingState(dry_run=False)) \
+            == "skipped:second_side"
+
+    def test_wire_pending_restart_blocks_opposite(self, tmp_path, monkeypatch) -> None:
+        # review finding 2: a crash between venue ack and outcome append leaves
+        # only a dangling wire_pending row (counted in the cap view). The side
+        # view must keep that possibly-live side open after restart too.
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        key = "H-MAPENTRY1:2995296:2:long:" + self.SLUG
+        eng.ledger.append({
+            "type": "order_intent", "status": "wire_pending", "order_id": None,
+            "dedup_key": key, "market_slug": self.SLUG, "us_side": "long",
+            "price": 0.79, "shares": 4.0, "ts_ns": 1,
+        })
+        eng2 = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
+        self._refresh(eng2)
+        assert eng2._slug_sides_open == {self.SLUG: {"long"}}
+        assert eng2.handle(self._short(), limits.ArmingState(dry_run=False)) \
+            == "skipped:second_side"
+
+    def test_clean_cancel_blocks_until_venue_confirmed(self, tmp_path, monkeypatch) -> None:
+        # review finding 3 (MAJOR): the venue's "cancelled" report lies (three
+        # production full fills reported it). The side gate must NOT release on
+        # a ledger clean-cancel alone — it defers on _fill_checked, exactly
+        # like the reentry lane's _pending_release. Spec test (5)'s ALLOWED
+        # fires only once the fills sync has venue-confirmed zero fill.
         from gridbot.executor import pmus
 
         eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
         armed = limits.ArmingState(dry_run=False)
-        assert eng.handle(_mapentry_row(p_map=0.75), armed) == "placed"  # OID1
-        assert self._sweep_all(eng, engine_mod, monkeypatch) == 1
-        assert eng.handle(_mapentry_row(p_map=0.70), armed) == "placed"  # OID2
-        key = next(iter(eng.resting.values()))["dedup_key"]
-        # fills sync later proves OID1 filled (key becomes fill-bearing)
-        eng._filled_orders.add("OID1")
-        eng._filled_keys.add(key)
-
-        cancelled: list[str] = []
-
-        def _cancel(oid, _slug):
-            cancelled.append(oid)
-            return "cancelled"
-
-        monkeypatch.setattr(pmus, "cancel", _cancel)
+        assert eng.handle(self._long(), armed) == "placed"
+        oid = next(iter(eng.resting))
+        monkeypatch.setattr(pmus, "cancel", lambda _o, _s: "cancelled")
         import time as _time
 
         eng.sweep_stale(_time.monotonic() + engine_mod.MAKER_TTL_S + 1)
-        assert cancelled == ["OID2"]  # real cancel, not a fabricated skip
-        assert eng.resting == {}
-        # and the fill-bearing key never releases even after confirmation:
-        # it stays seen-blocked (None), never reaching another placement
-        eng._fill_checked.update({"OID1", "OID2"})
-        eng._confirm_releases()
-        assert eng.handle(_mapentry_row(p_map=0.65), armed) is None
+        # NO _fill_checked yet — the fills sync has not confirmed zero fill.
+        self._refresh(eng)
+        assert eng._slug_sides_open == {self.SLUG: {"long"}}
+        assert eng.handle(self._short(), armed) == "skipped:second_side"
+        # The fills sync later proves the order terminal-with-zero-fill.
+        eng._fill_checked.add(oid)
+        self._refresh(eng)
+        assert eng._slug_sides_open == {}
+        assert eng.handle(self._short(), armed) == "placed"
+
+    def test_adoption_known_side_inherited_blocks_opposite(self, tmp_path, monkeypatch) -> None:
+        # MINOR review f4: _adopt_venue_orders resolves us_side from the venue
+        # order's OWN dedup_key (real adoption path, not a hand-built resting
+        # dict). A known-side adopted order blocks only the opposite side.
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        key = "H-MAPENTRY1:2995296:2:long:" + self.SLUG
+        records = [{
+            "type": "order_intent", "status": "placed", "order_id": "OID1",
+            "dedup_key": key, "market_slug": self.SLUG,
+            "us_side": "long", "price": 0.79, "shares": 4.0, "ts_ns": 1,
+        }]
+        eng._adopt_venue_orders(
+            {"open_orders": [{"id": "AD_K", "slug": self.SLUG, "dedup_key": key}],
+             "unknown_orders": []},
+            records=records,
+        )
+        assert eng.resting["AD_K"]["us_side"] == "long"
+        assert eng.handle(self._short(), limits.ArmingState(dry_run=False)) \
+            == "skipped:second_side"  # opposite side, known side inherited
+        assert eng.handle(self._long(round_number=8), limits.ArmingState(dry_run=False)) \
+            == "placed"  # same side still allowed
+
+    def test_adopted_orphan_blocks_every_side(self, tmp_path, monkeypatch) -> None:
+        # MINOR review f4 + D3: an ADOPTED ORPHAN (dedup_key None, us_side
+        # unknown) blocks EVERY new side on the slug until the sweep clears it.
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        eng._adopt_venue_orders(
+            {"open_orders": [{"id": "ORPH", "slug": self.SLUG, "dedup_key": None}],
+             "unknown_orders": []},
+            records=[],
+        )
+        assert eng.resting["ORPH"]["us_side"] is None
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(self._short(), armed) == "skipped:second_side"
+        assert eng.handle(self._long(round_number=8), armed) == "skipped:second_side"
+
+    def test_armed_instance_lane_skipped_in_build(self, tmp_path, monkeypatch) -> None:
+        # MINOR review f5 (D4 build-side): the falsy-skip must hold on the LEDGER
+        # BUILD, not only the gate lookup. An ARMED instance-lane placement (empty
+        # slug/side) that later fills must NOT collapse into a slug bucket —
+        # otherwise a second instance-lane intent (different book) gets blocked.
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        assert eng.handle(_instance(), limits.ArmingState(dry_run=False)) == "placed"
+        key = next(iter(eng.resting.values()))["dedup_key"]
+        eng.ledger.append({"type": "fill", "dedup_key": key, "order_id": "OID1",
+                           "market_slug": "", "price": 0.61, "shares": 10.0,
+                           "partial": False, "source": "venue_order", "ts_ns": 1})
+        eng.resting.clear()
+        self._refresh(eng)
+        assert eng._slug_sides_open == {}  # empty slug skipped on build too
+        assert eng.handle(_instance(round_number=9), limits.ArmingState(dry_run=True)) \
+            == "dry_run"  # not "skipped:second_side"

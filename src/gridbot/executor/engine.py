@@ -130,6 +130,12 @@ class Engine:
         # releasing at cancel time would hand every partially-filled book a
         # re-entry (qwen review f2). order_id -> dedup_key.
         self._pending_release: dict[str, str] = {}
+        # STATE 1e (live loss 08-27): slug-keyed NON-TERMINAL sides — which
+        # us_side of each market_slug still has presence (filled-unsettled,
+        # resting-before-clean-cancel, or adopted-orphan). Recomputed from
+        # the ledger each cycle (restart-safe), so the second-side gate
+        # never enters a slug side while the OPPOSITE side is open.
+        self._slug_sides_open: dict[str, set[str]] = {}
 
     def handle(self, record: dict, armed: limits.ArmingState) -> str | None:
         """Process one shadow record; returns the outcome status or None."""
@@ -170,6 +176,20 @@ class Engine:
             log.info("band gate: %s p_map=%s held out of armed band",
                      intent.dedup_key, record.get("p_map"))
             return "skipped:band_gate"
+        # INVARIANT (STATE 1e, live loss 08-27): never enter a side of a slug
+        # while the OPPOSITE side has non-terminal presence — the engine held
+        # LONG on astatc-cs2-ace-unity-2026-08-27-map2 then bought SHORT of
+        # the SAME slug via a different dedup_key, stacking >$1 of contract
+        # cost = guaranteed loss. Gate draws on (a) the ledger view (D5,
+        # restart-safe) and (b) this process's resting orders (D3). Identical
+        # in dry_run so the armed decision path stays byte-identical; the
+        # dedup key is NOT consumed (a later freed side may still enter).
+        if self._second_side_blocked(intent):
+            self._skip_row(intent, record, "skipped:second_side", armed)
+            log.info("second_side gate: %s %s on %s blocked (opposite side "
+                     "open/unknown)", intent.dedup_key, intent.us_side,
+                     intent.market_slug)
+            return "skipped:second_side"
         # Capacity skips do NOT consume the dedup key (M6). They ARE
         # ledgered: a silently dropped would-have-traded row is selection
         # bias in the measurement record (glm review f11).
@@ -203,6 +223,7 @@ class Engine:
                 self.resting[str(order_id)] = {
                     "slug": intent.market_slug,
                     "dedup_key": intent.dedup_key,
+                    "us_side": intent.us_side,
                     "placed_mono": time.monotonic(),
                 }
         else:
@@ -240,6 +261,13 @@ class Engine:
         bad_cancel: set[str] = set()  # gone_before_cancel / error cancels
         placed_by_key: dict[str, set[str]] = {}
         clean_orders: set[str] = set()
+        # Possibly-LIVE-but-never-terminally-evidenced keys (STATE 1e / review
+        # finding 2): a wire_pending that never paired with an outcome (crash
+        # window), an error:* ack (ambiguous_ack may really be placed), or a
+        # "placed" row with NO order_id. These may hold contracts on venue even
+        # though no placed+oid placement row records them — the side view must
+        # count them (fail closed), exactly as the cap accounting does.
+        inflight: set[str] = set()
         for row in records:
             if not isinstance(row, dict):
                 continue
@@ -270,8 +298,15 @@ class Engine:
                         placed_by_key.setdefault(key, set()).add(
                             str(row["order_id"])
                         )
+                    else:
+                        # placed-without-order_id, or an error:* ack — either
+                        # way, NO terminal evidence and possibly live on venue:
+                        # keep the key inflight for the side gate (review f2).
+                        inflight.add(key)
                 elif s.startswith("rejected:") and open_pend.get(key, 0) > 0:
                     open_pend[key] -= 1
+        # A dangling wire_pending (no paired outcome) is a possibly-live order.
+        inflight |= {k for k, v in open_pend.items() if v > 0}
         self._placed_counts = {
             k: hard.get(k, 0) + open_pend.get(k, 0)
             for k in set(hard) | set(open_pend)
@@ -283,6 +318,55 @@ class Engine:
             if oids <= clean_orders
             and k not in filled and k not in settled and k not in bad_cancel
         }
+        # STATE 1e: genuinely NEW slug-keyed view for the second-side gate.
+        # The cap/reentry sets above are dedup_key-keyed; this one maps each
+        # market_slug to its NON-TERMINAL us_sides (filled-unsettled, resting-
+        # before-clean-cancel, adopted orphan, or ambiguous/possibly-live).
+        # A key is TERMINAL only when SETTLED, or when every placed order is
+        # clean-cancelled AND venue-confirmed terminal-with-zero-fill (review
+        # finding 3 — the venue's "cancelled" report lies; three production
+        # full fills reported so, so the side gate defers on _fill_checked
+        # exactly like the reentry lane's _pending_release). Terminal keys
+        # drop out; the side of every other key JOINS back to its intent row —
+        # fill rows carry NO us_side (review F1/F3), and only the one shared
+        # filled_sides_by_slug derivation (fills.py, reused verbatim per F6)
+        # may read a fill's side. Instance-lane intents (empty slug/side) are
+        # skipped here and in the gate (D4).
+        # intent_by_key grabs the FIRST order_intent row per key across ALL
+        # statuses (placed, wire_pending, error:*) — every one of those rows
+        # carries market_slug/us_side via record(), so a possibly-live pending
+        # key resolves its side just like a placed key (review finding 2).
+        intent_by_key: dict[str, dict] = {}
+        for row in records:
+            if (isinstance(row, dict) and row.get("type") == "order_intent"
+                    and isinstance(row.get("dedup_key"), str)
+                    and row["dedup_key"] not in intent_by_key):
+                intent_by_key[row["dedup_key"]] = row
+        slug_sides_open = {
+            s: set(sides)
+            for s, sides in fills_mod.filled_sides_by_slug(records).items()
+        }
+        # Non-terminal keys = placed candidates plus inflight. Settled keys and
+        # rejected-only keys never show up here (rejected is not placed, not
+        # inflight, and has no dangling pending — a rejection closes the key).
+        for key in set(placed_by_key) | inflight:
+            if key in settled:
+                continue  # terminal: a resolution closed the position
+            oids = placed_by_key.get(key) or set()
+            if key not in filled and oids and (
+                oids <= clean_orders
+                and oids <= self._fill_checked   # venue-confirmed zero-fill
+                and key not in bad_cancel
+            ):
+                continue  # every order venue-confirmed clean + unfilled -> terminal
+            intent = intent_by_key.get(key)
+            slug = intent.get("market_slug") if intent else None
+            side = intent.get("us_side") if intent else None
+            if not (isinstance(slug, str) and slug
+                    and isinstance(side, str) and side):
+                continue  # falsy slug/side (instance-lane / D4) — ungated
+            slug_sides_open.setdefault(slug, set()).add(side)
+        self._slug_sides_open = slug_sides_open
 
     def _skip_row(self, intent: OrderIntent, record: dict, status: str,
                   armed: limits.ArmingState) -> None:
@@ -292,6 +376,38 @@ class Engine:
             self.ledger.append(row)
         except Exception:
             log.exception("skip-row append failed")
+
+    def _second_side_blocked(self, intent: OrderIntent) -> bool:
+        """True when ``intent``'s slug already carries the opposite side.
+
+        THE STATE 1e invariant: never enter one side of a slug while the
+        opposite side (or an unknown-side orphan) still has non-terminal
+        presence. Two sources, either blocks:
+          (a) ``_slug_sides_open`` — the ledger view rebuilt each cycle
+              (D5, restart-safe), sourcing the fill->side join from the one
+              shared filled_sides_by_slug helper (fills.py, review F6 —
+              a fill row has no us_side);
+          (b) ``resting`` — orders THIS process placed/adopted (D3). An
+              ADOPTED ORPHAN (us_side None) is unknown and blocks every new
+              side on the slug (fail closed).
+        An intent with EMPTY slug or side (instance-lane / D4) is never
+        gated — falsy values must not collapse all such intents into one
+        bucket.
+        """
+        slug, side = intent.market_slug, intent.us_side
+        if not (isinstance(slug, str) and slug
+                and isinstance(side, str) and side):
+            return False  # instance-lane (empty slug/side) — ungated (D4)
+        open_sides = self._slug_sides_open.get(slug)
+        if open_sides and any(s != side for s in open_sides):
+            return True  # opposite side open in the ledger view
+        for info in self.resting.values():
+            if info.get("slug") != slug:
+                continue
+            rest_side = info.get("us_side")
+            if rest_side is None or rest_side != side:
+                return True  # adopted orphan (unknown) or opposite — fail closed
+        return False
 
     def _confirm_releases(self) -> None:
         """Fire queued re-entry releases ONLY for orders the fills sync has
@@ -448,7 +564,7 @@ class Engine:
                     {"type": "reconcile", **report, "ts_ns": time.time_ns()}
                 )
             self._last_reconcile = report
-            self._adopt_venue_orders(report)
+            self._adopt_venue_orders(report, records)
             for row in fills_mod.sync(
                 records, pmus._get_client(), self._fill_checked, time.time_ns()
             ):
@@ -461,13 +577,25 @@ class Engine:
         except Exception:
             log.exception("reconcile pass failed (engine continues)")
 
-    def _adopt_venue_orders(self, report: dict) -> None:
+    def _adopt_venue_orders(self, report: dict, records: list[dict] | None = None) -> None:
         """ADOPTION (glm review f1/f3): every live venue order must be under
         THIS process's TTL sweep. Prior-session ledger orders and unknown
         orphans (create errors that were really acks; single-account rail
         says nothing else trades here) both get adopted and cancelled by the
         normal sweep when stale.
         """
+        # dedup_key -> us_side from placed order_intent rows, so an adopted
+        # order with a known key inherits its recorded side (STATE 1e); an
+        # unknown/orphan key stores us_side=None (blocks every side on the
+        # slug until the sweep cancels it — fail closed).
+        side_by_key: dict[str, str] = {}
+        for row in records or []:
+            if (isinstance(row, dict) and row.get("type") == "order_intent"
+                    and isinstance(row.get("dedup_key"), str)
+                    and row["dedup_key"] not in side_by_key
+                    and isinstance(row.get("us_side"), str)
+                    and row["us_side"]):
+                side_by_key[row["dedup_key"]] = row["us_side"]
         for o in (report.get("open_orders") or []) + (
             report.get("unknown_orders") or []
         ):
@@ -476,10 +604,17 @@ class Engine:
                 # Backdated past TTL: an adopted order is by definition
                 # already stale (unmanaged >=60s) — the next sweep cancels
                 # it immediately instead of granting a fresh 150s of
-                # adverse selection (qwen review f7).
+                # adverse selection (qwen review f7). us_side (STATE 1e):
+                # resolved from the venue order's OWN dedup_key when we have
+                # a ledger row for it; an ADOPTED ORPHAN (dedup_key None) has
+                # UNKNOWN side and stores us_side=None — a resting unknown
+                # side on a slug blocks EVERY new side on that slug (D3,
+                # fail closed) until the sweep clears the order.
+                k = o.get("dedup_key")
                 self.resting[oid] = {
                     "slug": o["slug"],
-                    "dedup_key": o.get("dedup_key"),
+                    "dedup_key": k,
+                    "us_side": side_by_key.get(k) if isinstance(k, str) else None,
                     "placed_mono": time.monotonic() - MAKER_TTL_S - 1,
                 }
                 log.warning(

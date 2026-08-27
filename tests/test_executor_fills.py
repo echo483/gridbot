@@ -226,3 +226,34 @@ def test_two_sided_slug_never_manual_exit_released() -> None:
                     "venue_pnl": -2.6, "ts_ns": now})
     cands = _release_candidates(records, [], set(), now)
     assert [c.get("dedup_key") for c in cands] == ["kL"]
+
+
+def test_filled_sides_by_slug_joins_side_from_intent_row() -> None:
+    # STATE 1e shared helper (review F1/F6/D1): a FILL row carries NO us_side —
+    # only ids/dedup_key/price/shares — so the side must be joined back to the
+    # placed order_intent row by dedup_key. Settled keys are excluded.
+    records = [
+        {"type": "order_intent", "status": "placed", "order_id": "L1",
+         "dedup_key": "kL", "market_slug": "m1", "us_side": "long",
+         "price": 0.66, "shares": 4.0},
+        # realistic fill rows — deliberately NO us_side (D1):
+        {"type": "fill", "order_id": "L1", "dedup_key": "kL", "market_slug": "m1",
+         "price": 0.66, "shares": 4.0, "partial": False,
+         "source": "venue_order", "ts_ns": 1},
+        {"type": "order_intent", "status": "placed", "order_id": "S1",
+         "dedup_key": "kS", "market_slug": "m1", "us_side": "short",
+         "price": 0.52, "shares": 5.0},
+        {"type": "fill", "order_id": "S1", "dedup_key": "kS", "market_slug": "m1",
+         "price": 0.52, "shares": 5.0, "partial": False, "source": "venue_order",
+         "ts_ns": 1},
+        # a settled key carries no open side (terminal) — its side must NOT appear
+        {"type": "order_intent", "status": "placed", "order_id": "T1",
+         "dedup_key": "kT", "market_slug": "m2", "us_side": "long",
+         "price": 0.5, "shares": 4.0},
+        {"type": "fill", "order_id": "T1", "dedup_key": "kT", "market_slug": "m2",
+         "price": 0.5, "shares": 3.0, "partial": False, "source": "venue_order",
+         "ts_ns": 1},
+        {"type": "settle", "dedup_key": "kT", "won": True, "venue_pnl": 1.4,
+         "ts_ns": 2},
+    ]
+    assert fills.filled_sides_by_slug(records) == {"m1": {"long", "short"}}

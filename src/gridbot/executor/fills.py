@@ -525,6 +525,40 @@ def _newest_fill_ts(records: list[dict], fresh_fills: list[dict]) -> dict[str, i
     return out
 
 
+def filled_sides_by_slug(records: list[dict]) -> dict[str, set[str]]:
+    """``{slug: {us_side}}`` for the slug's FILLED-and-unsettled keys.
+
+    THE shared derivation of the hold->side join (STATE 1e invariant,
+    review F1/F6). A ``fill`` row carries NO ``us_side`` — only ids,
+    dedup_key, market_slug, price/shares/ts — so any caller that needs a
+    filled key's side MUST join back to the placed ``order_intent`` row by
+    dedup_key, exactly as here. Settled keys and keys without a fill are
+    excluded: a settled side is terminal, and an unfilled key never rests
+    contracts on venue. Both this module's manual-exit release (audit F2)
+    and the engine's second-side gate consume this one function so the
+    invariant cannot drift into two parallel copies.
+    """
+    placed_by_key: dict[str, list[dict]] = {}
+    for row in records:
+        if (isinstance(row, dict) and row.get("type") == "order_intent"
+                and row.get("status") == "placed"
+                and isinstance(row.get("dedup_key"), str)):
+            placed_by_key.setdefault(row["dedup_key"], []).append(row)
+    settled_keys = set(_rows_of(records, "settle"))
+    filled_keys = set(_rows_of(records, "fill"))
+    out: dict[str, set[str]] = {}
+    for key, rows in placed_by_key.items():
+        if key in settled_keys or key not in filled_keys:
+            continue
+        first = rows[0]
+        slug, side = first.get("market_slug"), first.get("us_side")
+        if not (isinstance(slug, str) and slug
+                and isinstance(side, str) and side):
+            continue
+        out.setdefault(slug, set()).add(side)
+    return out
+
+
 def _release_candidates(
     records: list[dict], fresh_fills: list[dict], checked: set[str], now_ns: int
 ) -> list[dict]:
@@ -564,16 +598,13 @@ def _release_candidates(
     # net 5 YES + 5 NO to netPosition 0 while both positions are held;
     # releasing both would free capacity on live inventory and orphan
     # both PnLs). Defer every candidate on such slugs until at least
-    # one side gains real terminal truth.
-    sides_by_slug: dict[str, set[str]] = {}
-    for key, rows in placed_by_key.items():
-        if key in settled_keys or key not in latest_fill_ts:
-            continue
-        first = rows[0]
-        slug, side = first.get("market_slug"), first.get("us_side")
-        if isinstance(slug, str) and isinstance(side, str):
-            sides_by_slug.setdefault(slug, set()).add(side)
-    two_sided = {s for s, sides in sides_by_slug.items() if len(sides) > 1}
+    # one side gains real terminal truth. The side join is the shared
+    # filled_sides_by_slug helper (a fill row has no us_side); fresh_fills
+    # from this pass count as fills, so they are folded into the input.
+    two_sided = {
+        s for s, sides in filled_sides_by_slug(records + fresh_fills).items()
+        if len(sides) > 1
+    }
 
     out = []
     for key in sorted(placed_by_key):
