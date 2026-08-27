@@ -97,6 +97,23 @@ listing behavior by the venue. Observation to test, not assume:
 
 Priority: below Queues 13/14. Owner: Claude Code / Hermes analysis.
 
+## Queue 16 — band-skip near-cross measurement (failure sweep H4, 08-27)
+
+67% of raw intents die at the band gate. Measure, per band-skip, whether
+the market crosses INTO the accepted band within 60–120s of the skip.
+A non-trivial cross-in rate means the price cadence read lags the edge
+(timing problem); near-zero means the 67% is honest no-edge. Data: shadow
+mapentry rows + captured books, analysis lane only.
+
+## Queue 17 — rail-blocked counterfactual (failure sweep H3, 08-27)
+
+72.8% of band survivors are killed by capacity/reentry caps, not price.
+Before ANY cap change: replay the 91 rail-blocked intents against
+captured books — would-fill, then settled edge (same method as Queue 13).
+If blocked intents would have been cost-positive, capital scaling has a
+measured payoff; if not, the caps are free. No cap change without a
+pre-registered amendment.
+
 ## Rails
 
 - All four remain maker-only: we never cross the ask (no chasing).
