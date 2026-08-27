@@ -83,7 +83,13 @@ MANUAL_EXIT_MIN_FILL_AGE_NS = 120_000_000_000
 RESOLUTION_RECHECK_NS = 24 * 3600 * 1_000_000_000
 
 # Size spellings probed in a venue position, in priority order.
-_SIZE_FIELDS = ("quantity", "size", "shares")
+# "netPosition" is the field the REAL venue uses — verified 2026-08-27
+# 13:10Z against a live HELD position (positions dict keyed by slug,
+# entry {"netPosition": "5", "qtyBought": "5", ...}); the others are
+# defensive spellings. Before this capture an unlisted spelling made a
+# held position read UNPARSEABLE, which correctly deferred (fail-closed)
+# but could never take the parsed-zero release path.
+_SIZE_FIELDS = ("netPosition", "quantity", "size", "shares")
 
 
 def _amount(a: object) -> float | None:

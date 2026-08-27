@@ -190,3 +190,13 @@ class TestSync:
         client = _FakeClient({"A": _order(cum=2)}, RuntimeError("down"))
         rows = fills.sync(records, client, set(), 1)
         assert [r["type"] for r in rows] == ["fill"]  # fill lands, settle waits
+
+
+def test_pos_size_parses_real_venue_netposition() -> None:
+    # Live capture 2026-08-27 13:10Z while HOLDING: the real venue keys
+    # positions by slug with the size under "netPosition".
+    from gridbot.executor.fills import _pos_size
+
+    real = {"netPosition": "5", "qtyBought": "5", "qtySold": "0",
+            "cost": {"value": "2.8300", "currency": "USD"}, "expired": False}
+    assert _pos_size(real) == 5.0
