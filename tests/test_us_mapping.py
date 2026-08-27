@@ -218,3 +218,22 @@ class TestTeamSearchLane:
         team_qs = [q for q in client.queries
                    if q not in ("cs2", "esports", "valorant", "league of legends")]
         assert team_qs == ["NuTorious", "Overtake Sector"]
+
+
+class TestVenueTruncatedNames:
+    def test_truncated_org_suffix_matches(self) -> None:
+        # PMUS lists 'Overtake' for GRID 'Overtake Sector' (live 08-27) —
+        # reverse full-containment must rescue the match.
+        g = _grid("42", "Overtake Sector", "NuTorious", "2026-08-27T01:00:00Z")
+        e = _event("cs2-nt-ot-2026-08-27", "NuTorious", "Overtake",
+                   "2026-08-27T01:00:00Z")
+        m = match_grid_to_event(g, e)
+        assert m is not None and m["coverage"] == 1.0
+
+    def test_stray_shared_token_still_refused(self) -> None:
+        # Partial overlap without containment must NOT match: venue name
+        # 'Sector Nine' shares 'sector' with 'Overtake Sector' but is not
+        # contained in it.
+        g = _grid("43", "Overtake Sector", "NuTorious", "2026-08-27T01:00:00Z")
+        e = _event("cs2-x", "NuTorious", "Sector Nine", "2026-08-27T01:00:00Z")
+        assert match_grid_to_event(g, e) is None

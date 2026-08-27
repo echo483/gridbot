@@ -63,6 +63,25 @@ def _coverage(team: str, hay: set[str]) -> float:
     return len(team_tokens & hay) / len(team_tokens)
 
 
+def _team_match_strength(grid_team: str, pmus_names: list[str], hay: set[str]) -> float:
+    """Directional name coverage for one GRID team.
+
+    Forward: the GRID name's tokens found among the venue names (original
+    rule). Reverse: some venue name FULLY contained in the GRID name — the
+    venue truncates org suffixes (live 2026-08-27: PMUS lists 'Overtake'
+    for GRID 'Overtake Sector', which scored 0.5 forward and lost a live
+    tradeable match). Reverse requires complete containment so a stray
+    shared token can never manufacture a match on its own.
+    """
+    fwd = _coverage(grid_team, hay)
+    grid_tokens = _tokens(grid_team)
+    for name in pmus_names:
+        name_tokens = _tokens(name)
+        if name_tokens and name_tokens <= grid_tokens:
+            return 1.0
+    return fwd
+
+
 def pmus_team_names(event: dict) -> list[str]:
     """Participating team names from a PMUS event (event.teams, else title)."""
     names = [t.get("name") for t in event.get("teams") or [] if t.get("name")]
@@ -109,7 +128,7 @@ def match_grid_to_event(
     if skew_h > window_h:
         return None
     hay = _tokens(" ".join(pmus_teams))
-    cov = min(_coverage(t, hay) for t in grid_teams)
+    cov = min(_team_match_strength(t, pmus_teams, hay) for t in grid_teams)
     if cov < COVERAGE_FLOOR:
         return None
     score = cov - min(skew_h / window_h, 1.0) * 0.1
