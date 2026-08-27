@@ -1006,3 +1006,30 @@ class TestSecondSide:
         self._refresh(eng)
         assert eng._slug_sides_open == {}  # forgiven: venue-confirmed no-fill
         assert eng.handle(self._short(), armed) == "placed"
+
+    def test_restart_terminal_from_fill_check_rows_alone(self, tmp_path,
+                                                         monkeypatch) -> None:
+        # audit F3/F4/F8: a FRESH engine (restart — empty _fill_checked) must
+        # recover venue-confirmed terminal purely from ledger rows: placed +
+        # clean cancel + fill_check zero-fill proof. Without the fill_check
+        # row the side stays blocked until the sync re-polls the oid.
+        eng, engine_mod, _ = self._armed(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(self._long(), armed) == "placed"
+        key = next(iter(eng.resting.values()))["dedup_key"]
+        eng.ledger.append({"type": "cancel", "dedup_key": key, "order_id": "OID1",
+                           "status": "cancelled", "source": "engine_ttl",
+                           "ts_ns": 2})
+        eng.ledger.append({"type": "fill_check", "dedup_key": key,
+                           "order_id": "OID1", "result": "zero_fill", "ts_ns": 3})
+        fresh = engine_mod.Engine(ledger=engine_mod.IntentLedger(self._tmp))
+        self._refresh(fresh)
+        assert fresh._fill_checked == {"OID1"}
+        assert fresh._slug_sides_open == {}  # terminal across the restart
+        # and WITHOUT the fill_check row the same ledger stays blocked:
+        blocked = engine_mod.Engine(ledger=engine_mod.IntentLedger(self._tmp))
+        records = [r for r in __import__("gridbot.executor.ledger",
+                   fromlist=["load_records"]).load_records(self._tmp / "executor")
+                   if r.get("type") != "fill_check"]
+        blocked._refresh_ledger_state(records)
+        assert blocked._slug_sides_open == {self.SLUG: {"long"}}

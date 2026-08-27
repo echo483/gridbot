@@ -124,8 +124,12 @@ class TestSync:
         client = _FakeClient({"A": _order(cum=0)})
         checked: set[str] = set()
         rows = fills.sync([_intent()], client, checked, 1)
-        assert [r["status"] for r in rows] == ["cancelled"]
-        assert rows[0]["source"] == "venue_terminal_no_fill"
+        # zero-fill proof persists as a fill_check row (audit F3/F4/F8:
+        # restart-safe ``checked``) alongside the corrective release:
+        assert [r["type"] for r in rows] == ["fill_check", "cancel"]
+        assert rows[0]["result"] == "zero_fill" and rows[0]["order_id"] == "A"
+        assert rows[1]["status"] == "cancelled"
+        assert rows[1]["source"] == "venue_terminal_no_fill"
         assert "A" in checked
         # and it is never retrieved again
         client2 = _FakeClient({})  # retrieve would raise
@@ -139,7 +143,10 @@ class TestSync:
         ]
         client = _FakeClient({"A": _order(cum=0)})
         checked: set[str] = set()
-        assert fills.sync(records, client, checked, 1) == []
+        rows = fills.sync(records, client, checked, 1)
+        # no corrective needed (own clean cancel exists) — only the durable
+        # zero-fill proof is written:
+        assert [r["type"] for r in rows] == ["fill_check"]
         assert "A" in checked
 
     def test_existing_fill_row_not_duplicated(self) -> None:
@@ -175,9 +182,9 @@ class TestSync:
         ]
         client = _FakeClient({"A": _order(cum=0, state="ORDER_STATE_EXPIRED")})
         rows = fills.sync(records, client, set(), 5)
-        assert len(rows) == 1
-        assert rows[0]["type"] == "cancel" and rows[0]["status"] == "cancelled"
-        assert rows[0]["source"] == "venue_terminal_no_fill"
+        assert [r["type"] for r in rows] == ["fill_check", "cancel"]
+        assert rows[1]["status"] == "cancelled"
+        assert rows[1]["source"] == "venue_terminal_no_fill"
 
     def test_retrieve_error_retries_next_pass(self) -> None:
         client = _FakeClient({})  # every retrieve raises
@@ -269,3 +276,4 @@ def test_filled_sides_by_slug_joins_side_from_intent_row() -> None:
     assert fills.filled_sides_by_slug(records) == {
         "m1": {"long", "short"}, "m3": {"short"},
     }
+

@@ -13,7 +13,6 @@ Exit 0 = every invariant holds; non-zero prints violations.
 
 from __future__ import annotations
 
-import json
 import sys
 import tempfile
 import time
@@ -25,16 +24,15 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 def main() -> int:
+    from _jsonl import read_rows
+
     src_path = Path(sys.argv[1])
-    rows = []
-    for line in src_path.read_text().splitlines():
-        try:
-            r = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(r, dict):
-            rows.append(r)
+    rows = list(read_rows(src_path))
     print(f"replaying {len(rows)} real rows from {src_path.name}")
+    if not rows:
+        print("EMPTY input — wrong file? signal replays want the "
+              "data/shadow/mapentry-YYYYMMDD.jsonl day file", file=sys.stderr)
+        return 1
 
     tmp = Path(tempfile.mkdtemp(prefix="gridbot-replay-"))
     (tmp / "shadow").mkdir()

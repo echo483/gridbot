@@ -299,6 +299,14 @@ class Engine:
                 filled.add(key)
                 if row.get("order_id"):
                     filled_orders.add(str(row["order_id"]))
+                    # a fill row is durable venue truth for the oid too
+                    self._fill_checked.add(str(row["order_id"]))
+            elif t == "fill_check":
+                # Durable venue zero-fill proof (audit F3/F4/F8): restores
+                # _fill_checked across restarts BEFORE the slug-view loop
+                # below classifies terminal keys.
+                if row.get("order_id"):
+                    self._fill_checked.add(str(row["order_id"]))
             elif t == "settle":
                 settled.add(key)
             elif t == "cancel":

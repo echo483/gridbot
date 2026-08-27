@@ -687,13 +687,15 @@ def _sync_manual_exits(
     # Same-pass precedence: a resolution settle written moments ago in
     # THIS pass removes the key from release candidacy here. Earlier-pass
     # settles (truth or release) were already excluded by
-    # _release_candidates' settled-keys gate.
+    # _release_candidates' settled-keys gate. ANY settle source counts —
+    # the original MANUAL_EXIT_SOURCE filter could never match the
+    # resolution settles actually passed in (audit M2), leaving the
+    # fetched-empty guard below as the only same-pass suppression; this
+    # makes the documented precedence real (belt and suspenders).
     released_this_pass = {
         row.get("dedup_key")
         for row in release_rows
-        if isinstance(row, dict)
-        and row.get("type") == "settle"
-        and row.get("source") == MANUAL_EXIT_SOURCE
+        if isinstance(row, dict) and row.get("type") == "settle"
     }
     candidates = [
         row for row in _release_candidates(records, fresh_fills, checked, now_ns)
@@ -799,6 +801,20 @@ def _sync_fills(
                          "terminal state", intent.get("market_slug"), oid)
             continue
         row = fill_row(intent, order, now_ns)
+        if not row:
+            # Persist the venue proof itself (audit F3/F4/F8): ``checked``
+            # is process-local, so without this row every restart forgets
+            # which oids were venue-confirmed zero-fill — re-entry and the
+            # second-side gate stay blocked while the sync re-polls them
+            # one rate-limited retrieve at a time. A fill_check row makes
+            # the confirmation restart-safe; every ledger consumer filters
+            # by type, so the new type is inert everywhere else.
+            new_rows.append({
+                "type": "fill_check", "order_id": oid,
+                "dedup_key": intent.get("dedup_key"),
+                "market_slug": intent.get("market_slug"),
+                "result": "zero_fill", "ts_ns": now_ns,
+            })
         if row:
             new_rows.append(row)
             log.warning("FILL recorded from venue: %s %s x%s @%s%s",
