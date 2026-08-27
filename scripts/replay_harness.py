@@ -42,7 +42,8 @@ def main() -> int:
     from gridbot import config
     config.DATA_DIR = tmp  # isolated ledger; never touches real data/
 
-    from gridbot.executor import engine as engine_mod
+    from gridbot.executor.intents import US_BAND_GATE
+from gridbot.executor import engine as engine_mod
     from gridbot.executor import ledger as ledger_mod
     from gridbot.executor import limits, pmus
 
@@ -103,12 +104,12 @@ def main() -> int:
 
     for r in placed:
         p = r.get("p_map")
-        if not (isinstance(p, (int, float)) and 0.50 <= p <= 0.80):
+        if not (isinstance(p, (int, float)) and BAND_LO <= p <= BAND_HI):
             violations.append(f"band gate violated: placed with p_map={p} "
                               f"key={r.get('dedup_key')}")
     for r in gated:
         p = r.get("p_map")
-        if isinstance(p, (int, float)) and 0.50 <= p <= 0.80:
+        if isinstance(p, (int, float)) and BAND_LO <= p <= BAND_HI:
             violations.append(f"in-band row wrongly gated: p_map={p}")
 
     if len(cancels) != len(placed):
