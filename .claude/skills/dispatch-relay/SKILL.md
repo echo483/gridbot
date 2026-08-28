@@ -35,7 +35,13 @@ agents/<lane>.md (version-controlled preambles, prepended automatically).
 - Require verification the agent can run: exact commands, expected
   baseline numbers, "confirm the count GREW".
 - Judge by ARTIFACTS on disk, never transcripts (mojibake channel).
-  Verify files changed before believing "done".
+  Verify files changed before believing "done" — **and distrust agent
+  self-reports in BOTH directions.** Sibling-project evidence (cs2agent,
+  08-27): a 12-agent extraction reported 9/12 FAILED on a model quota;
+  all twelve had already written complete valid fragments — the quota
+  only killed their closing messages. Believing the failure report would
+  have discarded a finished 1.4M-token extraction. Check the files on a
+  reported failure exactly as rigorously as on a reported success.
 - Prompts ride argv (visible in /proc/<pid>/cmdline): NEVER paste
   secrets or key material into a dispatch prompt.
 - Claude line-by-line review is the LAST gate regardless of relay

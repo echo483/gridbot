@@ -129,6 +129,22 @@ data/kg/graph.kuzu   # gitignored, disposable
 tests/test_kg_*.py
 ```
 
+## Sibling-project note (cs2agent, 08-27)
+
+cs2agent built a different KG on the same two policies (pipelines write /
+agents propose; full rebuildability) — graphify over repo + vault, served
+as a stdio MCP server. Different substrate on purpose: it is an ARCHIVE
+of prose that already encodes its ontology, while gridbot is a LIVE
+system whose facts must be re-derived from changing sources. Their spec:
+cs2agent `docs/superpowers/specs/2026-08-27-knowledge-graph-and-multi-agent-design.md`
+(worth diffing before phase 3). Operational gotcha they hit, relevant if
+we ever mount a graphify-style server: `graphifyy` needs its `mcp` extra
+(`uv tool install --upgrade 'graphifyy[mcp]'`) or the server dies at
+import with a misleading traceback. cs2agent does NOT share our hermes
+install (global-per-install model config would collide) — it calls
+OpenRouter directly with its own key, so our hermes surface stays
+single-tenant.
+
 ## Rails
 
 Slow loop only; never imported by executor/capture modules (enforce: no
