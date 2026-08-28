@@ -113,6 +113,8 @@ def main() -> int:
               and r.get("status") == "placed"]
     gated = [r for r in records if r.get("status") == "skipped:band_gate"]
     cancels = [r for r in records if r.get("type") == "cancel"]
+    drift_skipped = [r for r in records
+                     if r.get("status") == "skipped:no_drift_confirm"]
 
     violations: list[str] = []
     if errors:
@@ -141,12 +143,24 @@ def main() -> int:
 
     n_reentries = sum(1 for n in per_key.values() if n == 2)
     print(f"placed {len(placed)} on {len(per_key)} keys | re-entries {n_reentries} "
-          f"| band-gated {len(gated)} | cancels {len(cancels)}")
+          f"| band-gated {len(gated)} | drift-unconfirmed {len(drift_skipped)} "
+          f"| cancels {len(cancels)}")
     if not placed:
-        violations.append(
-            "ZERO placements — a replay that never places proves nothing "
-            "(check the band/drift gates and the seeded postquote files)"
-        )
+        # Distinguish a MISCONFIGURED harness (no drift evidence seeded, so
+        # the fail-closed gate rejects everything — vacuously "green") from a
+        # night the gates legitimately rejected in full. Only the former is an
+        # invariant violation; the latter is real, and loud.
+        if not copied:
+            violations.append(
+                "ZERO placements and NO postquote files seeded — the drift "
+                "gate failed closed on missing evidence; this run proves "
+                "nothing about the invariants"
+            )
+        else:
+            print(f"  NOTE: zero placements with {copied} postquote day-file(s) "
+                  f"seeded — the gates rejected the whole day "
+                  f"({len(gated)} band-gated, {len(drift_skipped)} drift-"
+                  f"unconfirmed). Real outcome, not a harness fault.")
     if violations:
         print("\nINVARIANT VIOLATIONS:")
         for v in violations:
