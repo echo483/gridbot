@@ -88,6 +88,14 @@ ROUTES: dict[str, tuple[str, str | None, str | None]] = {
     "programming2": ("deepseek/deepseek-v4-flash-0731", None, "high"),  # full alternate builder — rotate real builds here, judge by artifacts
     "search": ("deepseek/deepseek-v4-flash-0731", None, "medium"),      # retrieval/digest/extract over pasted material — its #1 category per user
     "analysis": ("deepseek/deepseek-v4-flash-0731", None, "medium"),    # slow-loop data reads, log digestion, report drafts
+    # VERIFICATION lane (user 08-28): the Claude console credits buy exactly
+    # one thing — adversarial verification of what OpenRouter built, plus
+    # method review of quant/backtest/sim harnesses. Provider "anthropic"
+    # means this does NOT shell out to hermes: the model, effort and key are
+    # pinned HERE, in git, so hermes' global default/fallback/MoA/cron model
+    # config can never reach this lane (the config-drift failure mode).
+    # It may propose production code; nothing it writes lands unreviewed.
+    "verify": ("claude-opus-5", "anthropic", "xhigh"),
 }
 
 
@@ -110,6 +118,18 @@ def _preamble(kind: str) -> str:
 def _run(kind: str, prompt: str, timeout: int) -> tuple[int, str]:
     model, provider, reasoning = ROUTES[kind]
     prompt = _preamble(kind) + prompt
+    if provider == "anthropic":
+        # Direct Claude API call: key read from the OS keyring inside the
+        # process, never argv (visible in /proc/<pid>/cmdline), never env.
+        from _anthropic_lane import run as _anthropic_run
+        print(f"dispatch[{kind}] -> {model} (anthropic API)", file=sys.stderr)
+        try:
+            return 0, _anthropic_run(prompt, model=model, effort=reasoning or "high",
+                                     label=kind)
+        except Exception as exc:  # noqa: BLE001 — budget/API failures report, never crash a relay
+            print(f"dispatch[{kind}] FAILED: {type(exc).__name__}: {exc}",
+                  file=sys.stderr)
+            return 1, ""
     cmd = ["hermes", "-m", model]
     if provider:
         cmd += ["--provider", provider]
@@ -195,10 +215,11 @@ def main() -> int:
                     default="programming",
                     help="pair mode builder lane: programming=glm-flash, "
                          "programming2=deepseek-0731 (alternate-builder rotation)")
-    ap.add_argument("--reviewer", choices=["review", "review2"],
+    ap.add_argument("--reviewer", choices=["review", "review2", "verify"],
                     default="review",
-                    help="pair mode reviewer lane: review=opus xhigh "
-                         "(critical code), review2=glm-5.3 high (routine)")
+                    help="pair mode reviewer lane: review=opus via hermes, "
+                         "review2=glm-5.3 (routine), verify=Claude API "
+                         "(console credits; trade-path + quant method)")
     args = ap.parse_args()
 
     if args.kind == "pair":
