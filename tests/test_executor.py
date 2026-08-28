@@ -273,12 +273,10 @@ class TestBandGate:
     def test_pure_band_edges(self) -> None:
         from gridbot.executor.intents import us_band_gated
 
-        assert us_band_gated(0.39) is True
-        assert us_band_gated(0.40) is False
+        assert us_band_gated(0.49) is True
         assert us_band_gated(0.50) is False
         assert us_band_gated(0.80) is False
-        assert us_band_gated(0.90) is False
-        assert us_band_gated(0.91) is True
+        assert us_band_gated(0.81) is True
         assert us_band_gated(None) is True  # fail closed
         assert us_band_gated("0.7") is True
 
@@ -688,8 +686,11 @@ class TestSecondSide:
     def _short(self, **over) -> dict:
         # A SHORT entry on the SAME slug: different dedup_key (key includes
         # us_side) — precisely the 08-27 situation that must be gated.
+        # p_map=0.70 keeps the row inside the reverted US_BAND_GATE
+        # (0.50, 0.80) so these tests exercise second-side logic, not the
+        # band gate (H-PRICEDIN1 revert).
         row = _mapentry_row(us_side="short", side_ask=0.30, entry_price_max=0.35,
-                            market_slug=self.SLUG)
+                            p_map=0.70, market_slug=self.SLUG)
         row.update(over)
         return row
 

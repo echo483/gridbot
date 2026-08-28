@@ -118,20 +118,21 @@ def build_intent(instance: dict, stake_cap_usd: float) -> OrderIntent | None:
     )
 
 
-US_BAND_GATE = (0.40, 0.90)
+US_BAND_GATE = (0.50, 0.80)  # H-PRICEDIN1 revert (H-BAND1-AMEND2-REVERT)
 
 
 def us_band_gated(p_map: object) -> bool:
     """Executor risk policy: place US map entries only while P_map is inside
     US_BAND_GATE.
 
-    EXPERIMENT (temporary, user directive 2026-08-27): band widened from the
-    frozen 2026-08-26 (0.50, 0.80) to (0.40, 0.90) — symmetric +/-10pt — to
-    observe model predictive ability more broadly. This is a TEST amendment,
-    NOT an edge claim; expect lower average edge. The extreme tails remain
-    gated because the race aggregation over-forecasts near p_map ~0/1, where
-    -8..-16 pts settled edge was measured (cs2agent ADR-0038 diagnostic).
-    Reversible by reverting this one constant.
+    REVERTED (user directive 2026-08-28, H-PRICEDIN1 / H-BAND1-AMEND2-REVERT):
+    back to the frozen 2026-08-26 (0.50, 0.80) from the 2026-08-27 test
+    widening (0.40, 0.90). Evidence: docs/analysis/2026-08-28-priced-in-test.md
+    — live fill win% 0.20-0.67 vs corpus anchors 0.83-0.85, and postquote
+    oriented drift at +120s of only +0.5..+0.94pt against 10-30pt discounts
+    paid; the drift cannot repay the discount. Entry-bucket licensing is now
+    governed by the registered drift diagnostic (+1.0pt at 120s bar), not by
+    band width. Reversible by changing this one constant.
 
     Policy layer only: the H-MAPENTRY1 recording population and frozen bar are
     untouched; gated rows are still ledgered for evidence. Returns True when
