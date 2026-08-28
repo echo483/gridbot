@@ -1,6 +1,9 @@
 # gridbot — system state baseline
 
 Frozen 2026-08-26 ~00:15 PT, the night of the first live-small fire.
+**Updated 2026-08-28** with the first calibration of the traded quantity and
+the fill-selection measurement — see PROVEN below; both change how the
+running PnL should be read.
 **Fresh agent? Read in this order:** `CLAUDE.md` (iron rails — merge-blocking),
 this file, `docs/experiments/registry.jsonl` (every frozen hypothesis),
 `docs/LIVE_FIRE.md` (arming + runbook). The memory directory
@@ -27,6 +30,26 @@ loop only: analysis, reviews, reports, hypothesis drafts.
 | Event lanes track their bars | MANADV 91/80 win 0.956 (read it clock-stratified per H-MANADV1-CLOCKSTRAT before any verdict); ECONBUY ≥10k 199/120 win 0.83 (in corpus CI); PISTOL 66/100 win 0.83 |
 | EV positive at conservative bound | Wilson-lo EV/contract at disciplined entry: MANADV +.042, thr0.85 +.022, thr0.75 +.008, thr0.65 +.004 (`scripts/quant_eval.py`, data/analysis/quant_eval-*.json) |
 | GRID↔PMUS visibility | Mapping snapshot every 15 min: tier-1 matches join at coverage 1.0 (AURORA-G2, Spirit, NAVI-M80...). `data/pmus/mappings-*.jsonl` |
+| **The traded number has skill but is overconfident** | 2026-08-28, first calibration of `p_map` itself (not q_round) against GRID's own winner oracle, 277 resolved maps / 11,016 evaluations: Brier 0.1920 vs base-rate 0.2394, **skill +0.198** — but every traded bucket falls short of its forecast (0.9–1.0 predicts 0.950 realizes 0.828; 0.8–0.9 → 0.669; 0.7–0.8 → 0.602). `scripts/pmap_calibration.py`, H-MAPENTRY1-NOTE5 |
+| **The running loss is not evidence** | ~1,500 settled trades separate a +2pt edge from zero at 95% (σ=√(p(1−p))≈0.40); we have 13. The 13 give mean −$0.615, SE $0.44, CI95 (−1.48, +0.25) — indistinguishable from zero AND from a real edge. Four independent models derived this number in parallel. |
+
+**Where the money actually goes (2026-08-28, H-MAPENTRY1-NOTE5/NOTE6).**
+Paper edge on the entry signal is **+2.8pt/contract** deduped to one entry
+per map book (n=117). Realized is −61pt/trade. The gap is **fill
+selection**, not signal: of 114 opportunities, the 41% that would have
+filled run win 0.553 / EV −3.5pt while the 59% that never fill run win
+0.672 / EV +7.5pt, at the *same* price — a **−6.5pt selection cost**.
+Nothing there is significant (every CI spans zero; z=1.29, p≈0.20;
+resolving it needs ~500 filled orders vs 47 held) — direction only.
+Corroborated analytically: qualification forces `side_ask ≤ p_map − 0.04`,
+so `side_ask − 0.01 ≤ p_map − 0.05` and **`entry_price_max` never binds**.
+The posted price is always `side_ask − 0.01`: the model gates *whether* to
+enter, never *at what price*. Entry pricing is book-anchored, not
+fair-anchored. `scripts/fill_conditional_edge.py`.
+**Two amendment candidates recorded, NEITHER applied** (both need their own
+pre-registration + held-out window): trade a calibrated `p_cal` instead of
+raw `p_map`; or widen `ENTRY_MARGIN` to cover the measured bias. An
+execution-side change is the third, and the mechanism now points there.
 
 **Priced-in finding (2026-08-28, H-PRICEDIN1):** the "discount" is NOT edge.
 Fill outcomes by discount bucket (n=13 fills, 2,844 book evals) run 0.20–0.67
