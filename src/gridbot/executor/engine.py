@@ -26,9 +26,11 @@ from gridbot.executor import fills as fills_mod
 from gridbot.executor import ledger as ledger_mod
 from gridbot.executor import limits, pmus, reconcile
 from gridbot.executor.intents import (
+    DRIFT_WINDOW,
     OrderIntent,
     build_intent,
     build_us_intent,
+    drift_confirmed,
     us_band_gated,
 )
 from gridbot.instruments.shadow import Follow
@@ -39,6 +41,43 @@ CYCLE_S = 2.0
 RECONCILE_EVERY = 30  # armed only: venue orders.list vs ledger every ~60s
 MAKER_TTL_S = 150.0  # M5: pull unfilled maker quotes — a fair-value quote
 # older than ~2 rounds is stale against a live map and pure adverse selection
+
+
+def recent_postquote_moves(
+    shadow_dir: Path, slug: str, n: int = 3, today: str | None = None
+) -> list[float]:
+    """Last ``n`` oriented postquote moves for ``slug``, oldest first.
+
+    Reads data/shadow/postquote-<day>.jsonl (today + prior day — the same
+    two-day file pattern as the mapping/settle day-files). Rows with a
+    missing/non-numeric ``oriented_move`` are skipped. Missing files or no
+    samples for the slug return [] — the drift gate fails closed on that.
+    """
+    if not slug:
+        return []
+    now = datetime.now(UTC)
+    day0 = today or f"{now:%Y%m%d}"
+    yday = f"{datetime.fromtimestamp(now.timestamp() - 86400, UTC):%Y%m%d}"
+    moves: list[float] = []
+    for day in (yday, day0):  # chronological so [-n:] keeps the most recent
+        path = shadow_dir / f"postquote-{day}.jsonl"
+        if not path.exists():
+            continue
+        with open(path) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if row.get("type") != "postquote" or row.get("market_slug") != slug:
+                    continue
+                m = row.get("oriented_move")
+                if isinstance(m, (int, float)) and not isinstance(m, bool):
+                    moves.append(float(m))
+    return moves[-n:]
 
 
 def _decision_row(
@@ -87,6 +126,8 @@ class Engine:
         # market slug/side + the frozen entry rule evaluated against a real
         # book — the executor only converts, caps and dedups them.
         self.follow_us = Follow(config.DATA_DIR / "shadow", "mapentry", from_start=False)
+        # Drift-confirmation lookup dir (postquote day-files live here).
+        self.shadow_dir = config.DATA_DIR / "shadow"
         self.seen: set[str] = set()
         self._cycles = 0
         # Orders THIS process placed and has not yet released: order_id ->
@@ -180,6 +221,24 @@ class Engine:
             log.info("band gate: %s p_map=%s held out of armed band",
                      intent.dedup_key, record.get("p_map"))
             return "skipped:band_gate"
+        # DRIFT-CONFIRMATION gate (priced-in analysis 2026-08-28, licensed
+        # action 2): the market must START moving our way before we pay.
+        # Looks up the last 3 oriented postquote samples for the slug and
+        # requires their sum >= DRIFT_MIN_CONFIRM. Missing/empty data fails
+        # CLOSED. Identical in dry_run so the armed decision path stays
+        # byte-identical; dedup NOT consumed (a later confirmed crossing on
+        # the same book may still enter), mirroring the band gate.
+        if kind == "mapentry":
+            moves = recent_postquote_moves(
+                self.shadow_dir, intent.market_slug, n=DRIFT_WINDOW
+            )
+            if not drift_confirmed(moves):
+                self._skip_row(intent, record, "skipped:no_drift_confirm", armed)
+                log.info(
+                    "drift gate: %s %s on %s unconfirmed (moves=%s)",
+                    intent.dedup_key, intent.us_side, intent.market_slug, moves,
+                )
+                return "skipped:no_drift_confirm"
         # INVARIANT (STATE 1e, live loss 08-27): never enter a side of a slug
         # while the OPPOSITE side has non-terminal presence — the engine held
         # LONG on astatc-cs2-ace-unity-2026-08-27-map2 then bought SHORT of

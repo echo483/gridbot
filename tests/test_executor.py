@@ -170,6 +170,33 @@ class TestPmusWire:
         assert pmus.place(wired) == ("error:ambiguous_ack", None)
 
 
+def _seed_drift(tmp_path, slug="astatc-cs2-aur-g2-map2",
+                moves=(0.01, 0.01, 0.01), day=None) -> None:
+    """Write a postquote day-file with confirmed oriented drift for slug.
+
+    Default moves sum to +0.03 >= DRIFT_MIN_CONFIRM, so drift-gated mapentry
+    placements proceed exactly as they did before the gate existed (existing
+    placement tests). Pass moves that sum below the threshold to test the
+    skip path.
+    """
+    import json as _json
+
+    from datetime import UTC, datetime as _dt
+
+    if day is None:
+        day = f"{_dt.now(UTC):%Y%m%d}"
+    shadow = tmp_path / "shadow"
+    shadow.mkdir(exist_ok=True)
+    rows = [
+        {"type": "postquote", "market_slug": slug, "us_side": "long",
+         "oriented_move": m}
+        for m in moves
+    ]
+    with open(shadow / f"postquote-{day}.jsonl", "a") as fh:
+        for r in rows:
+            fh.write(_json.dumps(r) + "\n")
+
+
 def _mapentry_row(**over) -> dict:
     base = {
         "type": "mapentry",
@@ -250,6 +277,7 @@ class TestUsIntent:
 
         monkeypatch.setattr(config, "DATA_DIR", tmp_path)
         (tmp_path / "shadow").mkdir()
+        _seed_drift(tmp_path)
         eng = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
         status = eng.handle(_mapentry_row(p_map=0.75), limits.ArmingState(dry_run=True))
         assert status == "dry_run"
@@ -286,6 +314,7 @@ class TestBandGate:
 
         monkeypatch.setattr(config, "DATA_DIR", tmp_path)
         (tmp_path / "shadow").mkdir()
+        _seed_drift(tmp_path)
         return engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
 
     def _rows(self, tmp_path):
@@ -400,6 +429,7 @@ class TestStaleSweep:
         monkeypatch.setattr(config, "DATA_DIR", tmp_path)
         (tmp_path / "shadow").mkdir()
         monkeypatch.setattr(pmus, "place", lambda _i: ("placed", "OID9"))
+        _seed_drift(tmp_path)
         eng = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
         status = eng.handle(_mapentry_row(p_map=0.75), limits.ArmingState(dry_run=False))
         assert status == "placed"
@@ -467,6 +497,7 @@ class TestCycleResilience:
         monkeypatch.setattr(config, "DATA_DIR", tmp_path)
         (tmp_path / "shadow").mkdir()
         monkeypatch.setattr(pmus, "place", lambda _i: ("placed", "OID9"))
+        _seed_drift(tmp_path)
         eng = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
         assert eng.handle(_mapentry_row(p_map=0.75), limits.ArmingState(dry_run=False)) == "placed"
 
@@ -511,6 +542,8 @@ class TestReentry:
 
         monkeypatch.setattr(config, "DATA_DIR", tmp_path)
         (tmp_path / "shadow").mkdir()
+        _seed_drift(tmp_path)
+        _seed_drift(tmp_path, slug="astatc-cs2-ace-unity-2026-08-27-map2")
         self._oid = 0
 
         def _place(_i):
@@ -666,6 +699,8 @@ class TestSecondSide:
 
         monkeypatch.setattr(config, "DATA_DIR", tmp_path)
         (tmp_path / "shadow").mkdir()
+        _seed_drift(tmp_path)
+        _seed_drift(tmp_path, slug="astatc-cs2-ace-unity-2026-08-27-map2")
         self._oid = 0
 
         def _place(_i):
@@ -1032,3 +1067,173 @@ class TestSecondSide:
                    if r.get("type") != "fill_check"]
         blocked._refresh_ledger_state(records)
         assert blocked._slug_sides_open == {self.SLUG: {"long"}}
+
+
+class TestDriftConfirm:
+    """DRIFT-CONFIRMATION gate (priced-in analysis 2026-08-28, licensed
+    action 2): a mapentry placement requires the last 3 oriented postquote
+    samples for its slug to sum >= +0.5pt in our side's favor. Missing or
+    empty data fails CLOSED."""
+
+    SLUG = "astatc-cs2-aur-g2-map2"
+
+    def test_positive_drift_confirms(self) -> None:
+        from gridbot.executor.intents import drift_confirmed
+
+        assert drift_confirmed([0.01, 0.01, 0.01]) is True
+
+    def test_negative_drift_fails(self) -> None:
+        from gridbot.executor.intents import drift_confirmed
+
+        assert drift_confirmed([-0.01, -0.01, -0.01]) is False
+
+    def test_exactly_at_threshold_confirms(self) -> None:
+        from gridbot.executor.intents import DRIFT_MIN_CONFIRM, drift_confirmed
+
+        assert drift_confirmed([DRIFT_MIN_CONFIRM]) is True
+        # a hair under fails
+        assert drift_confirmed([DRIFT_MIN_CONFIRM - 1e-9]) is False
+
+    def test_mixed_drift_below_threshold_fails(self) -> None:
+        from gridbot.executor.intents import drift_confirmed
+
+        assert drift_confirmed([0.01, -0.01, 0.001]) is False
+
+    def test_missing_and_empty_data_fail_closed(self) -> None:
+        from gridbot.executor.intents import drift_confirmed
+
+        assert drift_confirmed([]) is False
+        assert drift_confirmed([None]) is False  # type: ignore[list-item]
+        assert drift_confirmed(["0.9"]) is False  # type: ignore[list-item]
+
+    def test_custom_min_confirm(self) -> None:
+        from gridbot.executor.intents import drift_confirmed
+
+        assert drift_confirmed([0.01], min_confirm=0.005) is True
+        assert drift_confirmed([0.001], min_confirm=0.005) is False
+
+    # ---- engine loader ----
+
+    def test_loader_reads_last_n_from_two_day_files(self, tmp_path) -> None:
+        from gridbot.executor import engine as engine_mod
+
+        _seed_drift(tmp_path, slug=self.SLUG, moves=(0.02, -0.01), day="20260827")
+        _seed_drift(tmp_path, slug=self.SLUG, moves=(0.005, 0.004), day="20260828")
+        moves = engine_mod.recent_postquote_moves(
+            tmp_path / "shadow", self.SLUG, today="20260828"
+        )
+        # prior day first, then today's; only the last 3 kept
+        assert moves == [-0.01, 0.005, 0.004]
+
+    def test_loader_ignores_other_slugs_and_null_moves(self, tmp_path) -> None:
+        import json
+
+        from gridbot.executor import engine as engine_mod
+
+        shadow = tmp_path / "shadow"
+        shadow.mkdir(parents=True)
+        rows = [
+            {"type": "postquote", "market_slug": "other-slug", "oriented_move": 0.5},
+            {"type": "postquote", "market_slug": self.SLUG, "oriented_move": None},
+            {"type": "postquote", "market_slug": self.SLUG, "oriented_move": 0.01},
+            {"type": "instance", "market_slug": self.SLUG, "oriented_move": 9.0},
+            "not-json",
+        ]
+        with open(shadow / "postquote-20260828.jsonl", "w") as fh:
+            for r in rows:
+                fh.write(r if isinstance(r, str) else json.dumps(r))
+                fh.write("\n")
+        moves = engine_mod.recent_postquote_moves(
+            shadow, self.SLUG, today="20260828"
+        )
+        assert moves == [0.01]
+
+    def test_loader_missing_files_returns_empty(self, tmp_path) -> None:
+        from gridbot.executor import engine as engine_mod
+
+        (tmp_path / "shadow").mkdir()
+        assert engine_mod.recent_postquote_moves(
+            tmp_path / "shadow", "nope", today="20260101"
+        ) == []
+        assert engine_mod.recent_postquote_moves(tmp_path / "shadow", "") == []
+
+    # ---- engine gate ----
+
+    def _engine(self, tmp_path, monkeypatch):
+        from gridbot import config
+        from gridbot.executor import engine as engine_mod
+
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        (tmp_path / "shadow").mkdir(exist_ok=True)
+        return engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
+
+    def test_no_postquote_data_skips_fail_closed(self, tmp_path, monkeypatch) -> None:
+        import json
+
+        eng = self._engine(tmp_path, monkeypatch)
+        status = eng.handle(
+            _mapentry_row(p_map=0.75), limits.ArmingState(dry_run=True)
+        )
+        assert status == "skipped:no_drift_confirm"
+        rows = [
+            json.loads(line)
+            for f in (tmp_path / "executor").glob("intents-*.jsonl")
+            for line in f.read_text().splitlines()
+        ]
+        assert rows[0]["status"] == "skipped:no_drift_confirm"
+        assert rows[0]["market_slug"] == self.SLUG
+        assert rows[0]["live"] is False
+
+    def test_unconfirmed_drift_skips_even_in_armed(self, tmp_path, monkeypatch) -> None:
+        from gridbot.executor import pmus
+
+        calls: list = []
+        monkeypatch.setattr(
+            pmus, "place", lambda i: (calls.append(i) or ("placed", "OID1"))
+        )
+        _seed_drift(tmp_path, slug=self.SLUG, moves=(0.001, -0.001, 0.001))
+        eng = self._engine(tmp_path, monkeypatch)
+        status = eng.handle(
+            _mapentry_row(p_map=0.75), limits.ArmingState(dry_run=False)
+        )
+        assert status == "skipped:no_drift_confirm"
+        assert calls == []  # wire never touched
+        assert eng.resting == {}
+
+    def test_confirmed_drift_places_and_gate_applies_in_dry_run(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        _seed_drift(tmp_path, slug=self.SLUG)
+        eng = self._engine(tmp_path, monkeypatch)
+        status = eng.handle(
+            _mapentry_row(p_map=0.75), limits.ArmingState(dry_run=True)
+        )
+        assert status == "dry_run"
+
+    def test_gate_does_not_consume_dedup(self, tmp_path, monkeypatch) -> None:
+        # mirror the band gate: a later confirmed crossing on the same book
+        # may still enter — the skip must not consume the dedup key.
+        from gridbot.executor import pmus
+
+        monkeypatch.setattr(
+            pmus, "place", lambda _i: ("placed", "OID1")
+        )
+        eng = self._engine(tmp_path, monkeypatch)
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(
+            _mapentry_row(round_number=7, p_map=0.75), armed
+        ) == "skipped:no_drift_confirm"
+        _seed_drift(tmp_path, slug=self.SLUG)  # drift confirms afterwards
+        assert eng.handle(
+            _mapentry_row(round_number=9, p_map=0.75), armed
+        ) == "placed"
+
+    def test_gate_uses_only_record_slug(self, tmp_path, monkeypatch) -> None:
+        # drift on a DIFFERENT slug must not license this book (fail closed
+        # per-slug).
+        _seed_drift(tmp_path, slug="some-other-slug")
+        eng = self._engine(tmp_path, monkeypatch)
+        status = eng.handle(
+            _mapentry_row(p_map=0.75), limits.ArmingState(dry_run=True)
+        )
+        assert status == "skipped:no_drift_confirm"

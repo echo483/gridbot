@@ -143,6 +143,35 @@ def us_band_gated(p_map: object) -> bool:
     return not (US_BAND_GATE[0] <= float(p_map) <= US_BAND_GATE[1])
 
 
+DRIFT_WINDOW = 3  # postquote samples the engine feeds in (most recent first kept)
+DRIFT_MIN_CONFIRM = 0.005  # 0.5pt cumulative oriented move in our side's favor
+
+
+def drift_confirmed(
+    prior_postquote_moves: list[float],
+    min_confirm: float = DRIFT_MIN_CONFIRM,
+) -> bool:
+    """DRIFT-CONFIRMATION gate (priced-in analysis 2026-08-28, licensed
+    action 2): place only when the market has STARTED moving our way.
+
+    ``prior_postquote_moves`` are ORIENTED moves (postquote sampler, + =
+    with our side) for the record's slug, most recent LAST. Placement
+    requires the recent sum >= ``min_confirm``. Missing/empty data fails
+    CLOSED — no drift evidence, no entry (the priced-in finding showed the
+    drift cannot repay the discount, so unconfirmed drift is no entry).
+    """
+    if not prior_postquote_moves:
+        return False
+    moves = [
+        float(m)
+        for m in prior_postquote_moves
+        if isinstance(m, (int, float)) and not isinstance(m, bool)
+    ]
+    if not moves:
+        return False
+    return sum(moves) >= min_confirm
+
+
 def build_us_intent(row: dict, stake_cap_usd: float) -> OrderIntent | None:
     """Build a Polymarket US maker intent from one QUALIFYING mapentry row.
 
