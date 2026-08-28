@@ -60,13 +60,44 @@ class BboCache:
 
 
 class Recorder:
-    def __init__(self, books: BboCache | None = None) -> None:
+    def __init__(self, books: BboCache | None = None, out_dir=None) -> None:
         self.books = books or BboCache()
-        self.out_dir = config.DATA_DIR / "shadow"
+        self.out_dir = out_dir or (config.DATA_DIR / "shadow")
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.mappings: dict[str, dict] = {}
         self._mappings_loaded = 0.0
         self.seen: set[tuple] = set()
+        self.slate = None  # optional CrossingTracker: served q for slate rows
+
+    def handle_slate(self, record: dict) -> str | None:
+        """Queue 16 full-slate coverage: one mapentry evaluation per coherent
+        round snapshot of every live cs2 series, from series_state directly —
+        a series that starts mid-session is evaluated from its first polled
+        round even when no hypothesis trigger fires (the night-3 gap)."""
+        if record.get("type") != "ss" or record.get("title") != "cs2":
+            return None
+        sid = str(record.get("series_id"))
+        if sid in config.GRID_TEST_SERIES_IDS:
+            return None
+        state = (record.get("data") or {}).get("seriesState") or {}
+        if not state.get("started") or state.get("finished"):
+            return None
+        q_ct = None
+        if self.slate is not None:
+            try:
+                from gridbot.corpus import rows as r
+
+                game = r.current_game(state)
+                if game is not None:
+                    q_ct = float(self.slate.predict(r.build_features(game)))
+            except Exception as exc:  # noqa: BLE001 — a bad model fetch must not kill the tail
+                log.warning("slate q fetch failed for %s: %s", sid, type(exc).__name__)
+        instance = mapentry.slate_instance(
+            state, q_ct=q_ct, grid_ts_ns=record.get("ts_ns") or record.get("req_ns")
+        )
+        if instance is None:
+            return None
+        return self.handle(instance)
 
     def _reload_mappings(self) -> None:
         if time.monotonic() - self._mappings_loaded < MAPPING_RELOAD_S:
@@ -137,12 +168,31 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     rec = Recorder()
+    rec.slate = None
+    try:
+        from gridbot.instruments.crossing import load_served
+
+        rec.slate = load_served()
+    except Exception as exc:  # noqa: BLE001 — slate rows without q still count coverage
+        log.warning("slate predictor unavailable: %s", exc)
+    if rec.slate:
+        log.info("full-slate coverage armed (roundwin-v1)")
+    grid_follow = Follow(config.DATA_DIR / "grid", "series_state", from_start=args.replay)
     follow = Follow(config.DATA_DIR / "shadow", "instances", from_start=args.replay)
     log.info("mapentry recorder up (replay=%s)", args.replay)
     while True:
         rec._reload_mappings()
         n = 0
         counts: dict[str, int] = {}
+        for record in grid_follow.lines():
+            try:
+                disposition = rec.handle_slate(record)
+            except Exception:
+                log.exception("bad ss record skipped")
+                continue
+            if disposition:
+                n += 1
+                counts[disposition] = counts.get(disposition, 0) + 1
         for record in follow.lines():
             try:
                 disposition = rec.handle(record)

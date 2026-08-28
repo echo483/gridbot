@@ -152,6 +152,106 @@ class TestVenueJoin:
         assert load_latest_mappings(tmp_path)["9"]["match"] == {"s": "new"}
 
 
+class TestSlateCoverage:
+    """Queue 16 full-slate coverage: every live series gets a mapentry
+    evaluation per coherent round — a series starting mid-session must
+    produce rows from its first polled round, without any registered
+    hypothesis trigger firing."""
+
+    @staticmethod
+    def _state(series_id: str = "777") -> dict:
+        return {
+            "id": series_id,
+            "started": True,
+            "finished": False,
+            "games": [
+                {
+                    "started": True,
+                    "finished": False,
+                    "sequenceNumber": 1,
+                    "teams": [
+                        {"__typename": "TeamStateCs2", "name": "Alpha", "side": "counter-terrorists", "score": 2,
+                         "players": [{"alive": True}] * 5},
+                        {"__typename": "TeamStateCs2", "name": "Beta", "side": "terrorists", "score": 1,
+                         "players": [{"alive": True}] * 5},
+                    ],
+                    "segments": [
+                        {"type": "round", "finished": True, "sequenceNumber": 1,
+                         "teams": [{"__typename": "TeamStateCs2", "name": "Beta", "side": "terrorists", "won": True}]},
+                        {"type": "round", "finished": True, "sequenceNumber": 2,
+                         "teams": [{"__typename": "TeamStateCs2", "name": "Alpha", "side": "counter-terrorists", "won": True}]},
+                        {"type": "round", "finished": True, "sequenceNumber": 3,
+                         "teams": [{"__typename": "TeamStateCs2", "name": "Alpha", "side": "counter-terrorists", "won": True}]},
+                        {"type": "round", "finished": False, "sequenceNumber": 4},
+                    ],
+                    "clock": {"currentSeconds": 75.0},
+                }
+            ],
+        }
+
+    @staticmethod
+    def _ss_record(series_id: str = "777") -> dict:
+        return {"type": "ss", "title": "cs2", "series_id": series_id,
+                "ts_ns": 1, "data": {"seriesState": TestSlateCoverage._state(series_id)}}
+
+    def test_slate_instance_built_from_coherent_snapshot(self) -> None:
+        from gridbot.instruments.mapentry import slate_instance
+
+        inst = slate_instance(self._state(), q_ct=0.6)
+        assert inst is not None
+        assert inst["hypothesis_id"] == "H-MAPENTRY1-SLATE"
+        assert inst["series_id"] == "777"
+        assert inst["round_number"] == 4
+        assert inst["q"] == 0.6
+
+    def test_slate_skips_transition_and_no_game(self) -> None:
+        from gridbot.instruments.mapentry import slate_instance
+
+        mid_switch = self._state()
+        mid_switch["games"][0]["teams"][0]["score"] = 5  # incoherent with winners
+        assert slate_instance(mid_switch, q_ct=0.6) is None
+        assert slate_instance({"id": "x", "games": []}, q_ct=0.6) is None
+
+    def test_new_series_mid_session_produces_mapentry_row(self, tmp_path) -> None:
+        from gridbot.instruments.mapentry_recorder import Recorder
+
+        class FakeBooks:
+            def top(self, slug: str):
+                return (0.40, 0.60)
+
+        rec = Recorder(books=FakeBooks(), out_dir=tmp_path)
+        rec.mappings = {"777": {"match": {"s": 1}, "us_markets": {"map1": {"market_slug": "m"}}}}
+        disposition = rec.handle_slate(self._ss_record())
+        assert disposition is not None
+        day_files = list(tmp_path.glob("mapentry-*.jsonl"))
+        assert day_files, "slate eval must land in the day file"
+        row = json.loads(day_files[0].read_text().splitlines()[0])
+        assert row["series_id"] == "777"
+        assert row["src_hypothesis_id"] == "H-MAPENTRY1-SLATE"
+
+    def test_second_snapshot_same_round_is_deduped(self, tmp_path) -> None:
+        from gridbot.instruments.mapentry_recorder import Recorder
+
+        class FakeBooks:
+            def top(self, slug: str):
+                return (0.40, 0.60)
+
+        rec = Recorder(books=FakeBooks(), out_dir=tmp_path)
+        rec.mappings = {}
+        assert rec.handle_slate(self._ss_record()) is not None
+        assert rec.handle_slate(self._ss_record()) is None  # same round, once only
+
+    def test_slate_ignores_test_series_and_non_ss(self, tmp_path) -> None:
+        from gridbot.instruments.mapentry_recorder import Recorder
+
+        class FakeBooks:
+            def top(self, slug: str):
+                return (0.40, 0.60)
+
+        rec = Recorder(books=FakeBooks(), out_dir=tmp_path)
+        assert rec.handle_slate({"type": "book"}) is None
+
+
 class TestBook:
     def test_parse_bbo(self) -> None:
         payload = {

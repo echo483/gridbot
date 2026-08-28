@@ -29,6 +29,57 @@ PRIOR_WEIGHT = 8  # Beta smoothing toward 0.5 for future-round win share
 OT_P = 0.5  # 12-12 regulation exhausted -> frozen overtime coin
 ENTRY_MARGIN = 0.04  # qualifying quote must sit >= 4 points below fair
 
+SLATE_HYPOTHESIS_ID = "H-MAPENTRY1-SLATE"
+
+
+def slate_instance(state: dict, q_ct: float | None,
+                   grid_ts_ns: int | None = None) -> dict | None:
+    """Full-slate coverage instance (Queue 16): one mapentry evaluation per
+    coherent in-round snapshot of a live series — regardless of whether any
+    registered hypothesis trigger fired. Same CORPUS-F1 coherence guard as
+    detectors.detect()/crossing.observe. Side is fixed to ct: the served
+    round model is q_ct and one evaluation per (series, map, round) is all
+    the denominator needs; the opposite side is derivable by symmetry.
+    Returns None for transition-window / no-game / not-started snapshots.
+    """
+    from gridbot.corpus import rows as r
+
+    game = r.current_game(state)
+    if game is None:
+        return None
+    ct_node, t_node = r.sided_teams(game)
+    ct_name = str((ct_node or {}).get("name") or "")
+    t_name = str((t_node or {}).get("name") or "")
+    ct_score = int((ct_node or {}).get("score") or 0)
+    t_score = int((t_node or {}).get("score") or 0)
+    winners = r.round_winners(game)
+    round_number = len(winners) + 1
+    map_number = int(game.get("sequenceNumber") or 1)
+    round_segs = [
+        s for s in game.get("segments") or [] if str(s.get("type") or "").lower() == "round"
+    ]
+    seg_round = int(round_segs[-1].get("sequenceNumber") or 1) if round_segs else 1
+    if ct_score + t_score != round_number - 1 or seg_round != round_number:
+        return None  # CORPUS-F1 coherence guard: never price transition state
+    return {
+        "type": "instance",
+        "hypothesis_id": SLATE_HYPOTHESIS_ID,
+        "series_id": str(state.get("id") or ""),
+        "map_number": map_number,
+        "round_number": round_number,
+        "side": "ct",
+        "team": ct_name,
+        "opponent": t_name,
+        "q": q_ct,
+        "fair_value": q_ct,
+        "dedup_extra": "slate",
+        "state": {
+            "ct": {"name": ct_name, "score": ct_score},
+            "t": {"name": t_name, "score": t_score},
+        },
+        "grid_ts_ns": grid_ts_ns,
+    }
+
 
 def p_future(a: int, b: int) -> float:
     """Frozen iid win probability for future rounds: (a+4)/(a+b+8)."""
