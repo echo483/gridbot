@@ -13,6 +13,7 @@ Exit 0 = every invariant holds; non-zero prints violations.
 
 from __future__ import annotations
 
+import shutil
 import sys
 import tempfile
 import time
@@ -36,6 +37,24 @@ def main() -> int:
 
     tmp = Path(tempfile.mkdtemp(prefix="gridbot-replay-"))
     (tmp / "shadow").mkdir()
+    # The drift-confirmation gate (H-PRICEDIN1) reads postquote day files from
+    # the shadow dir. Without them every placement fails CLOSED and the replay
+    # reports "0 placed | ALL INVARIANTS HOLD" — vacuously green. Copy the real
+    # samples for the replayed day (and the prior day, which the loader also
+    # reads) so the gate is exercised against real drift evidence.
+    day = "".join(ch for ch in src_path.stem if ch.isdigit())[-8:]
+    days = [day]
+    if len(day) == 8:
+        from datetime import UTC, datetime as _dt
+        d = _dt.strptime(day, "%Y%m%d").replace(tzinfo=UTC)
+        days.append(f"{_dt.fromtimestamp(d.timestamp() - 86400, UTC):%Y%m%d}")
+    copied = 0
+    for d in days:
+        pq = src_path.parent / f"postquote-{d}.jsonl"
+        if pq.exists():
+            shutil.copy(pq, tmp / "shadow" / pq.name)
+            copied += 1
+    print(f"seeded {copied} postquote day-file(s) for the drift gate")
 
     from gridbot import config
     config.DATA_DIR = tmp  # isolated ledger; never touches real data/
@@ -123,6 +142,11 @@ def main() -> int:
     n_reentries = sum(1 for n in per_key.values() if n == 2)
     print(f"placed {len(placed)} on {len(per_key)} keys | re-entries {n_reentries} "
           f"| band-gated {len(gated)} | cancels {len(cancels)}")
+    if not placed:
+        violations.append(
+            "ZERO placements — a replay that never places proves nothing "
+            "(check the band/drift gates and the seeded postquote files)"
+        )
     if violations:
         print("\nINVARIANT VIOLATIONS:")
         for v in violations:
