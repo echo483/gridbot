@@ -50,8 +50,9 @@ def recent_postquote_moves(
 
     Reads data/shadow/postquote-<day>.jsonl (today + prior day — the same
     two-day file pattern as the mapping/settle day-files). Rows with a
-    missing/non-numeric ``oriented_move`` are skipped. Missing files or no
-    samples for the slug return [] — the drift gate fails closed on that.
+    missing/non-numeric ``oriented_move`` are skipped. Non-dict JSON rows are
+    skipped too. Missing files or no samples for the slug return [] — the
+    drift gate fails closed on that.
     """
     if not slug:
         return []
@@ -59,24 +60,38 @@ def recent_postquote_moves(
     day0 = today or f"{now:%Y%m%d}"
     yday = f"{datetime.fromtimestamp(now.timestamp() - 86400, UTC):%Y%m%d}"
     moves: list[float] = []
+    log = logging.getLogger(__name__)
     for day in (yday, day0):  # chronological so [-n:] keeps the most recent
         path = shadow_dir / f"postquote-{day}.jsonl"
         if not path.exists():
             continue
-        with open(path) as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                if row.get("type") != "postquote" or row.get("market_slug") != slug:
-                    continue
-                m = row.get("oriented_move")
-                if isinstance(m, (int, float)) and not isinstance(m, bool):
-                    moves.append(float(m))
+        try:
+            # Tail-cap: the loader only needs the most recent samples, so
+            # skip an oversized head rather than reading the whole file.
+            skip = max(path.stat().st_size - 1_000_000, 0)
+            with open(path) as fh:
+                fh.seek(skip)
+                if skip:
+                    fh.readline()  # drop the partial line straddling the cut
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(row, dict):
+                        continue
+                    if row.get("type") != "postquote" or row.get("market_slug") != slug:
+                        continue
+                    m = row.get("oriented_move")
+                    if isinstance(m, (int, float)) and not isinstance(m, bool):
+                        moves.append(float(m))
+        except OSError:
+            log.warning("postquote file unreadable: %s", path)
+            # keep whatever earlier days yielded rather than misattributing
+            # a rotated/permission-changed file to a bad record
     return moves[-n:]
 
 

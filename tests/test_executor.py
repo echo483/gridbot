@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import builtins
+
 import pytest
 
 from gridbot.executor import limits
@@ -1156,6 +1158,60 @@ class TestDriftConfirm:
             tmp_path / "shadow", "nope", today="20260101"
         ) == []
         assert engine_mod.recent_postquote_moves(tmp_path / "shadow", "") == []
+
+    def test_loader_skips_non_dict_json_lines(self, tmp_path) -> None:
+        import json
+
+        from gridbot.executor import engine as engine_mod
+
+        shadow = tmp_path / "shadow"
+        shadow.mkdir(parents=True)
+        rows = [
+            {"type": "postquote", "market_slug": self.SLUG, "oriented_move": 0.01},
+            [1, 2],
+            "a plain string",
+            42,
+            None,
+            {"type": "postquote", "market_slug": self.SLUG, "oriented_move": 0.02},
+        ]
+        with open(shadow / "postquote-20260828.jsonl", "w") as fh:
+            for r in rows:
+                fh.write(r if isinstance(r, str) else json.dumps(r))
+                fh.write("\n")
+        moves = engine_mod.recent_postquote_moves(
+            shadow, self.SLUG, today="20260828"
+        )
+        # the non-dict JSON rows between valid ones don't abort the scan
+        assert moves == [0.01, 0.02]
+
+    def test_loader_unreadable_file_returns_empty_not_raise(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        import json
+
+        from gridbot.executor import engine as engine_mod
+
+        shadow = tmp_path / "shadow"
+        shadow.mkdir(parents=True)
+        with open(shadow / "postquote-20260828.jsonl", "w") as fh:
+            fh.write(
+                json.dumps(
+                    {"type": "postquote", "market_slug": self.SLUG, "oriented_move": 0.01}
+                )
+                + "\n"
+            )
+
+        real_open = builtins.open
+
+        def raising_open(path, *args, **kwargs):
+            if str(path).endswith("postquote-20260828.jsonl"):
+                raise PermissionError(13, "Permission denied")
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", raising_open)
+        assert engine_mod.recent_postquote_moves(
+            shadow, self.SLUG, today="20260828"
+        ) == []
 
     # ---- engine gate ----
 
