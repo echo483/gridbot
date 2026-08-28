@@ -92,3 +92,62 @@ captured books, mark each resting order filled only where later flow
 crossed its price, and recompute EV on that subset. If it goes negative
 while unconditional stays positive, fill selection is proven and the fix
 is an execution change, not a model change.
+
+---
+
+# Addendum: edge conditional on filling (same day)
+
+`scripts/fill_conditional_edge.py`, output
+`data/analysis/fill_conditional_edge-20260828.json`. This is the
+measurement the section above called for, and it needed no amendment.
+
+**Method.** Each qualifying row would post at
+`min(side_ask − tick, entry_price_max, 0.90)`. The postquote sampler
+already snapshots the same book at 30/60/120s (join
+`postquote.src_ts_ns == mapentry.ts_ns`, 1,576 of 1,606 rows), and
+`MAKER_TTL_S` is 150s, so all three horizons sit inside the resting
+window. An order counts filled when any snapshot puts our side's
+effective ask at or below our price — `ask` for long, `1 − bid` for
+short. Deduped to one entry per map book.
+
+| population | n | win rate | mean price | EV / contract | 95% CI |
+|---|---|---|---|---|---|
+| all opportunities | 114 | 0.623 | 0.594 | +0.029 | [−0.051, +0.109] |
+| **filled** | 47 | **0.553** | 0.589 | **−0.035** | [−0.150, +0.080] |
+| unfilled | 67 | 0.672 | 0.597 | +0.075 | [−0.034, +0.183] |
+
+Fill rate 41%. **Selection cost −6.5pt per contract**: the orders that
+fill are worse than the average order we would like to place, at
+essentially the same price (0.589 vs 0.597). All of the paper edge lives
+in the orders that never fill.
+
+**Nothing here is significant.** Every CI spans zero; the win-rate gap
+(0.553 vs 0.672) is z ≈ 1.29, p ≈ 0.20. Resolving the filled EV at 95%
+needs ~500 filled orders against the 47 we have. The direction is exactly
+what fill selection predicts and it corroborates the +2.8pt paper figure
+from the independent instrument above — but direction at n=47 is a
+hypothesis, not a verdict. The instrument exists now and will resolve as
+capture accumulates.
+
+## Four models, one mechanism
+
+The same question went to four models in parallel. All four derived the
+sample size independently (~1,500–1,630 settled trades to resolve a 2pt
+edge at 95%; ~3,100–3,300 at 80% power) — the number now load-bearing in
+both analyses.
+
+The two that read the repo (`tencent/hy4-preview`, `z-ai/glm-5.3`) proved
+the mechanism analytically, and their proof matches the measurement:
+qualification already forces `side_ask ≤ p_map − 0.04`, so
+`side_ask − 0.01 ≤ p_map − 0.05` — **the `entry_price_max` cap never
+binds.** The posted price is always `side_ask − 0.01`. The model gates
+*whether* to enter and never *at what price*; the price is anchored to
+the book, not to fair value. The two that answered blind
+(`ling-3.0-flash-fin`, `deepseek-v4-flash`) got the arithmetic right but
+proposed adding `p_map` to the `min()` — a cap that provably never binds.
+Repo access, not model tier, was the discriminator.
+
+That analytic result plus the −6.5pt selection cost point at the same
+place: **an execution change, not a model change.** No amendment is
+proposed here — the mechanism is now named and measured, and the
+instrument that would license one is in the repo.
