@@ -114,6 +114,30 @@ If blocked intents would have been cost-positive, capital scaling has a
 measured payoff; if not, the caps are free. No cap change without a
 pre-registered amendment.
 
+## Queue 16 — full-slate coverage audit (night-3 gap, user directive: "watching all live games and finding the right trades")
+
+Night-3 audit (02:55Z): 19 series polled live by capture, but only 7 had
+mapentry evaluations; 12 had ZERO (ex-RUBY-GenOne, OG-exZT, Metizport-Bushido,
+WOPA-G2 Ares, Color-HYPERSPIRIT, Misa-ILLYRIANS, Lynx pairings, PuckChamp,
+RE.Arise, Phantom-QuB, 1win-SPARTA — mostly 08:00–11:00Z starts). Pattern:
+evaluated series are yesterday's continuing maps; newly-starting series
+produce no mapentry rows.
+
+**Requirement:** every live GRID series with a PMUS mapping gets mapentry
+evaluation from its first polled round — no series falls through the
+day-rollover or start-time seam. Audit points:
+1. mapentry daemon's series-discovery trigger: does it re-sweep discovery
+   files each cycle or only at startup / on known series?
+2. day-rollover seam (UTC midnight + morning starts): new-day discovery
+   file must feed the evaluator immediately (cf. the two-rollover bugs
+   already fixed in loader/alerts/settle — this is the fourth instance of
+   the same class).
+3. If the engine only evaluates series it saw BEFORE arming, add a live
+   re-sweep. Test: start a synthetic series mid-session, assert evals.
+
+Priority: HIGH for tomorrow's dev session — this caps how many right trades
+we can even see. Owner: Claude Code. Analysis: Hermes.
+
 ## Rails
 
 - All four remain maker-only: we never cross the ask (no chasing).
