@@ -145,6 +145,11 @@ def main() -> int:
     print(f"placed {len(placed)} on {len(per_key)} keys | re-entries {n_reentries} "
           f"| band-gated {len(gated)} | drift-unconfirmed {len(drift_skipped)} "
           f"| cancels {len(cancels)}")
+    # Full status histogram: a gate that silently stops matching real rows
+    # shows up here as a missing key, not as a violation (2026-08-28 — the
+    # drift gate shipped reading a field the sampler never wrote).
+    hist = Counter(r.get("status") for r in records if r.get("status"))
+    print("  statuses: " + ", ".join(f"{k}={v}" for k, v in sorted(hist.items())))
     if not placed:
         # Distinguish a MISCONFIGURED harness (no drift evidence seeded, so
         # the fail-closed gate rejects everything — vacuously "green") from a

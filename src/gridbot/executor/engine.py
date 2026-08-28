@@ -29,6 +29,7 @@ from gridbot.executor import limits, pmus, reconcile
 from gridbot.executor.intents import (
     DRIFT_HORIZON_S,
     DRIFT_WINDOW,
+    SLATE_SRC_HYPOTHESIS_ID,
     OrderIntent,
     build_intent,
     build_us_intent,
@@ -249,6 +250,21 @@ class Engine:
             return None
         if intent.dedup_key in self.seen:
             return None
+        # SLATE-COVERAGE gate (2026-08-28 review). Queue-16 full-slate rows
+        # record ONE evaluation per live series per round. They carry
+        # hypothesis_id "H-MAPENTRY1" — IDENTICAL to real detector-trigger
+        # rows — and are distinguishable ONLY by src_hypothesis_id.
+        # H-MAPENTRY1's pre-registered entry population is detector-lane
+        # instances, NOT every live series every round: slate coverage exists
+        # to fix the starvation DENOMINATOR, not to widen what we trade.
+        # Recording-only: ledgered, never placed, same decision path in
+        # dry_run and armed. The dedup key is NOT consumed, so a genuine
+        # detector row for the same key still trades normally.
+        if record.get("src_hypothesis_id") == SLATE_SRC_HYPOTHESIS_ID:
+            self._skip_row(intent, record, "skipped:slate_row", armed)
+            log.info("slate gate: %s recording-only (coverage row)",
+                     intent.dedup_key)
+            return "skipped:slate_row"
         # REENTRY1 hard cap: at most 2 lifetime placed entries per key,
         # counted from the ledger so it survives restarts. Ledgered so the
         # measurement population keeps its denominator (glm review f11).
@@ -276,7 +292,8 @@ class Engine:
         # DRIFT-CONFIRMATION gate (priced-in analysis 2026-08-28, licensed
         # action 2): the market must START moving our way before we pay.
         # Looks up the last 3 oriented postquote samples for the slug and
-        # requires their sum >= DRIFT_MIN_CONFIRM. Missing/empty data fails
+        # requires their MEAN >= DRIFT_MIN_CONFIRM (== H-PRICEDIN1's frozen
+        # +1.0pt/120s bar; a sum let small moves stack). Missing data fails
         # CLOSED. Identical in dry_run so the armed decision path stays
         # byte-identical; dedup NOT consumed (a later confirmed crossing on
         # the same book may still enter), mirroring the band gate.

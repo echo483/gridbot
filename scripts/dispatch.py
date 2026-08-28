@@ -88,6 +88,16 @@ ROUTES: dict[str, tuple[str, str | None, str | None]] = {
     "programming2": ("deepseek/deepseek-v4-flash-0731", None, "high"),  # full alternate builder — rotate real builds here, judge by artifacts
     "search": ("deepseek/deepseek-v4-flash-0731", None, "medium"),      # retrieval/digest/extract over pasted material — its #1 category per user
     "analysis": ("deepseek/deepseek-v4-flash-0731", None, "medium"),    # slow-loop data reads, log digestion, report drafts
+    # MODEL DIVERSIFICATION (user 08-28: "use qwen, use nemotron, don't stick
+    # to defaults"). Slugs verified live against OpenRouter's model list on
+    # 2026-08-28 — do NOT invent slugs: hermes' own fallback is pinned to
+    # "qwen/qwen3.8-max", which does not appear in that list.
+    # CAVEAT: a model's self-reported identity is NOT proof of routing —
+    # nemotron answered "OK Hermes" in a smoke test, so hermes injects a
+    # persona. The OpenRouter dashboard is the only ground truth for which
+    # model actually served a call.
+    "reasoning": ("qwen/qwen3-max-thinking", "openrouter", "high"),   # hard design/analysis: model specs, leakage hunts, method arguments
+    "bulk": ("nvidia/nemotron-3-super-120b-a12b", "openrouter", "medium"),  # cheap high-volume passes (1M ctx, $0.4/Mtok out) — alternative to deepseek
     # VERIFICATION lane (user 08-28): the Claude console credits buy exactly
     # one thing — adversarial verification of what OpenRouter built, plus
     # method review of quant/backtest/sim harnesses. Provider "anthropic"
@@ -103,7 +113,8 @@ AGENTS_DIR = Path(__file__).resolve().parents[1] / "agents"
 # Lanes without their own preamble file share the analysis one (bulk
 # data-work contract); every other kind maps to agents/<kind>.md.
 _SHARED_PREAMBLE = {"fast": "analysis", "search": "analysis",
-                    "classification": "analysis"}
+                    "classification": "analysis", "bulk": "analysis",
+                    "reasoning": "programming"}
 
 
 def _preamble(kind: str) -> str:
@@ -211,7 +222,8 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--artifact", action="append", default=[],
                     help="pair mode: expected artifact path (repeatable)")
-    ap.add_argument("--builder", choices=["programming", "programming2"],
+    ap.add_argument("--builder",
+                    choices=["programming", "programming2", "reasoning"],
                     default="programming",
                     help="pair mode builder lane: programming=glm-flash, "
                          "programming2=deepseek-0731 (alternate-builder rotation)")

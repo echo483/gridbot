@@ -1109,8 +1109,9 @@ class TestSecondSide:
 class TestDriftConfirm:
     """DRIFT-CONFIRMATION gate (priced-in analysis 2026-08-28, licensed
     action 2): a mapentry placement requires the last 3 oriented postquote
-    samples for its slug to sum >= +0.5pt in our side's favor. Missing or
-    empty data fails CLOSED."""
+    samples for its slug to AVERAGE >= +1.0pt in our side's favor — the bar
+    H-PRICEDIN1 froze at the 120s horizon. Missing or empty data fails
+    CLOSED."""
 
     SLUG = "astatc-cs2-aur-g2-map2"
 
@@ -1171,6 +1172,35 @@ class TestDriftConfirm:
 
         assert drift_confirmed([0.01], min_confirm=0.005, min_samples=1) is True
         assert drift_confirmed([0.001], min_confirm=0.005, min_samples=1) is False
+
+    def test_min_confirm_pins_h_pricedin1_frozen_bar(self) -> None:
+        """H-PRICEDIN1 froze +1.0pt at 120s; 1.0pt == 0.01 in prob units.
+        A looser constant here would place where the registry licenses
+        nothing (pre-registration violation)."""
+        from gridbot.executor.intents import DRIFT_MIN_CONFIRM
+
+        assert DRIFT_MIN_CONFIRM == 0.01
+
+    def test_small_moves_can_no_longer_stack_over_the_bar(self) -> None:
+        """REGRESSION (2026-08-28 Opus review): the gate averages, it does
+        not sum. Three 0.5pt moves summed to 1.5pt and CONFIRMED under the
+        old ``sum >= 0.005`` rule; their mean is 0.5pt, under the frozen
+        1.0pt bar, so they must be rejected."""
+        from gridbot.executor.intents import drift_confirmed
+
+        assert sum([0.005, 0.005, 0.005]) >= 0.005  # cleared the OLD gate
+        assert drift_confirmed([0.005, 0.005, 0.005]) is False
+        assert drift_confirmed([0.002, 0.002, 0.002]) is False
+        assert drift_confirmed([0.01, 0.01, 0.01]) is True  # at the bar
+
+    def test_mean_denominator_is_the_filtered_length(self) -> None:
+        """Non-finite values are dropped BEFORE the mean. Dropping must not
+        shrink the denominator into a false confirm, and must not count
+        toward filling the window."""
+        from gridbot.executor.intents import drift_confirmed
+
+        assert drift_confirmed([0.02, 0.02, 0.02, float("nan")]) is True
+        assert drift_confirmed([0.01, 0.01, float("inf")]) is False
 
     # ---- engine loader ----
 
@@ -1514,3 +1544,105 @@ class TestDriftLoaderAgainstRealRowShape:
         )
         assert moves == [0.004]  # the 120s sample only
         assert drift_confirmed(moves) is False  # and one sample cannot confirm
+
+
+class TestSlateCoverageGate:
+    """Queue-16 full-slate rows are RECORDING-ONLY (2026-08-28 review).
+
+    They carry hypothesis_id "H-MAPENTRY1" — identical to detector-trigger
+    rows — and are distinguishable only by src_hypothesis_id. H-MAPENTRY1's
+    pre-registered entry population is the detector lane; placing slate rows
+    would widen it and corrupt the study denominator.
+    """
+
+    def _engine(self, tmp_path, monkeypatch):
+        from gridbot import config
+        from gridbot.executor import engine as engine_mod
+
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        (tmp_path / "shadow").mkdir()
+        _seed_drift(tmp_path)  # drift CONFIRMED: only the slate gate can stop it
+        return engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
+
+    def _rows(self, tmp_path):
+        import json
+
+        return [
+            json.loads(line)
+            for f in (tmp_path / "executor").glob("intents-*.jsonl")
+            for line in f.read_text().splitlines()
+        ]
+
+    def _slate_row(self, **over):
+        row = _mapentry_row(
+            src_hypothesis_id="H-MAPENTRY1-SLATE",
+            dedup_extra="slate",
+            p_map=0.75,
+            src_ts_ns=None,  # real slate rows carry a null src_ts_ns
+        )
+        row.update(over)
+        return row
+
+    def test_slate_row_never_places_when_armed(self, tmp_path, monkeypatch) -> None:
+        from gridbot.executor import pmus
+
+        calls: list = []
+        monkeypatch.setattr(
+            pmus, "place", lambda i: (calls.append(i) or ("placed", "OID1"))
+        )
+        eng = self._engine(tmp_path, monkeypatch)
+        status = eng.handle(self._slate_row(), limits.ArmingState(dry_run=False))
+        assert status == "skipped:slate_row"
+        assert calls == []  # wire never touched
+        assert eng.resting == {}
+        rows = self._rows(tmp_path)
+        assert [r["status"] for r in rows] == ["skipped:slate_row"]
+        assert rows[0]["live"] is True  # ledgered as an armed-path decision
+
+    def test_dry_run_takes_the_identical_path(self, tmp_path, monkeypatch) -> None:
+        eng = self._engine(tmp_path, monkeypatch)
+        status = eng.handle(self._slate_row(), limits.ArmingState(dry_run=True))
+        assert status == "skipped:slate_row"
+        assert self._rows(tmp_path)[0]["status"] == "skipped:slate_row"
+
+    def test_slate_skip_does_not_consume_the_dedup_key(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """A consumed key would return None on the second call AND silently
+        swallow a genuine detector row that lands on the same key."""
+        eng = self._engine(tmp_path, monkeypatch)
+        before = set(eng.seen)
+        assert eng.handle(
+            self._slate_row(), limits.ArmingState(dry_run=False)
+        ) == "skipped:slate_row"
+        assert set(eng.seen) == before
+        assert eng.handle(
+            self._slate_row(), limits.ArmingState(dry_run=False)
+        ) == "skipped:slate_row"
+        assert len(self._rows(tmp_path)) == 2  # both ledgered (denominator)
+
+    def test_detector_row_is_unaffected(self, tmp_path, monkeypatch) -> None:
+        """Controlled comparison: same slug and side, src_hypothesis_id is
+        the ONLY difference — it must still trade."""
+        from gridbot.executor import pmus
+
+        monkeypatch.setattr(pmus, "place", lambda i: ("placed", "OID1"))
+        eng = self._engine(tmp_path, monkeypatch)
+        status = eng.handle(
+            self._slate_row(src_hypothesis_id="H-MAPENTRY1", dedup_extra="ct:0.85"),
+            limits.ArmingState(dry_run=False),
+        )
+        assert status == "placed"
+        assert all(r["status"] != "skipped:slate_row" for r in self._rows(tmp_path))
+
+    def test_missing_src_hypothesis_id_is_not_slate(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """Older rows predate the field entirely; absence must not gate."""
+        from gridbot.executor import pmus
+
+        monkeypatch.setattr(pmus, "place", lambda i: ("placed", "OID1"))
+        eng = self._engine(tmp_path, monkeypatch)
+        row = _mapentry_row(p_map=0.75)
+        assert "src_hypothesis_id" not in row
+        assert eng.handle(row, limits.ArmingState(dry_run=False)) == "placed"

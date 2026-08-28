@@ -145,12 +145,19 @@ def us_band_gated(p_map: object) -> bool:
 
 
 DRIFT_WINDOW = 3  # postquote samples the engine feeds in (most recent first kept)
-DRIFT_MIN_CONFIRM = 0.005  # 0.5pt cumulative oriented move in our side's favor
+# H-PRICEDIN1 (docs/experiments/registry.jsonl) froze the licensing bar at
+# "+1.0pt oriented drift at 120s" and licensed NO discount bucket (measured:
+# 10-20pt +0.94pt, 20-30pt +0.63pt, 30+ +0.50pt). 1.0pt == 0.01 in probability
+# units. This gate is deliberately AT LEAST AS STRICT as that frozen bar.
+DRIFT_MIN_CONFIRM = 0.01  # 1.0pt -- H-PRICEDIN1's frozen bar (was 0.005 = 0.5pt)
 # The postquote sampler records EACH entry at three horizons (30/60/120s).
 # H-PRICEDIN1 froze the diagnostic at 120s, so the gate reads that horizon
 # ONLY — pooling all three would triple-count one observation as if it
 # were three independent confirmations (review 2026-08-28).
 DRIFT_HORIZON_S = 120.0
+# Queue-16 slate-coverage rows: recording-only, never traded (they exist to
+# fix the starvation denominator, not to widen H-MAPENTRY1's entry population).
+SLATE_SRC_HYPOTHESIS_ID = "H-MAPENTRY1-SLATE"
 
 
 def drift_confirmed(
@@ -165,9 +172,19 @@ def drift_confirmed(
     with our side) for the record's slug+side at the 120s horizon, most
     recent LAST. Placement requires at least ``min_samples`` usable samples
     (review F5: a partial window could otherwise confirm on ONE sample) and
-    their sum >= ``min_confirm``. Missing/empty/partial data and non-finite
-    values (review F2: json parses bare Infinity to a float; one inf could
-    force-confirm) fail CLOSED — no drift evidence, no entry.
+    their MEAN >= ``min_confirm``.
+
+    MEAN, not sum (2026-08-28 Opus review). H-PRICEDIN1 froze the bar at
+    "+1.0pt oriented drift at 120s" — that is a PER-120s-SAMPLE drift.
+    Summing the window let several small moves clear a bar meant for one
+    sample: three 0.2pt moves summed to 0.6pt and CONFIRMED under the old
+    ``sum >= 0.005`` rule, so the engine would place where the registry
+    licenses nothing (pre-registration violation). Averaging keeps this gate
+    at least as strict as the frozen bar, never looser.
+
+    Missing/empty/partial data and non-finite values (review F2: json parses
+    bare Infinity to a float; one inf could force-confirm) fail CLOSED —
+    no drift evidence, no entry.
     """
     moves = [
         float(m)
@@ -176,9 +193,9 @@ def drift_confirmed(
         and not isinstance(m, bool)
         and math.isfinite(m)
     ]
-    if len(moves) < min_samples:
+    if not moves or len(moves) < min_samples:
         return False
-    return sum(moves) >= min_confirm
+    return sum(moves) / len(moves) >= min_confirm
 
 
 def build_us_intent(row: dict, stake_cap_usd: float) -> OrderIntent | None:
