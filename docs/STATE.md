@@ -28,8 +28,22 @@ loop only: analysis, reviews, reports, hypothesis drafts.
 | EV positive at conservative bound | Wilson-lo EV/contract at disciplined entry: MANADV +.042, thr0.85 +.022, thr0.75 +.008, thr0.65 +.004 (`scripts/quant_eval.py`, data/analysis/quant_eval-*.json) |
 | GRID↔PMUS visibility | Mapping snapshot every 15 min: tier-1 matches join at coverage 1.0 (AURORA-G2, Spirit, NAVI-M80...). `data/pmus/mappings-*.jsonl` |
 
+**Priced-in finding (2026-08-28, H-PRICEDIN1):** the "discount" is NOT edge.
+Fill outcomes by discount bucket (n=13 fills, 2,844 book evals) run 0.20–0.67
+win vs corpus anchors 0.83–0.85, and the postquote drift test (n≈7,900)
+shows ~+0.5–1pt oriented drift per 2min — an order of magnitude short of
+repaying 20pt+ discounts (docs/analysis/2026-08-28-priced-in-test.md).
+Licensed responses, both landed: US band gate REVERTED to (0.50, 0.80)
+(99520cc — the widened 0.40–0.90 experiment admitted more of these
+lottery-ticket states), and a drift-confirmation gate now blocks mapentry
+placement unless the postquote diagnostic shows the market already moving
+our way — fail closed (a713593). The drift gate is a registered diagnostic
+with a frozen bar, not a tuned parameter.
+
 **NOT yet proven:** map-level aggregation calibration (H-MAPENTRY1 has zero
-instances — tonight starts it); fill probability at fair−4pts (the single
+instances — tonight starts it; full-slate coverage now records one eval per
+coherent round of every live series, src_hypothesis_id H-MAPENTRY1-SLATE);
+fill probability at fair−4pts (the single
 biggest unknown); any strategy PASS. No strategy is validated for scale.
 **External diagnostic (cs2agent ADR-0038, our pinned 32-series holdout,
 NOT a verdict input):** q at crossings transfers calibrated (+3pts
