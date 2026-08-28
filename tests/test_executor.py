@@ -173,13 +173,18 @@ class TestPmusWire:
 
 
 def _seed_drift(tmp_path, slug="astatc-cs2-aur-g2-map2",
-                moves=(0.01, 0.01, 0.01), day=None) -> None:
+                moves=(0.01, 0.01, 0.01), day=None, side="long",
+                us_side=None) -> None:
+    if us_side is not None:
+        side = us_side  # alias: row-field spelling
     """Write a postquote day-file with confirmed oriented drift for slug.
 
     Default moves sum to +0.03 >= DRIFT_MIN_CONFIRM, so drift-gated mapentry
     placements proceed exactly as they did before the gate existed (existing
     placement tests). Pass moves that sum below the threshold to test the
-    skip path.
+    skip path. Rows carry us_side + dt_s=120.0 — the loader filters on both
+    (review F1/F4), so seed the OPPOSITE side or another dt_s to test those
+    filters.
     """
     import json as _json
 
@@ -190,13 +195,35 @@ def _seed_drift(tmp_path, slug="astatc-cs2-aur-g2-map2",
     shadow = tmp_path / "shadow"
     shadow.mkdir(exist_ok=True)
     rows = [
-        {"type": "postquote", "market_slug": slug, "us_side": "long",
-         "oriented_move": m}
+        {"type": "postquote", "market_slug": slug, "us_side": side,
+         "dt_s": 120.0, "oriented_move": m}
         for m in moves
     ]
     with open(shadow / f"postquote-{day}.jsonl", "a") as fh:
         for r in rows:
             fh.write(_json.dumps(r) + "\n")
+
+
+
+def _seed_drift_for_side(tmp_path, slug, us_side, moves=(0.01, 0.01, 0.01),
+                         day=None) -> None:
+    """Seed postquote drift for ONE side, in the sampler's real row shape.
+
+    Deliberately independent of _seed_drift: the loader filters on side and
+    horizon, so second-side tests need the opposite side seeded explicitly.
+    """
+    import json as _json
+    from datetime import UTC, datetime as _dt
+
+    day = day or f"{_dt.now(UTC):%Y%m%d}"
+    shadow = tmp_path / "shadow"
+    shadow.mkdir(exist_ok=True)
+    with open(shadow / f"postquote-{day}.jsonl", "a") as fh:
+        for m in moves:
+            fh.write(_json.dumps({
+                "type": "postquote", "slug": slug, "us_side": us_side,
+                "dt_s": 120.0, "oriented_move": m,
+            }) + "\n")
 
 
 def _mapentry_row(**over) -> dict:
@@ -546,6 +573,10 @@ class TestReentry:
         (tmp_path / "shadow").mkdir()
         _seed_drift(tmp_path)
         _seed_drift(tmp_path, slug="astatc-cs2-ace-unity-2026-08-27-map2")
+        # both sides: the drift gate runs BEFORE the second-side gate, so a
+        # short intent needs confirmed short-side drift to reach it at all
+        _seed_drift_for_side(
+            tmp_path, "astatc-cs2-ace-unity-2026-08-27-map2", "short")
         self._oid = 0
 
         def _place(_i):
@@ -703,6 +734,10 @@ class TestSecondSide:
         (tmp_path / "shadow").mkdir()
         _seed_drift(tmp_path)
         _seed_drift(tmp_path, slug="astatc-cs2-ace-unity-2026-08-27-map2")
+        # both sides: the drift gate runs BEFORE the second-side gate, so a
+        # short intent needs confirmed short-side drift to reach it at all
+        _seed_drift_for_side(
+            tmp_path, "astatc-cs2-ace-unity-2026-08-27-map2", "short")
         self._oid = 0
 
         def _place(_i):
@@ -1092,9 +1127,11 @@ class TestDriftConfirm:
     def test_exactly_at_threshold_confirms(self) -> None:
         from gridbot.executor.intents import DRIFT_MIN_CONFIRM, drift_confirmed
 
-        assert drift_confirmed([DRIFT_MIN_CONFIRM]) is True
+        # single sample: only with an explicit lower min_samples (review F5:
+        # the default window of 3 must never confirm on a partial window)
+        assert drift_confirmed([DRIFT_MIN_CONFIRM], min_samples=1) is True
         # a hair under fails
-        assert drift_confirmed([DRIFT_MIN_CONFIRM - 1e-9]) is False
+        assert drift_confirmed([DRIFT_MIN_CONFIRM - 1e-9], min_samples=1) is False
 
     def test_mixed_drift_below_threshold_fails(self) -> None:
         from gridbot.executor.intents import drift_confirmed
@@ -1108,11 +1145,32 @@ class TestDriftConfirm:
         assert drift_confirmed([None]) is False  # type: ignore[list-item]
         assert drift_confirmed(["0.9"]) is False  # type: ignore[list-item]
 
+    def test_non_finite_moves_fail_closed(self) -> None:
+        # review F2: json parses bare Infinity/-Infinity/NaN into floats,
+        # which pass isinstance checks — a single inf must NOT force-confirm.
+        import math
+
+        from gridbot.executor.intents import drift_confirmed
+
+        assert drift_confirmed([float("inf")]) is False
+        assert drift_confirmed([float("-inf")]) is False
+        assert drift_confirmed([math.nan]) is False
+        assert drift_confirmed([0.01, float("inf"), 0.01]) is False
+
+    def test_partial_window_fails_closed(self) -> None:
+        # review F5: fewer samples than the window can never confirm, even
+        # with a huge per-sample sum.
+        from gridbot.executor.intents import drift_confirmed
+
+        assert drift_confirmed([100.0]) is False
+        assert drift_confirmed([100.0, 100.0]) is False
+        assert drift_confirmed([0.01, 0.01, 0.01]) is True  # full window does
+
     def test_custom_min_confirm(self) -> None:
         from gridbot.executor.intents import drift_confirmed
 
-        assert drift_confirmed([0.01], min_confirm=0.005) is True
-        assert drift_confirmed([0.001], min_confirm=0.005) is False
+        assert drift_confirmed([0.01], min_confirm=0.005, min_samples=1) is True
+        assert drift_confirmed([0.001], min_confirm=0.005, min_samples=1) is False
 
     # ---- engine loader ----
 
@@ -1122,7 +1180,7 @@ class TestDriftConfirm:
         _seed_drift(tmp_path, slug=self.SLUG, moves=(0.02, -0.01), day="20260827")
         _seed_drift(tmp_path, slug=self.SLUG, moves=(0.005, 0.004), day="20260828")
         moves = engine_mod.recent_postquote_moves(
-            tmp_path / "shadow", self.SLUG, today="20260828"
+            tmp_path / "shadow", self.SLUG, "long", today="20260828"
         )
         # prior day first, then today's; only the last 3 kept
         assert moves == [-0.01, 0.005, 0.004]
@@ -1135,9 +1193,9 @@ class TestDriftConfirm:
         shadow = tmp_path / "shadow"
         shadow.mkdir(parents=True)
         rows = [
-            {"type": "postquote", "market_slug": "other-slug", "oriented_move": 0.5},
-            {"type": "postquote", "market_slug": self.SLUG, "oriented_move": None},
-            {"type": "postquote", "market_slug": self.SLUG, "oriented_move": 0.01},
+            {"type": "postquote", "us_side": "long", "dt_s": 120.0, "slug": "other-slug", "oriented_move": 0.5},
+            {"type": "postquote", "us_side": "long", "dt_s": 120.0, "slug": self.SLUG, "oriented_move": None},
+            {"type": "postquote", "us_side": "long", "dt_s": 120.0, "slug": self.SLUG, "oriented_move": 0.01},
             {"type": "instance", "market_slug": self.SLUG, "oriented_move": 9.0},
             "not-json",
         ]
@@ -1146,7 +1204,7 @@ class TestDriftConfirm:
                 fh.write(r if isinstance(r, str) else json.dumps(r))
                 fh.write("\n")
         moves = engine_mod.recent_postquote_moves(
-            shadow, self.SLUG, today="20260828"
+            shadow, self.SLUG, "long", today="20260828"
         )
         assert moves == [0.01]
 
@@ -1155,9 +1213,9 @@ class TestDriftConfirm:
 
         (tmp_path / "shadow").mkdir()
         assert engine_mod.recent_postquote_moves(
-            tmp_path / "shadow", "nope", today="20260101"
+            tmp_path / "shadow", "nope", "long", today="20260101"
         ) == []
-        assert engine_mod.recent_postquote_moves(tmp_path / "shadow", "") == []
+        assert engine_mod.recent_postquote_moves(tmp_path / "shadow", "", "long") == []
 
     def test_loader_skips_non_dict_json_lines(self, tmp_path) -> None:
         import json
@@ -1167,19 +1225,19 @@ class TestDriftConfirm:
         shadow = tmp_path / "shadow"
         shadow.mkdir(parents=True)
         rows = [
-            {"type": "postquote", "market_slug": self.SLUG, "oriented_move": 0.01},
+            {"type": "postquote", "us_side": "long", "dt_s": 120.0, "slug": self.SLUG, "oriented_move": 0.01},
             [1, 2],
             "a plain string",
             42,
             None,
-            {"type": "postquote", "market_slug": self.SLUG, "oriented_move": 0.02},
+            {"type": "postquote", "us_side": "long", "dt_s": 120.0, "slug": self.SLUG, "oriented_move": 0.02},
         ]
         with open(shadow / "postquote-20260828.jsonl", "w") as fh:
             for r in rows:
                 fh.write(r if isinstance(r, str) else json.dumps(r))
                 fh.write("\n")
         moves = engine_mod.recent_postquote_moves(
-            shadow, self.SLUG, today="20260828"
+            shadow, self.SLUG, "long", today="20260828"
         )
         # the non-dict JSON rows between valid ones don't abort the scan
         assert moves == [0.01, 0.02]
@@ -1196,7 +1254,7 @@ class TestDriftConfirm:
         with open(shadow / "postquote-20260828.jsonl", "w") as fh:
             fh.write(
                 json.dumps(
-                    {"type": "postquote", "market_slug": self.SLUG, "oriented_move": 0.01}
+                    {"type": "postquote", "us_side": "long", "dt_s": 120.0, "slug": self.SLUG, "oriented_move": 0.01}
                 )
                 + "\n"
             )
@@ -1210,8 +1268,102 @@ class TestDriftConfirm:
 
         monkeypatch.setattr(builtins, "open", raising_open)
         assert engine_mod.recent_postquote_moves(
-            shadow, self.SLUG, today="20260828"
+            shadow, self.SLUG, "long", today="20260828"
         ) == []
+
+    def test_loader_filters_to_intent_side(self, tmp_path) -> None:
+        # review F1: a SHORT intent must never be confirmed by LONG-oriented
+        # samples on the same slug — fewer same-side samples fails closed.
+        from gridbot.executor import engine as engine_mod
+
+        _seed_drift(tmp_path, slug=self.SLUG, moves=(0.01, 0.01, 0.01))
+        assert engine_mod.recent_postquote_moves(
+            tmp_path / "shadow", self.SLUG, "short"
+        ) == []
+        assert engine_mod.recent_postquote_moves(
+            tmp_path / "shadow", self.SLUG, "long"
+        ) == [0.01, 0.01, 0.01]
+
+    def test_short_intent_not_confirmed_by_long_only_slug(self, tmp_path, monkeypatch) -> None:
+        # end-to-end F1: a slug whose only postquote samples are LONG-oriented
+        # must NOT confirm a SHORT intent's drift gate.
+        _seed_drift(tmp_path, slug=self.SLUG, moves=(0.01, 0.01, 0.01),
+                    side="long")
+        eng = self._engine(tmp_path, monkeypatch)
+        status = eng.handle(
+            _mapentry_row(p_map=0.75, us_side="short", side_ask=0.30,
+                          entry_price_max=0.35, dedup_extra="short:0.30"),
+            limits.ArmingState(dry_run=True),
+        )
+        assert status == "skipped:no_drift_confirm"
+
+    def test_loader_drops_non_finite_moves(self, tmp_path) -> None:
+        # review F2 at the loader: json's bare Infinity passes isinstance and
+        # would otherwise dominate the sum.
+        import json
+
+        from gridbot.executor import engine as engine_mod
+
+        shadow = tmp_path / "shadow"
+        shadow.mkdir(parents=True)
+        with open(shadow / "postquote-20260828.jsonl", "w") as fh:
+            fh.write(json.dumps({"type": "postquote", "slug": self.SLUG,
+                                 "us_side": "long", "dt_s": 120.0,
+                                 "oriented_move": float("inf")}) + "\n")
+            fh.write(json.dumps({"type": "postquote", "slug": self.SLUG,
+                                 "us_side": "long", "dt_s": 120.0,
+                                 "oriented_move": 0.01}) + "\n")
+        assert engine_mod.recent_postquote_moves(
+            shadow, self.SLUG, "long", today="20260828"
+        ) == [0.01]
+
+    def test_loader_rollover_uses_day_param_not_wall_clock(self, tmp_path) -> None:
+        # review F3: a pinned "today" must pair with ITS prior day even if
+        # the wall clock is far from it.
+        import json
+
+        from gridbot.executor import engine as engine_mod
+
+        shadow = tmp_path / "shadow"
+        shadow.mkdir(parents=True)
+        # prior-day file that ONLY exists under the day-param rollover
+        with open(shadow / "postquote-20260228.jsonl", "w") as fh:
+            fh.write(json.dumps({"type": "postquote", "slug": self.SLUG,
+                                 "us_side": "long", "dt_s": 120.0,
+                                 "oriented_move": 0.02}) + "\n")
+        with open(shadow / "postquote-20260301.jsonl", "w") as fh:
+            fh.write(json.dumps({"type": "postquote", "slug": self.SLUG,
+                                 "us_side": "long", "dt_s": 120.0,
+                                 "oriented_move": 0.02}) + "\n")
+        moves = engine_mod.recent_postquote_moves(
+            shadow, self.SLUG, "long", today="20260301"
+        )
+        # 20260228 is the day before 20260301 (non-leap year): both files read
+        assert moves == [0.02, 0.02]
+
+    def test_loader_only_counts_registered_120s_horizon(self, tmp_path) -> None:
+        # review F4: the 30/60s views of the same moment must never
+        # masquerade as independent confirmations.
+        import json
+
+        from gridbot.executor import engine as engine_mod
+
+        shadow = tmp_path / "shadow"
+        shadow.mkdir(parents=True)
+        rows = [
+            {"type": "postquote", "slug": self.SLUG, "us_side": "long",
+             "dt_s": 30.0, "oriented_move": 0.03},
+            {"type": "postquote", "slug": self.SLUG, "us_side": "long",
+             "dt_s": 60.0, "oriented_move": 0.03},
+            {"type": "postquote", "slug": self.SLUG, "us_side": "long",
+             "dt_s": 120.0, "oriented_move": 0.01},
+        ]
+        with open(shadow / "postquote-20260828.jsonl", "w") as fh:
+            for r in rows:
+                fh.write(json.dumps(r) + "\n")
+        assert engine_mod.recent_postquote_moves(
+            shadow, self.SLUG, "long", today="20260828"
+        ) == [0.01]
 
     # ---- engine gate ----
 
@@ -1293,3 +1445,72 @@ class TestDriftConfirm:
             _mapentry_row(p_map=0.75), limits.ArmingState(dry_run=True)
         )
         assert status == "skipped:no_drift_confirm"
+
+
+class TestDriftLoaderAgainstRealRowShape:
+    """The drift loader must match rows the postquote sampler ACTUALLY writes.
+
+    Regression for the 2026-08-28 total-outage bug: the loader filtered on
+    ``market_slug``, a field absent from all 720 real postquote rows (the
+    sampler writes ``slug``), so every lookup returned [] and the fail-closed
+    gate skipped 100% of placements. The suite passed because every fixture
+    mirrored the loader's own assumption — so this test hard-codes a row
+    copied from data/shadow/postquote-20260828.jsonl instead.
+    """
+
+    REAL_ROW = {
+        "type": "postquote", "slug": "astatc-cs2-reda-bsta-2026-08-27-map2",
+        "us_side": "long", "mid0": 0.58, "src_ts_ns": 1787875129993339669,
+        "series_id": "2998072", "map_number": 2, "dedup_extra": "",
+        "dt_s": 120.0, "bid": 0.51, "ask": 0.65, "mid": 0.58,
+        "oriented_move": 0.004, "ts_ns": 1787875258728338145,
+    }
+
+    def _write(self, shadow, rows):
+        import json
+
+        shadow.mkdir(parents=True, exist_ok=True)
+        with open(shadow / "postquote-20260828.jsonl", "w") as fh:
+            for r in rows:
+                fh.write(json.dumps(r) + "\n")
+
+    def test_real_sampler_row_shape_is_matched(self, tmp_path) -> None:
+        from gridbot.executor import engine as engine_mod
+
+        shadow = tmp_path / "shadow"
+        self._write(shadow, [dict(self.REAL_ROW) for _ in range(3)])
+        moves = engine_mod.recent_postquote_moves(
+            shadow, self.REAL_ROW["slug"], "long", today="20260828"
+        )
+        assert moves == [0.004, 0.004, 0.004]  # NOT [] — the outage signature
+
+    def test_opposite_side_samples_never_counted(self, tmp_path) -> None:
+        # 5 slugs on 08-28 carried BOTH sides; oriented_move is signed for the
+        # side taken at sample time, so pooling them inverts the evidence.
+        from gridbot.executor import engine as engine_mod
+
+        shadow = tmp_path / "shadow"
+        self._write(shadow, [
+            {**self.REAL_ROW, "us_side": "short", "oriented_move": 0.05}
+            for _ in range(3)
+        ])
+        assert engine_mod.recent_postquote_moves(
+            shadow, self.REAL_ROW["slug"], "long", today="20260828"
+        ) == []
+
+    def test_only_the_frozen_horizon_counts(self, tmp_path) -> None:
+        # One entry is sampled at 30/60/120s; counting all three would let a
+        # single observation confirm as if it were three.
+        from gridbot.executor import engine as engine_mod
+        from gridbot.executor.intents import drift_confirmed
+
+        shadow = tmp_path / "shadow"
+        self._write(shadow, [
+            {**self.REAL_ROW, "dt_s": d, "oriented_move": 0.004}
+            for d in (30.0, 60.0, 120.0)
+        ])
+        moves = engine_mod.recent_postquote_moves(
+            shadow, self.REAL_ROW["slug"], "long", today="20260828"
+        )
+        assert moves == [0.004]  # the 120s sample only
+        assert drift_confirmed(moves) is False  # and one sample cannot confirm

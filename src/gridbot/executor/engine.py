@@ -17,8 +17,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from gridbot import config
@@ -26,6 +27,7 @@ from gridbot.executor import fills as fills_mod
 from gridbot.executor import ledger as ledger_mod
 from gridbot.executor import limits, pmus, reconcile
 from gridbot.executor.intents import (
+    DRIFT_HORIZON_S,
     DRIFT_WINDOW,
     OrderIntent,
     build_intent,
@@ -44,21 +46,43 @@ MAKER_TTL_S = 150.0  # M5: pull unfilled maker quotes — a fair-value quote
 
 
 def recent_postquote_moves(
-    shadow_dir: Path, slug: str, n: int = 3, today: str | None = None
+    shadow_dir: Path, slug: str, side: str, n: int = 3, today: str | None = None
 ) -> list[float]:
-    """Last ``n`` oriented postquote moves for ``slug``, oldest first.
+    """Last ``n`` oriented postquote moves for ``slug`` on ``side``, oldest first.
 
     Reads data/shadow/postquote-<day>.jsonl (today + prior day — the same
-    two-day file pattern as the mapping/settle day-files). Rows with a
-    missing/non-numeric ``oriented_move`` are skipped. Non-dict JSON rows are
-    skipped too. Missing files or no samples for the slug return [] — the
+    two-day file pattern as the mapping/settle day-files).
+
+    THREE filters, each load-bearing (all verified against real capture
+    2026-08-28; the field-name one was a total-outage bug):
+    - SLUG: the sampler writes ``slug`` (the venue's own spelling); mapping
+      rows store the same value as ``market_slug``. Both are accepted so the
+      loader cannot silently match nothing again.
+    - SIDE: ``oriented_move`` is signed with respect to the side that was
+      TAKEN at sample time, and real books carry samples for BOTH sides of
+      one slug (5 such slugs on 08-28). Pooling them inverts the sign of the
+      opposite side's evidence — the STATE.md rule "never pool unoriented
+      across sides".
+    - HORIZON: one entry is sampled at 30/60/120s; only the frozen
+      ``DRIFT_HORIZON_S`` bar counts, so three views of one moment can never
+      masquerade as three confirmations.
+
+    Rows with a missing/non-numeric ``oriented_move`` are skipped, as are
+    non-dict JSON rows. Missing files or no matching samples return [] — the
     drift gate fails closed on that.
     """
-    if not slug:
+    if not slug or not side:
         return []
     now = datetime.now(UTC)
     day0 = today or f"{now:%Y%m%d}"
-    yday = f"{datetime.fromtimestamp(now.timestamp() - 86400, UTC):%Y%m%d}"
+    # Rollover from the day param, not the real clock (review F3): a pinned
+    # "today" must pair with ITS prior day, whatever wall-clock now is.
+    try:
+        yday = (
+            datetime.strptime(day0, "%Y%m%d").date() - timedelta(days=1)
+        ).strftime("%Y%m%d")
+    except ValueError:
+        return []
     moves: list[float] = []
     log = logging.getLogger(__name__)
     for day in (yday, day0):  # chronological so [-n:] keeps the most recent
@@ -83,10 +107,23 @@ def recent_postquote_moves(
                         continue
                     if not isinstance(row, dict):
                         continue
-                    if row.get("type") != "postquote" or row.get("market_slug") != slug:
+                    if row.get("type") != "postquote":
+                        continue
+                    if (row.get("slug") or row.get("market_slug")) != slug:
+                        continue
+                    if row.get("us_side") != side:
+                        continue
+                    dt = row.get("dt_s")
+                    if not isinstance(dt, (int, float)) or isinstance(dt, bool):
+                        continue
+                    if abs(float(dt) - DRIFT_HORIZON_S) > 1.0:
                         continue
                     m = row.get("oriented_move")
-                    if isinstance(m, (int, float)) and not isinstance(m, bool):
+                    if (
+                        isinstance(m, (int, float))
+                        and not isinstance(m, bool)
+                        and math.isfinite(m)
+                    ):
                         moves.append(float(m))
         except OSError:
             log.warning("postquote file unreadable: %s", path)
@@ -245,7 +282,8 @@ class Engine:
         # the same book may still enter), mirroring the band gate.
         if kind == "mapentry":
             moves = recent_postquote_moves(
-                self.shadow_dir, intent.market_slug, n=DRIFT_WINDOW
+                self.shadow_dir, intent.market_slug, intent.us_side,
+                n=DRIFT_WINDOW,
             )
             if not drift_confirmed(moves):
                 self._skip_row(intent, record, "skipped:no_drift_confirm", armed)

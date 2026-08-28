@@ -11,6 +11,7 @@ records and timestamps.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from gridbot.instruments.fills import TICK
@@ -145,29 +146,37 @@ def us_band_gated(p_map: object) -> bool:
 
 DRIFT_WINDOW = 3  # postquote samples the engine feeds in (most recent first kept)
 DRIFT_MIN_CONFIRM = 0.005  # 0.5pt cumulative oriented move in our side's favor
+# The postquote sampler records EACH entry at three horizons (30/60/120s).
+# H-PRICEDIN1 froze the diagnostic at 120s, so the gate reads that horizon
+# ONLY — pooling all three would triple-count one observation as if it
+# were three independent confirmations (review 2026-08-28).
+DRIFT_HORIZON_S = 120.0
 
 
 def drift_confirmed(
     prior_postquote_moves: list[float],
     min_confirm: float = DRIFT_MIN_CONFIRM,
+    min_samples: int = DRIFT_WINDOW,
 ) -> bool:
     """DRIFT-CONFIRMATION gate (priced-in analysis 2026-08-28, licensed
     action 2): place only when the market has STARTED moving our way.
 
     ``prior_postquote_moves`` are ORIENTED moves (postquote sampler, + =
-    with our side) for the record's slug, most recent LAST. Placement
-    requires the recent sum >= ``min_confirm``. Missing/empty data fails
-    CLOSED — no drift evidence, no entry (the priced-in finding showed the
-    drift cannot repay the discount, so unconfirmed drift is no entry).
+    with our side) for the record's slug+side at the 120s horizon, most
+    recent LAST. Placement requires at least ``min_samples`` usable samples
+    (review F5: a partial window could otherwise confirm on ONE sample) and
+    their sum >= ``min_confirm``. Missing/empty/partial data and non-finite
+    values (review F2: json parses bare Infinity to a float; one inf could
+    force-confirm) fail CLOSED — no drift evidence, no entry.
     """
-    if not prior_postquote_moves:
-        return False
     moves = [
         float(m)
         for m in prior_postquote_moves
-        if isinstance(m, (int, float)) and not isinstance(m, bool)
+        if isinstance(m, (int, float))
+        and not isinstance(m, bool)
+        and math.isfinite(m)
     ]
-    if not moves:
+    if len(moves) < min_samples:
         return False
     return sum(moves) >= min_confirm
 
