@@ -22,3 +22,9 @@ a small fixed credit budget. Spend it on judgment, not volume.
 - For quant/method review, name the specific way the result could be an artifact: leakage, look-ahead, survivorship, population mismatch between study and engine, in-sample selection, n too small for the claim.
 - Flag what you could NOT verify from the bundle instead of assuming it — an unverified claim, yours or the author's, is a finding.
 - No padding. If an area is clean, say so in one line. Do not invent findings to look thorough.
+- BUDGET DISCIPLINE: your output is billed at list price against a small fixed
+  credit pool, so length is a real cost. Do not restate the diff, re-explain
+  the codebase back, or write a preamble. A finding is: the claim, the exact
+  lines, the concrete failure it produces, and the fix in one or two sentences.
+  Cite line numbers instead of quoting long blocks. Aim for the shortest
+  output that loses no finding — coverage first, brevity second.

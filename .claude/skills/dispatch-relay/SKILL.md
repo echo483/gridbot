@@ -24,8 +24,20 @@ agents/<lane>.md (version-controlled preambles, prepended automatically).
 - **analysis** (deepseek): bulk data reads. Delivered the 08-27 funnel
   census that reconciled 379→33 exactly. Paste ALL data in; it has no
   repo access.
+- **verify** (Claude Opus 5 via the Claude API, NOT hermes): the paid
+  verification lane, funded by a small fixed credit pool. Spend it on
+  trade-path/registry-deciding diffs and on quant method review (does the
+  backtest earn its number), never on bulk. It may propose production code;
+  nothing it writes lands unreviewed. Because it calls the API directly,
+  hermes' global default/fallback/MoA/cron model config cannot reach it —
+  model, effort, and key are pinned in git. hermes uses it the same way we
+  do: `uv run python scripts/dispatch.py verify <prompt-file> --out <file>`.
+  Runs take 5-10min at xhigh; dispatch it in the BACKGROUND, and note that a
+  wrapper shell exiting 0 is not the call finishing (check the artifact).
+  Every call writes a reservation+settle row to data/agent_spend/anthropic.jsonl
+  and the lane refuses once the cap is reached.
 - **pair mode**: builder→reviewer→revise relay. `--builder`/`--reviewer`
-  flags choose lanes.
+  flags choose lanes; `--reviewer verify` routes the review leg to the API.
 
 ## Spec craft (the difference between success and rejection)
 
