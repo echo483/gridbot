@@ -235,19 +235,39 @@ def summarize(rows: list[dict]) -> list[dict]:
     return out
 
 
+def mapentry_summary_lines(reading: str = "mid") -> list[str]:
+    """H-MAPENTRY1 scored against its frozen bar.
+
+    Deliberately INDEPENDENT of the instance corpus: mapentry rows and
+    instance rows are populated on different schedules, and the instance
+    early-return below must never be able to suppress this row (glm-5.3
+    review finding 6, 2026-08-30).
+    """
+    from gridbot.instruments import mapentry_verdict as mv
+
+    try:
+        result = mv.run(reading=reading)
+    except Exception as exc:  # noqa: BLE001 — a reporting layer never crashes the report
+        return [f"  H-MAPENTRY1: unavailable ({type(exc).__name__}: {exc})"]
+    if result is None:
+        return ["  H-MAPENTRY1: no mapentry rows or no resolved maps yet"]
+    return mv.summary_lines(result)
+
+
 def compact_summary() -> list[str]:
     """Short per-cell progress lines for the nightly report (real instances only)."""
     instances = load_instances(replay=False, include_test=False)
     if not instances:
-        return ["verdict: no real instances yet"]
-    oracles = build_oracles({i["series_id"] for i in instances})
-    lines = []
-    for s in summarize(resolve_instances(instances, oracles)):
-        rate = "" if s["win_rate"] is None else f" win {s['win_rate']:.2f}"
-        pnl = "" if s["paper_mean_pnl"] is None else f" pnl {s['paper_mean_pnl']:+.3f}×{s['paper_entries']}"
-        bar = f"/{s['bar_n']}" if s["bar_n"] else ""
-        lines.append(f"  {s['cell']}: {s['n']}{bar} n·{s['series']}ser{rate}{pnl}")
-    return lines
+        lines = ["verdict: no real instances yet"]
+    else:
+        oracles = build_oracles({i["series_id"] for i in instances})
+        lines = []
+        for s in summarize(resolve_instances(instances, oracles)):
+            rate = "" if s["win_rate"] is None else f" win {s['win_rate']:.2f}"
+            pnl = "" if s["paper_mean_pnl"] is None else f" pnl {s['paper_mean_pnl']:+.3f}×{s['paper_entries']}"
+            bar = f"/{s['bar_n']}" if s["bar_n"] else ""
+            lines.append(f"  {s['cell']}: {s['n']}{bar} n·{s['series']}ser{rate}{pnl}")
+    return lines + mapentry_summary_lines()
 
 
 def main() -> None:
@@ -255,18 +275,38 @@ def main() -> None:
     ap.add_argument("--replay", action="store_true", help="analyze replay-*.jsonl instead")
     ap.add_argument("--include-test", action="store_true", help="include GRID-TEST fixtures")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of text")
+    ap.add_argument("--book-reading", choices=["mid", "side_ask"], default="mid",
+                    help="how to read the bar's 'book price as forecast' (clause i)")
     args = ap.parse_args()
+
+    # H-MAPENTRY1 is scored from mapentry-*.jsonl and must not be gated on the
+    # instance corpus being populated (glm-5.3 review finding 6).
+    from gridbot.instruments import mapentry_verdict as mv
+
+    mapentry_result = None
+    if not args.replay:
+        try:
+            mapentry_result = mv.run(reading=args.book_reading)
+        except Exception as exc:  # noqa: BLE001 — reporting layer, never crash
+            print(f"H-MAPENTRY1: unavailable ({type(exc).__name__}: {exc})")
 
     instances = load_instances(args.replay, args.include_test)
     if not instances:
         print("no instances recorded yet")
+        if args.json:
+            print(json.dumps({"mapentry": mapentry_result}, indent=1))
+        else:
+            for line in (
+                mv.summary_lines(mapentry_result) if mapentry_result else []
+            ):
+                print(line)
         return
     oracles = build_oracles({i["series_id"] for i in instances})
     rows = resolve_instances(instances, oracles)
     attach_maker(rows)
     summary = summarize(rows)
     if args.json:
-        print(json.dumps(summary, indent=1))
+        print(json.dumps({"cells": summary, "mapentry": mapentry_result}, indent=1))
         return
     print(f"{'cell':34} {'n':>4} {'ser':>3} {'res':>4} {'win%':>6} {'winCI':>15} "
           f"{'quoted':>6} {'paper':>5} {'pnl':>7} {'mkQ':>4} {'mkF':>4} {'mkPnl':>7} {'barN':>5}")
@@ -280,6 +320,10 @@ def main() -> None:
             f"{('' if s['maker_mean_pnl'] is None else format(s['maker_mean_pnl'], '+.4f')):>7} "
             f"{s['bar_n']:>5}"
         )
+    if mapentry_result:
+        print()
+        for line in mv.summary_lines(mapentry_result):
+            print(line)
 
 
 if __name__ == "__main__":
