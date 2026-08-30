@@ -48,8 +48,14 @@ check both):
 - registry.jsonl — the frozen experiment registry: falsified lanes stay
   closed; H-MANADV1 / H-ECONBUY1 / H-PISTOLCARRY1 / H-MODELENTRY1(+CELLS)
   are the open pre-registered hypotheses with frozen falsification bars.
-- verdict.json — per-cell instrument progress from the live shadow engine
-  (n, series spread, win rates with CIs, paper/maker PnL when quoted).
+- verdict.json — {"cells": [...], "mapentry": {...}}. "cells" is per-cell
+  instrument progress from the live shadow engine (n, series spread, win
+  rates with CIs, paper/maker PnL when quoted). "mapentry" is H-MAPENTRY1
+  scored against its three frozen clauses plus starvation, series-clustered;
+  it may be null when no mapentry rows or no resolved maps exist yet. Its
+  "status" of FALSIFIED_ON_CAPTURED_DATA is NOT a registry verdict —
+  holdout_declared is false, so treat it as a measurement over captured rows
+  and say so explicitly in any writeup.
 - model_metrics.json — the served model's pinned-holdout benchmark
   (roundwin-v1; leak-filtered; temporal 32-series holdout).
 - capture_qa.txt — capture-health fingerprint at run time.
@@ -83,7 +89,11 @@ def gather_evidence(scratch: Path) -> dict[str, Path]:
         files["model_metrics.json"] = metrics
     verdict = scratch / "verdict.json"
     verdict.write_text(
-        _run([sys.executable, "-m", "gridbot.instruments.verdict", "--json"]) or "[]"
+        # Shape is {"cells": [...], "mapentry": {...}} — the fallback must be
+        # the same shape as success or the agent silently reads an empty list
+        # as "no cells" when it is really "the command failed".
+        _run([sys.executable, "-m", "gridbot.instruments.verdict", "--json"])
+        or '{"cells": [], "mapentry": null}'
     )
     files["verdict.json"] = verdict
     qa = scratch / "capture_qa.txt"
