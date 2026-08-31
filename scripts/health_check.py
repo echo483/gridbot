@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -104,6 +105,30 @@ def _send(msg: str) -> None:
     )
 
 
+def _watch_keyring() -> bool:
+    """Run the keyring lock watchdog (scripts/keyring_watch.py --notify).
+
+    Best-effort: any nonzero exit or crash must never break the 5-minute
+    timer. Returns True when the watchdog sent its own Telegram alert this
+    cycle (exit 2 = locked + alerted), so the generic red summary below is
+    suppressed in the same cycle — one ping for the keyring, not two.
+    """
+    script = Path(__file__).resolve().parents[1] / "scripts" / "keyring_watch.py"
+    try:
+        r = subprocess.run(
+            [sys.executable, str(script), "--notify"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=45,
+        )
+        return r.returncode == 2
+    except subprocess.TimeoutExpired:
+        return False
+    except Exception:  # noqa: BLE001 — best-effort by design
+        return False
+
+
 def _problems(prev: dict) -> tuple[list[str], dict]:
     problems: list[str] = []
     now = time.time()
@@ -158,9 +183,14 @@ def main() -> None:
         except json.JSONDecodeError:
             pass
     problems, flags = _problems(prev)
+    # Keyring lock watchdog runs after the self-heal block, before the
+    # summary: its transition alerts ride Telegram; when it alerted this
+    # cycle (exit 2) the generic red summary is suppressed to keep the
+    # phone quiet (keyring_watch's own message carries the recovery line).
+    keyring_alerted = _watch_keyring()
     ok = not problems
     stamp = datetime.now(UTC).strftime("%H:%M UTC")
-    if not ok and prev.get("ok", True):
+    if not ok and prev.get("ok", True) and not keyring_alerted:
         _send("🔴 gridbot health: " + "; ".join(problems) + f" ({stamp})")
     elif ok and not prev.get("ok", True):
         _send(f"✅ gridbot health recovered ({stamp})")
