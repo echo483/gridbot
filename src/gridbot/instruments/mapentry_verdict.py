@@ -49,9 +49,11 @@ from __future__ import annotations
 import glob as _glob
 import json
 import random
+import re
 import subprocess
 import sys
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 US_TICK = 0.01
@@ -64,6 +66,18 @@ BAR_MIN_RESOLVED = 150
 BAR_MIN_QUALIFYING = 60
 BAR_MIN_EDGE_PTS = 0.02  # "+2 points"
 BAR_STARVATION_FRACTION = 0.05
+
+# H-MAPENTRY1-BOOKPIN1 (registry.jsonl, 2026-08-31): the bar (i) comparator
+# "book price as forecast" is PINNED to book MID on resolved instances carrying
+# a real two-sided PMUS book; side_ask is execution-only, never the bar
+# comparator. The same row pre-registers the temporal holdout below. Reporting
+# layer only — this changes no computation, only how the verdict is annotated.
+BOOKPIN_HYPOTHESIS_ID = "H-MAPENTRY1-BOOKPIN1"
+BOOKPIN_PINNED_READING = "mid"
+# Actual holdout start carried by H-MAPENTRY1-BOOKPIN1 ("first GRID<->PMUS
+# mapping row recorded at or after <ts>"). Used only if the registry row
+# cannot be parsed — the registry text is the source of truth.
+HOLD_START_FALLBACK = "2026-08-31T19:53:46Z"
 
 _ROOT = Path(__file__).resolve().parents[3]
 
@@ -115,6 +129,58 @@ def provenance(row: dict) -> str:
     if row.get("dedup_extra") == "slate":
         return "SLATE"
     return "DETECTOR"
+
+
+def has_two_sided_book(row: dict) -> bool:
+    """A real two-sided PMUS book at detection (D3 semantics: never impute).
+
+    One-sided, missing, zeroed or crossed books do not qualify — the same
+    population rule clause (i) uses, factored out so the holdout count can
+    share it without touching the scoring path.
+    """
+    bid, ask = row.get("bid"), row.get("ask")
+    if not isinstance(bid, (int, float)) or not isinstance(ask, (int, float)):
+        return False
+    bid, ask = float(bid), float(ask)
+    return 0.0 < bid < 1.0 and 0.0 < ask < 1.0 and ask > bid
+
+
+def iso_to_ns(iso: str) -> int:
+    """Epoch nanoseconds for an ISO-8601 timestamp (Z suffix accepted)."""
+    dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1_000_000_000)
+
+
+def holdout_start_iso(registry_path: str | Path | None = None) -> str:
+    """The holdout start declared by H-MAPENTRY1-BOOKPIN1 in registry.jsonl.
+
+    Parses the row's own text ("recorded at or after <ts>"). Falls back to the
+    actual value the row carries as of registration if the file is missing or
+    unparseable, so the reporting layer never crashes on the registry.
+    """
+    path = Path(registry_path) if registry_path else (
+        _ROOT / "docs" / "experiments" / "registry.jsonl"
+    )
+    try:
+        with open(path) as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if rec.get("hypothesis_id") != BOOKPIN_HYPOTHESIS_ID:
+                    continue
+                m = re.search(
+                    r"at or after\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)",
+                    str(rec.get("hypothesis_text", "")),
+                )
+                if m:
+                    return m.group(1)
+    except OSError:
+        pass
+    return HOLD_START_FALLBACK
 
 
 # --------------------------------------------------------------------------
@@ -257,13 +323,15 @@ def evaluate_bar(
     winners: dict,
     reading: str = "mid",
     include_slate: bool = False,
+    holdout_start: str | None = None,
 ) -> dict:
     """Score H-MAPENTRY1's recording population against its three frozen clauses.
 
     `rows` is the RECORDING population (D7: engine band/drift/slate gates are
     NOT verdict filters — the registry's ENGINE_GATE_AMENDMENT says so in
     terms). `include_slate` pools Queue-16 coverage rows; default is to split
-    them out.
+    them out. `holdout_start` overrides the holdout start declared by
+    H-MAPENTRY1-BOOKPIN1 (default: parse it from registry.jsonl).
     """
     pop = [r for r in rows if include_slate or provenance(r) == "DETECTOR"]
 
@@ -372,6 +440,28 @@ def evaluate_bar(
         "starved": None if frac is None else bool(frac < BAR_STARVATION_FRACTION),
     }
 
+    # --- holdout (H-MAPENTRY1-BOOKPIN1) --------------------------------------
+    # Pre-registered temporal holdout: resolved instances carrying a real
+    # two-sided PMUS book, recorded at/after the declared start. The registry
+    # makes the >=150 INSTANCE threshold binding (series are appended until it
+    # is met), so this count is over instances, not series.
+    hold_start_iso = holdout_start or holdout_start_iso()
+    hold_start_ns = iso_to_ns(hold_start_iso)
+    holdout_n = sum(
+        1
+        for r in resolved
+        if has_two_sided_book(r)
+        and isinstance(r.get("ts_ns"), (int, float))
+        and r["ts_ns"] >= hold_start_ns
+    )
+    holdout_ready = holdout_n >= BAR_MIN_RESOLVED
+    holdout = {
+        "start": hold_start_iso,
+        "n": holdout_n,
+        "bar": BAR_MIN_RESOLVED,
+        "holdout_declared": holdout_ready,
+    }
+
     # --- status -------------------------------------------------------------
     powered = (
         len(resolved) >= BAR_MIN_RESOLVED and len(deduped) >= BAR_MIN_QUALIFYING
@@ -396,11 +486,13 @@ def evaluate_bar(
         "clause_ii": clause_ii,
         "clause_iii": clause_iii,
         "starvation": starvation,
-        # A registry verdict additionally requires a PRE-DECLARED held-out
-        # window. This function scores whatever rows it is handed; it never
-        # claims the holdout exists.
+        # A registry verdict requires the pre-declared holdout window to be
+        # FULL. H-MAPENTRY1-BOOKPIN1 declares it; holdout_declared flips true
+        # only at >=150 held-out two-sided-book resolved instances, never
+        # before — no verdict is rendered on the pre-holdout corpus.
+        "holdout": holdout,
         "verdict_reachable": bool(powered),
-        "holdout_declared": False,
+        "holdout_declared": holdout_ready,
         "notes": [
             "Reporting layer. The registry bar is the only PASS/FAIL rule.",
             "All intervals resample SERIES, not rows.",
@@ -410,8 +502,15 @@ def evaluate_bar(
             ),
             "clause (iii) n is the DEDUPED per-book count, not qualifying rows.",
             (
-                "No pre-declared holdout: status is a measurement over "
-                "captured rows, not a registry verdict."
+                "Holdout per H-MAPENTRY1-BOOKPIN1: the registry verdict "
+                "renders only on held-out instances recorded at/after the "
+                "declared start, once holdout_declared=true (>=150). Until "
+                "then, status is a measurement over captured rows."
+            ),
+            (
+                "BOOKPIN per H-MAPENTRY1-BOOKPIN1: the clause (i) comparator "
+                "'book price as forecast' is the book MID; side_ask is the "
+                "execution price for edge accounting only, never the bar."
             ),
         ],
     }
@@ -429,8 +528,19 @@ def summary_lines(result: dict) -> list[str]:
     def mark(v):
         return "BREACH" if v else ("ok" if v is not None else "n/a")
 
-    return [
-        f"  H-MAPENTRY1 [{result['population']}] {result['status']}",
+    # H-MAPENTRY1-BOOKPIN1: make the pinned comparator explicit on the block.
+    # Any other reading is surfaced as a DEVIATION — side_ask is the execution
+    # price for edge accounting only, never the bar (i) comparator.
+    if ci["reading"] == BOOKPIN_PINNED_READING:
+        pin_note = "[BOOKPIN: book=mid reading]"
+    else:
+        pin_note = (
+            f"[BOOKPIN DEVIATION: reading={ci['reading']} is execution-only; "
+            "pinned bar comparator is book=mid per H-MAPENTRY1-BOOKPIN1]"
+        )
+
+    lines = [
+        f"  H-MAPENTRY1 [{result['population']}] {result['status']} {pin_note}",
         (
             f"    (i)   Brier model {ci['brier_model']} vs book {ci['brier_book']} "
             f"({ci['reading']}, n={ci['n']}) diff {ci['difference']} "
@@ -452,6 +562,23 @@ def summary_lines(result: dict) -> list[str]:
             f"(bar <{st['bar']}) -> {mark(st['starved'])}"
         ),
     ]
+
+    # H-MAPENTRY1-BOOKPIN1 holdout status: PARTIAL until the held-out
+    # two-sided-book resolved population reaches the frozen >=150; only then
+    # is holdout_declared=true and a registry verdict renderable.
+    ho = result.get("holdout")
+    if ho is not None:
+        if ho.get("holdout_declared"):
+            lines.append(
+                f"    holdout: READY (n={ho['n']} >= {ho['bar']} held-out, "
+                "holdout_declared=true)"
+            )
+        else:
+            lines.append(
+                f"    holdout: PARTIAL (n={ho['n']} < {ho['bar']}, "
+                "holdout_declared=false)"
+            )
+    return lines
 
 
 def run(

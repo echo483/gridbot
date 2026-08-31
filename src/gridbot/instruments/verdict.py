@@ -26,6 +26,18 @@ from gridbot.instruments.market_match import market_kind, team_outcome_token
 ENTRY_ASK = {"H-MANADV1": 0.85, "H-ECONBUY1": 0.78, "H-PISTOLCARRY1": 0.80}
 BAR_N = {"H-MANADV1": 80, "H-ECONBUY1": 120, "H-PISTOLCARRY1": 100, "H-MODELENTRY1": 0}
 
+# H-ROUNDLANES-RESTRUCTURE1 (registry.jsonl, 2026-08-31): the round lanes now
+# carry clause (i)-resolution-only + a single FILL-PNL clause that renders
+# VENUE-GATED / DEFERRED-OPEN — not pass, not fail — until a round-book venue
+# exists. quoted==0 across all of a lane's cells is the empirical signal that
+# no executable venue lists round books. Reporting layer only: this annotates
+# net lane status and changes no per-cell number, gate, or bar.
+ROUND_LANES = ("H-MANADV1", "H-ECONBUY1", "H-PISTOLCARRY1")
+VENUE_GATED_STATUS = (
+    "VENUE_GATED / DEFERRED_OPEN (no round-book venue; clause i "
+    "resolution-tracking only)"
+)
+
 
 def _iter_jsonl(path):
     with open(path) as fh:
@@ -235,6 +247,32 @@ def summarize(rows: list[dict]) -> list[dict]:
     return out
 
 
+def round_lane_status(summary: list[dict]) -> dict[str, str]:
+    """Net status per round lane, per H-ROUNDLANES-RESTRUCTURE1.
+
+    A lane whose cells are ALL quoted==0 has no round-book venue, so its
+    fill-PnL clause renders VENUE_GATED / DEFERRED_OPEN — not pass, not fail —
+    and its clause-(i) win rate is resolution-tracking only, never a confirmed
+    PASS. Lanes with any quote are omitted: once a venue exists the fill-PnL
+    clause starts binding on real quotes. Returns {} for non-round lanes.
+    """
+    by_lane: dict[str, list[dict]] = defaultdict(list)
+    for s in summary:
+        lane = s["cell"].split(":")[0]
+        if lane in ROUND_LANES:
+            by_lane[lane].append(s)
+    out: dict[str, str] = {}
+    for lane in sorted(by_lane):
+        if sum(c["quoted"] for c in by_lane[lane]) == 0:
+            out[lane] = VENUE_GATED_STATUS
+    return out
+
+
+def round_lane_status_lines(summary: list[dict]) -> list[str]:
+    """Rendered status lines (one per gated round lane)."""
+    return [f"  {lane}: {status}" for lane, status in round_lane_status(summary).items()]
+
+
 def mapentry_summary_lines(reading: str = "mid") -> list[str]:
     """H-MAPENTRY1 scored against its frozen bar.
 
@@ -261,12 +299,14 @@ def compact_summary() -> list[str]:
         lines = ["verdict: no real instances yet"]
     else:
         oracles = build_oracles({i["series_id"] for i in instances})
+        summary = summarize(resolve_instances(instances, oracles))
         lines = []
-        for s in summarize(resolve_instances(instances, oracles)):
+        for s in summary:
             rate = "" if s["win_rate"] is None else f" win {s['win_rate']:.2f}"
             pnl = "" if s["paper_mean_pnl"] is None else f" pnl {s['paper_mean_pnl']:+.3f}×{s['paper_entries']}"
             bar = f"/{s['bar_n']}" if s["bar_n"] else ""
             lines.append(f"  {s['cell']}: {s['n']}{bar} n·{s['series']}ser{rate}{pnl}")
+        lines += round_lane_status_lines(summary)
     return lines + mapentry_summary_lines()
 
 
@@ -305,8 +345,16 @@ def main() -> None:
     rows = resolve_instances(instances, oracles)
     attach_maker(rows)
     summary = summarize(rows)
+    lane_status = round_lane_status(summary)
     if args.json:
-        print(json.dumps({"cells": summary, "mapentry": mapentry_result}, indent=1))
+        print(json.dumps(
+            {
+                "cells": summary,
+                "round_lane_status": lane_status,
+                "mapentry": mapentry_result,
+            },
+            indent=1,
+        ))
         return
     print(f"{'cell':34} {'n':>4} {'ser':>3} {'res':>4} {'win%':>6} {'winCI':>15} "
           f"{'quoted':>6} {'paper':>5} {'pnl':>7} {'mkQ':>4} {'mkF':>4} {'mkPnl':>7} {'barN':>5}")
@@ -320,6 +368,8 @@ def main() -> None:
             f"{('' if s['maker_mean_pnl'] is None else format(s['maker_mean_pnl'], '+.4f')):>7} "
             f"{s['bar_n']:>5}"
         )
+    for lane, status in lane_status.items():
+        print(f"  {lane}: {status}")
     if mapentry_result:
         print()
         for line in mv.summary_lines(mapentry_result):

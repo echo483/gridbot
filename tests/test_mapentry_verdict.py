@@ -247,3 +247,131 @@ def test_clause_ii_scores_the_same_population_as_clause_i():
     )
     assert res["clause_ii"]["n_qualifying_reference"] == 80
     assert res["clause_ii"]["ece_qualifying_reference"] is not None
+
+
+# --- H-MAPENTRY1-BOOKPIN1: book-mid pin + temporal holdout -----------------
+
+
+def test_holdout_start_is_parsed_from_the_registry_row(tmp_path):
+    """The holdout start is stored in H-MAPENTRY1-BOOKPIN1's own text; the
+    reporting layer must read it from the registry, not hard-code a copy."""
+    reg = tmp_path / "registry.jsonl"
+    reg.write_text(
+        json.dumps(
+            {
+                "hypothesis_id": "H-MAPENTRY1-BOOKPIN1",
+                "hypothesis_text": (
+                    "holdout = next 40 newly-mapped series recorded at or "
+                    "after 2027-01-02T03:04:05Z; earlier series excluded"
+                ),
+            }
+        )
+        + "\n"
+    )
+    assert mv.holdout_start_iso(reg) == "2027-01-02T03:04:05Z"
+    # missing registry -> the actual value the row carries as registered
+    assert mv.holdout_start_iso(tmp_path / "absent.jsonl") == mv.HOLD_START_FALLBACK
+
+
+def test_holdout_start_live_registry_matches_the_declared_value():
+    """The tree's registry.jsonl currently carries the filled actual value."""
+    assert mv.holdout_start_iso() == "2026-08-31T19:53:46Z"
+
+
+def test_holdout_partial_below_threshold_and_excludes_pre_holdout_rows():
+    """Holdout n counts resolved instances with a real two-sided book at or
+    after the declared start; pre-start and bookless rows never count. Below
+    150 the line is PARTIAL with holdout_declared=false."""
+    start_ns = mv.iso_to_ns(mv.HOLD_START_FALLBACK)
+    winners = {f"S{i}:1": {"winner": "W", "loser": "L"} for i in range(3)}
+    rows = [
+        _row(series_id=f"S{i}", map_number=1, team="W", us_side="long",
+             ts_ns=start_ns + i + 1)
+        for i in range(3)
+    ]
+    winners["OLD:1"] = {"winner": "W", "loser": "L"}
+    rows.append(_row(series_id="OLD", map_number=1, team="W", us_side="long",
+                     ts_ns=start_ns - 1))
+    winners["NB:1"] = {"winner": "W", "loser": "L"}
+    rows.append(
+        _row(series_id="NB", map_number=1, team="W", us_side="long",
+             ts_ns=start_ns + 99, bid=None, ask=None)  # no two-sided book
+    )
+    res = mv.evaluate_bar(rows, winners)
+    assert res["holdout"]["start"] == mv.HOLD_START_FALLBACK
+    assert res["holdout"]["n"] == 3
+    assert res["holdout"]["bar"] == 150
+    assert res["holdout_declared"] is False
+    lines = mv.summary_lines(res)
+    assert any(
+        "holdout: PARTIAL" in l
+        and "n=3 < 150" in l
+        and "holdout_declared=false" in l
+        for l in lines
+    )
+
+
+def test_holdout_ready_at_threshold():
+    """>=150 held-out two-sided-book resolved instances flip holdout_declared
+    and render READY — the only state in which a registry verdict is renderable."""
+    start_ns = mv.iso_to_ns(mv.HOLD_START_FALLBACK)
+    n = 150
+    winners = {f"S{i}:1": {"winner": "W", "loser": "L"} for i in range(n)}
+    rows = [
+        _row(
+            series_id=f"S{i}",
+            map_number=1,
+            team="W",
+            us_side="long",
+            bid=0.50,
+            ask=0.54,
+            p_map=0.80,
+            qualifies=True,
+            ts_ns=start_ns + 1000 + i,
+        )
+        for i in range(n)
+    ]
+    res = mv.evaluate_bar(rows, winners)
+    assert res["holdout"]["n"] == 150
+    assert res["holdout_declared"] is True
+    lines = mv.summary_lines(res)
+    assert any(
+        "holdout: READY" in l
+        and "n=150 >= 150" in l
+        and "holdout_declared=true" in l
+        for l in lines
+    )
+
+
+def test_holdout_start_override_is_respected():
+    """evaluate_bar must honor an explicit holdout_start (dependency
+    injection for tests and future re-declarations)."""
+    winners = {"S0:1": {"winner": "W", "loser": "L"}}
+    rows = [_row(series_id="S0", map_number=1, team="W", us_side="long", ts_ns=5000)]
+    res = mv.evaluate_bar(rows, winners, holdout_start="1970-01-01T00:00:00Z")
+    assert res["holdout"]["n"] == 1
+    res = mv.evaluate_bar(rows, winners, holdout_start="2099-01-01T00:00:00Z")
+    assert res["holdout"]["n"] == 0
+
+
+def test_summary_lines_carry_bookpin_annotation_for_the_pinned_reading():
+    """The H-MAPENTRY1 block must make the pinned comparator explicit:
+    book MID is the bar (i) reading per H-MAPENTRY1-BOOKPIN1."""
+    winners = {"S0:1": {"winner": "W", "loser": "L"}}
+    rows = [_row(series_id="S0", team="W", us_side="long")]
+    res = mv.evaluate_bar(rows, winners)  # default reading == pinned "mid"
+    lines = mv.summary_lines(res)
+    assert lines[0].startswith("  H-MAPENTRY1 [DETECTOR]")
+    assert "[BOOKPIN: book=mid reading]" in lines[0]
+
+
+def test_summary_lines_flag_side_ask_as_a_bookpin_deviation():
+    """side_ask is execution-only, never the bar comparator — a side_ask run
+    must be surfaced as a deviation from the pin, not silently rendered."""
+    winners = {"S0:1": {"winner": "W", "loser": "L"}}
+    rows = [_row(series_id="S0", team="W", us_side="long")]
+    res = mv.evaluate_bar(rows, winners, reading="side_ask")
+    lines = mv.summary_lines(res)
+    assert "BOOKPIN DEVIATION" in lines[0]
+    assert "execution-only" in lines[0]
+    assert "[BOOKPIN: book=mid reading]" not in lines[0]

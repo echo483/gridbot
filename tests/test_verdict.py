@@ -74,3 +74,91 @@ def test_match_kind_market_never_prices_a_round_settlement() -> None:
     clean["market"]["question"] = "Alpha vs Beta round 5 winner?"
     rows = resolve_instances([clean], oracles)
     assert rows[0]["team_ask"] == 0.80
+
+
+# --- H-ROUNDLANES-RESTRUCTURE1: venue-gated fill-PnL clause ----------------
+
+
+def test_round_lane_zero_quotes_renders_venue_gated() -> None:
+    """quoted==0 across all of a lane's cells => the fill-PnL clause renders
+    VENUE_GATED / DEFERRED_OPEN (not pass, not fail) and the win rate is
+    clause-(i) resolution-tracking only. Per-cell numbers stay untouched."""
+    from gridbot.instruments.verdict import (
+        VENUE_GATED_STATUS,
+        resolve_instances,
+        round_lane_status_lines,
+        summarize,
+    )
+
+    oracles = {"1": {(1, 5): "ct", (1, 6): "ct"}}
+    rows = resolve_instances([inst(rnd=5), inst(rnd=6)], oracles)
+    summary = summarize(rows)
+    assert summary[0]["quoted"] == 0
+    assert summary[0]["win_rate"] is not None  # clause (i) still tracked
+    lines = round_lane_status_lines(summary)
+    assert lines == [f"  H-MANADV1: {VENUE_GATED_STATUS}"]
+    assert "no round-book venue" in lines[0]
+    assert "clause i resolution-tracking only" in lines[0]
+
+
+def test_round_lane_with_any_quote_is_not_venue_gated() -> None:
+    """Once any cell shows a round-book quote a venue exists and the gate
+    lifts — no status override."""
+    from gridbot.instruments.verdict import (
+        resolve_instances,
+        round_lane_status,
+        summarize,
+    )
+
+    oracles = {"1": {(1, 5): "ct"}}
+    rows = resolve_instances([inst(rnd=5, ask=0.80)], oracles)
+    summary = summarize(rows)
+    assert summary[0]["quoted"] == 1
+    assert round_lane_status(summary) == {}
+
+
+def test_econbuy_gated_only_when_every_cell_is_unquoted() -> None:
+    """ECONBUY spans gap-bucket cells; the lane is venue-gated only when ALL
+    of its cells are quoted==0."""
+    from gridbot.instruments.verdict import (
+        resolve_instances,
+        round_lane_status,
+        summarize,
+    )
+
+    oracles = {"1": {(1, 5): "ct", (1, 6): "ct"}}
+    mixed = resolve_instances(
+        [
+            inst(hyp="H-ECONBUY1", rnd=5, gap_bucket=">=10k", ask=0.78),
+            inst(hyp="H-ECONBUY1", rnd=6, gap_bucket="<10k"),
+        ],
+        oracles,
+    )
+    assert round_lane_status(summarize(mixed)) == {}
+
+    unquoted = resolve_instances(
+        [
+            inst(hyp="H-ECONBUY1", rnd=5, gap_bucket=">=10k"),
+            inst(hyp="H-ECONBUY1", rnd=6, gap_bucket="<10k"),
+        ],
+        oracles,
+    )
+    status = round_lane_status(summarize(unquoted))
+    assert list(status) == ["H-ECONBUY1"]
+    assert status["H-ECONBUY1"].startswith("VENUE_GATED / DEFERRED_OPEN")
+
+
+def test_non_round_lanes_never_get_venue_gated() -> None:
+    """H-MODELENTRY1 is not a round lane; the restructure does not apply."""
+    from gridbot.instruments.verdict import (
+        resolve_instances,
+        round_lane_status,
+        summarize,
+    )
+
+    oracles = {"1": {(1, 5): "ct"}}
+    rows = resolve_instances(
+        [inst(hyp="H-MODELENTRY1", rnd=5, threshold=0.75, dedup_extra="ct:0.75")],
+        oracles,
+    )
+    assert round_lane_status(summarize(rows)) == {}
