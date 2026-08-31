@@ -30,7 +30,7 @@ loop only: analysis, reviews, reports, hypothesis drafts.
 | Event lanes track their bars | MANADV 91/80 win 0.956 (read it clock-stratified per H-MANADV1-CLOCKSTRAT before any verdict); ECONBUY ≥10k 199/120 win 0.83 (in corpus CI); PISTOL 66/100 win 0.83 |
 | EV positive at conservative bound | Wilson-lo EV/contract at disciplined entry: MANADV +.042, thr0.85 +.022, thr0.75 +.008, thr0.65 +.004 (`scripts/quant_eval.py`, data/analysis/quant_eval-*.json) |
 | GRID↔PMUS visibility | Mapping snapshot every 15 min: tier-1 matches join at coverage 1.0 (AURORA-G2, Spirit, NAVI-M80...). `data/pmus/mappings-*.jsonl` |
-| **The traded number has skill but is overconfident** | 2026-08-28, first calibration of `p_map` itself (not q_round) against GRID's own winner oracle, 277 resolved maps / 11,016 evaluations: Brier 0.1920 vs base-rate 0.2394, **skill +0.198** — but every traded bucket falls short of its forecast (0.9–1.0 predicts 0.950 realizes 0.828; 0.8–0.9 → 0.669; 0.7–0.8 → 0.602). `scripts/pmap_calibration.py`, H-MAPENTRY1-NOTE5 |
+| **The traded number OVER-FORECASTS in the armed band** (the +0.198 skill claim is RETRACTED) | 2026-08-31, 434 resolved maps, **series-clustered** (2,000-rep bootstrap resampling 80 series, not 2,668 rows): armed-band gap **−0.2129, CI (−0.309, −0.114) — excludes zero**, so p_map runs 21pts above truth inside 0.50–0.80 and the engine posts at p_map−0.05, i.e. **~16pts above fair**. Skill vs base rate is **−0.0007, CI (−0.164, +0.139) — includes zero**. The 08-28 "+0.198 skill" headline was pooled at ROW level, treating 11,016 correlated rows from ~80 matches as independent; it was never a real edge and it did not decay — it evaporated under a correct test. The MODEL IS FROZEN and unchanged between the two runs. `docs/analysis/2026-08-30-pmap-slate-variance.md` |
 | **The running loss is not evidence** | ~1,500 settled trades separate a +2pt edge from zero at 95% (σ=√(p(1−p))≈0.40); we have 13. The 13 give mean −$0.615, SE $0.44, CI95 (−1.48, +0.25) — indistinguishable from zero AND from a real edge. Four independent models derived this number in parallel. |
 
 **Where the money actually goes (2026-08-28, H-MAPENTRY1-NOTE5/NOTE6).**
@@ -155,6 +155,14 @@ doesn't bind on realized PnL; risk is bounded by stake×max_open instead.
   `gnome-keyring-daemon --replace --unlock` (gcr prompter can be dead —
   no dialogs ever appear). Capture data gap 11:46–14:59 PT on 08-26
   (GRID + PM books; analyses over that window are missing data).
+  **RECURRED 2026-08-31**: keyring restarted LOCKED at 10:14, the 600s
+  last-good cache expired at 10:24, GRID capture failed closed for 100+ min
+  (~4,200 snapshots, 7 live series). PM capture was UNAFFECTED, so that
+  window holds book prices with NO game state to join them to — the join
+  died, not just the volume, and orphaned books can never produce a mapentry
+  row. Second capture loss in six days from workstation session lifecycle
+  (08-30: powered off 6h31m), ZERO from code. The always-on-host question is
+  the top open ops decision. `docs/analysis/2026-08-31-keyring-capture-outage.md`
 - **Venue reports cancel success on already-FILLED orders** (confirmed in
   production: all 3 first-night fills were FULL fills whose TTL cancels
   returned clean "cancelled"). Never read cancel status as fill truth —
@@ -174,6 +182,22 @@ metrics layer (Brier/ECE/EV/MC/Brownian) — REPORTING only; the frozen bars
 in the registry are the only PASS/FAIL rule. H-MAPENTRY1's bar: beat the
 book's Brier, ECE ≤ 0.08, settled edge CI > 0 at n≥150/60; starvation
 clause closes the lane if <5% of instances ever show a qualifying quote.
+
+**H-MAPENTRY1 now HAS a verdict path (2026-08-31, commit 256d3a0).** It had
+none for five nights: verdict.py read only instance rows, so the one armable
+lane appeared in no verdict row and its bar was uncomputable by any code in
+the tree. `src/gridbot/instruments/mapentry_verdict.py` scores all three
+clauses + starvation, series-clustered, SLATE rows split from DETECTOR, and
+`--book-reading {mid,side_ask}` because the registry's "book price as
+forecast" is ambiguous AND THE READING FLIPS CLAUSE (i). First output on
+captured data: **all three clauses read breached** (status
+FALSIFIED_ON_CAPTURED_DATA). That is **NOT a registry verdict** — the bar
+requires ≥150 HELD-OUT instances and no holdout has been declared; the result
+carries `holdout_declared=false`. Two user decisions gate a real verdict:
+pin the book-price reading, and declare the holdout window.
+NOTE the bar says ECE "(quintile bins)" = FIVE bins (0.1144), which is a
+DIFFERENT number from the 10-bin ECE every earlier analysis reported (0.1301).
+Only the quintile figure is the bar.
 
 ## Open work queue (post-first-fire)
 
