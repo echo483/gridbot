@@ -31,6 +31,11 @@ ENTRY_MARGIN = 0.04  # qualifying quote must sit >= 4 points below fair
 
 SLATE_HYPOTHESIS_ID = "H-MAPENTRY1-SLATE"
 
+# Full-depth book evidence: how many price levels we keep per side of the
+# compacted depth array, and how many we total for the book imbalance.
+BOOK_DEPTH_LEVELS = 10
+BOOK_DEPTH_TOTAL_LEVELS = 5
+
 
 def slate_instance(state: dict, q_ct: float | None,
                    grid_ts_ns: int | None = None) -> dict | None:
@@ -207,6 +212,81 @@ def parse_bbo(payload: dict) -> tuple[float | None, float | None]:
     return val("bestBid"), val("bestAsk")
 
 
+def _book_level(entry: dict) -> dict | None:
+    """Normalize one book level: ``{price, size}`` floats, dropping dead levels."""
+    try:
+        price = float((entry.get("px") or {}).get("value"))
+        qty = float(entry.get("qty"))
+    except (TypeError, ValueError):
+        return None
+    if price <= 0 or qty < 0:
+        return None
+    return {"price": round(price, 4), "size": round(qty, 4)}
+
+
+def _bbo_ts(md: dict) -> float | None:
+    """Best-effort timestamp from the book payload, if the venue emits one."""
+    raw = md.get("timestamp")
+    if raw is None:
+        bb = md.get("bestBid") or {}
+        raw = bb.get("timestamp")
+    try:
+        return float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_book(payload: dict) -> dict:
+    """Full-depth book summary from a markets.book payload (long side prices).
+
+    Returns bid/ask/mid/spread, best-level sizes, top-5 totals + S/R imbalance,
+    a BBO timestamp when present, and a compacted depth array (at most
+    ``BOOK_DEPTH_LEVELS`` levels per side). Bids are sorted best-first
+    (descending price), offers best-first (ascending price); the venue returns
+    them already, but we normalize so the summary is order-independent.
+    """
+    md = (payload or {}).get("marketData") or {}
+    bids = [
+        lv for lv in (_book_level(e) for e in (md.get("bids") or [])) if lv is not None
+    ]
+    offers = [
+        lv for lv in (_book_level(e) for e in (md.get("offers") or [])) if lv is not None
+    ]
+    bids.sort(key=lambda lv: lv["price"], reverse=True)
+    offers.sort(key=lambda lv: lv["price"])
+
+    best_bid = bids[0]["price"] if bids else None
+    best_ask = offers[0]["price"] if offers else None
+    mid = None
+    spread = None
+    if best_bid is not None and best_ask is not None:
+        mid = round((best_bid + best_ask) / 2, 4)
+        spread = round(best_ask - best_bid, 4)
+
+    bid_top5 = sum(lv["size"] for lv in bids[:BOOK_DEPTH_TOTAL_LEVELS])
+    ask_top5 = sum(lv["size"] for lv in offers[:BOOK_DEPTH_TOTAL_LEVELS])
+    imbalance = None
+    if bid_top5 + ask_top5 > 0:
+        imbalance = round(bid_top5 / (bid_top5 + ask_top5), 4)
+
+    return {
+        "bid": best_bid,
+        "ask": best_ask,
+        "mid": mid,
+        "spread": spread,
+        "bid_size": bids[0]["size"] if bids else None,
+        "ask_size": offers[0]["size"] if offers else None,
+        "bid_top5_total": round(bid_top5, 4),
+        "ask_top5_total": round(ask_top5, 4),
+        "imbalance": imbalance,
+        "bbo_ts": _bbo_ts(md),
+        "depth": {
+            "bids": bids[:BOOK_DEPTH_LEVELS],
+            "offers": offers[:BOOK_DEPTH_LEVELS],
+        },
+    }
+
+
 def side_ask(us_side: str, bid: float | None, ask: float | None) -> float | None:
     """Effective ask for OUR side: long pays the ask; short pays 1 - bid."""
     if us_side == "long":
@@ -276,6 +356,7 @@ def build_row(instance: dict, ts_ns: int) -> dict:
         "side_ask": None,
         "entry_price_max": None if p_map is None else round(p_map - ENTRY_MARGIN, 4),
         "qualifies": False,
+        "book": None,
         "skip_reason": None,
         "src_ts_ns": instance.get("ts_ns"),
         "grid_ts_ns": instance.get("grid_ts_ns"),
@@ -284,12 +365,19 @@ def build_row(instance: dict, ts_ns: int) -> dict:
 
 
 def attach_book(row: dict, market_slug: str, us_side: str,
-                bid: float | None, ask: float | None) -> None:
-    """Attach venue evidence and evaluate the frozen entry rule in place."""
+                bid: float | None, ask: float | None,
+                book: dict | None = None) -> None:
+    """Attach venue evidence and evaluate the frozen entry rule in place.
+
+    ``bid``/``ask`` and the derived ``side_ask``/``qualifies`` keep the frozen
+    entry semantics exactly — ``book`` is side-channel full-depth evidence only
+    and never affects qualification.
+    """
     row["market_slug"] = market_slug
     row["us_side"] = us_side
     row["bid"] = bid
     row["ask"] = ask
+    row["book"] = book
     eff = side_ask(us_side, bid, ask)
     row["side_ask"] = eff
     row["qualifies"] = (

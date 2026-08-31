@@ -16,6 +16,7 @@ from gridbot.instruments.mapentry import (
     map_win_prob,
     market_for_instance,
     p_future,
+    parse_book,
     parse_bbo,
     race_win_prob,
     round_probability,
@@ -251,6 +252,31 @@ class TestSlateCoverage:
         rec = Recorder(books=FakeBooks(), out_dir=tmp_path)
         assert rec.handle_slate({"type": "book"}) is None
 
+    def test_slate_row_carries_full_depth_book(self, tmp_path) -> None:
+        from types import SimpleNamespace
+
+        from gridbot.instruments.mapentry import parse_book
+        from gridbot.instruments.mapentry_recorder import Recorder
+
+        summary = parse_book(_book_payload())
+
+        class FakeBooks:
+            def top(self, slug: str):
+                return (0.40, 0.60)
+
+            def book(self, slug: str):
+                return summary
+
+        rec = Recorder(books=FakeBooks(), out_dir=tmp_path)
+        rec.slate = SimpleNamespace(predict=lambda _f: 0.6)  # arm a q provider
+        rec.mappings = {"777": {"match": {"s": 1}, "us_markets": {"map1": {"market_slug": "m", "sides": {"Alpha": "long"}}}}}
+        assert rec.handle_slate(self._ss_record()) is not None
+        day_file = list(tmp_path.glob("mapentry-*.jsonl"))[0]
+        row = json.loads(day_file.read_text().splitlines()[0])
+        assert row["book"] == summary
+        # entry semantics unchanged against the top-only baseline
+        assert row["bid"] == 0.40 and row["ask"] == 0.60
+
 
 class TestBook:
     def test_parse_bbo(self) -> None:
@@ -272,6 +298,59 @@ class TestBook:
     def test_side_ask_short_is_one_minus_bid(self) -> None:
         assert side_ask("short", 0.22, 0.56) == pytest.approx(0.78)
         assert side_ask("short", None, 0.56) is None
+
+
+def _book_payload(n_bids: int = 12, n_offers: int = 12) -> dict:
+    """A markets.book payload shaped like the live gateway output (px/qty
+    strings, bids best-first descending price)."""
+    bids = [
+        {"px": {"value": f"{round(0.41 - 0.01 * i, 4):.4f}", "currency": "USD"},
+         "qty": f"{100.0:.4f}"}
+        for i in range(n_bids)
+    ]
+    offers = [
+        {"px": {"value": f"{round(0.42 + 0.01 * i, 4):.4f}", "currency": "USD"},
+         "qty": f"{200.0:.4f}"}
+        for i in range(n_offers)
+    ]
+    return {"marketData": {"marketSlug": "m", "bids": bids, "offers": offers}}
+
+
+class TestParseBook:
+    def test_parse_book_full_depth(self) -> None:
+        book = parse_book(_book_payload())
+        assert book["bid"] == pytest.approx(0.41)
+        assert book["ask"] == pytest.approx(0.42)
+        assert book["mid"] == pytest.approx(0.4150)
+        assert book["spread"] == pytest.approx(0.0100)
+        assert book["bid_size"] == pytest.approx(100.0)
+        assert book["ask_size"] == pytest.approx(200.0)
+        assert book["bid_top5_total"] == pytest.approx(500.0)
+        assert book["ask_top5_total"] == pytest.approx(1000.0)
+        assert book["imbalance"] == pytest.approx(0.3333)  # rounded to 4 dp
+
+    def test_parse_book_compacts_depth(self) -> None:
+        book = parse_book(_book_payload(n_bids=20, n_offers=20))
+        assert len(book["depth"]["bids"]) <= 10
+        assert len(book["depth"]["offers"]) <= 10
+        for lv in book["depth"]["bids"] + book["depth"]["offers"]:
+            assert isinstance(lv["price"], float)
+            assert isinstance(lv["size"], float)
+        # best levels first on both sides
+        assert book["depth"]["bids"][0]["price"] == pytest.approx(0.41)
+        assert book["depth"]["offers"][0]["price"] == pytest.approx(0.42)
+
+    def test_parse_book_empty_and_malformed(self) -> None:
+        book = parse_book({})
+        assert book["bid"] is None and book["ask"] is None
+        assert book["mid"] is None and book["spread"] is None
+        assert book["imbalance"] is None
+        assert book["depth"]["bids"] == [] and book["depth"]["offers"] == []
+        # dead levels (zero price) are dropped, not counted
+        junk = {"marketData": {"bids": [{"px": {"value": "0.0000"}, "qty": "5"}],
+                               "offers": [{"px": {"value": "garbage"}, "qty": "x"}]}}
+        b2 = parse_book(junk)
+        assert b2["bid"] is None and b2["ask"] is None
 
 
 class TestRow:
@@ -319,6 +398,25 @@ class TestRow:
         row2 = build_row(self.INSTANCE, ts_ns=99)
         attach_book(row2, "m-map2", "long", bid=0.9, ask=0.99)
         assert row2["qualifies"] is False
+
+    def test_attach_book_carries_depth_without_changing_entry(self) -> None:
+        row = build_row(self.INSTANCE, ts_ns=99)
+        summary = parse_book(_book_payload())
+        cheap = row["entry_price_max"] - 0.01
+        attach_book(row, "m-map2", "long", bid=cheap - 0.02, ask=cheap, book=summary)
+        # full-depth evidence persisted...
+        assert row["book"] is summary
+        assert row["book"]["bid"] == pytest.approx(0.41)
+        assert row["book"]["depth"]["bids"]
+        # ...but the frozen entry fields come from the bare pair, untouched.
+        assert row["bid"] == pytest.approx(cheap - 0.02)
+        assert row["ask"] == pytest.approx(cheap)
+        assert row["side_ask"] == pytest.approx(cheap)
+        assert row["qualifies"] is True
+        # book stays None when depth evidence is absent
+        row2 = build_row(self.INSTANCE, ts_ns=99)
+        attach_book(row2, "m-map2", "long", bid=0.9, ask=0.99)
+        assert row2["book"] is None
 
     def test_overtime_row_has_no_fair(self) -> None:
         ot = {

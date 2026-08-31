@@ -37,6 +37,9 @@ class BboCache:
         self._client = client
         self._ttl = ttl
         self._cache: dict[str, tuple[float, tuple[float | None, float | None]]] = {}
+        # Separate store for full-depth summaries so top() and book() never
+        # collide on the same slug (a dict is not a bare bid/ask pair).
+        self._deep: dict[str, tuple[float, dict]] = {}
 
     def _get_client(self):
         if self._client is None:
@@ -57,6 +60,25 @@ class BboCache:
             top = (None, None)
         self._cache[slug] = (now, top)
         return top
+
+    def book(self, slug: str) -> dict:
+        """Full-depth book summary (see mapentry.parse_book) with the same TTL.
+
+        Shares the per-slug TTL budget but lives in its own cache slot so the
+        bare ``top()`` result is unaffected. Returns an empty-shaped summary
+        (all-None fields) if the fetch fails — never raises into the tail.
+        """
+        now = time.monotonic()
+        hit = self._deep.get(slug)
+        if hit and now - hit[0] < self._ttl:
+            return hit[1]
+        try:
+            summary = mapentry.parse_book(self._get_client().markets.book(slug))
+        except Exception as exc:  # noqa: BLE001 — a book fetch must never kill the tail
+            log.warning("book fetch failed for %s: %s", slug, type(exc).__name__)
+            summary = mapentry.parse_book({})
+        self._deep[slug] = (now, summary)
+        return summary
 
 
 class Recorder:
@@ -110,6 +132,23 @@ class Recorder:
         with open(self.out_dir / f"mapentry-{day}.jsonl", "a") as fh:
             fh.write(json.dumps(row, separators=(",", ":")) + "\n")
 
+    def _safe_book(self, slug: str) -> dict | None:
+        """Full-depth summary via ``books.book()`` if the client exposes it.
+
+        Legacy book clients (e.g. tests' top-only fakes) must keep working —
+        they simply yield no depth evidence. A fetch failure is logged and
+        yields nothing; it must never kill the tail.
+        """
+        book = getattr(self.books, "book", None)
+        if book is None:
+            return None
+        try:
+            summary = book(slug)
+        except Exception as exc:  # noqa: BLE001 — a book fetch must never kill the tail
+            log.warning("book fetch failed for %s: %s", slug, type(exc).__name__)
+            return None
+        return summary if summary else None
+
     def handle(self, record: dict) -> str | None:
         """Process one shadow record; returns the row's disposition or None."""
         if record.get("type") != "instance":
@@ -150,7 +189,7 @@ class Recorder:
                 else:
                     slug, us_side = picked
                     bid, ask = self.books.top(slug)
-                    mapentry.attach_book(row, slug, us_side, bid, ask)
+                    mapentry.attach_book(row, slug, us_side, bid, ask, self._safe_book(slug))
                     if bid is None and ask is None:
                         row["skip_reason"] = "empty_book"
         self._append(row)
