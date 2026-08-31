@@ -17,7 +17,6 @@ import argparse
 import re
 import sys
 from pathlib import Path
-from typing import List, Tuple
 
 TOKEN_LIMIT = 2000
 PREAMBLE_DIR = Path("agents")
@@ -38,7 +37,7 @@ def count_tokens(text: str) -> int:
     return len(re.findall(r"\w+|[^\w\s]", text))
 
 
-def check_file_references(preamble_path: Path, preamble_text: str) -> List[str]:
+def check_file_references(preamble_path: Path, preamble_text: str) -> list[str]:
     """Check that all referenced file paths exist."""
     errors = []
     # Extract paths that look like file references (heuristic)
@@ -64,7 +63,7 @@ def check_file_references(preamble_path: Path, preamble_text: str) -> List[str]:
     return errors
 
 
-def check_contradictions(preamble_text: str) -> List[str]:
+def check_contradictions(preamble_text: str) -> list[str]:
     """Check for obvious contradictory directives."""
     errors = []
     text_lower = preamble_text.lower()
@@ -74,7 +73,7 @@ def check_contradictions(preamble_text: str) -> List[str]:
     return errors
 
 
-def lint_preamble(path: Path, token_limit: int = TOKEN_LIMIT) -> Tuple[bool, List[str]]:
+def lint_preamble(path: Path, token_limit: int = TOKEN_LIMIT) -> tuple[bool, list[str]]:
     """Lint a single preamble file. Returns (passed, errors)."""
     errors = []
 

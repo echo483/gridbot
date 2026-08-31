@@ -86,8 +86,7 @@ def _trailing_min(prior_rows: list[dict], trail: int) -> float | None:
         rn = r.get("round_number")
         p = r["p_map"]
         if rn in min_by_round:
-            if p < min_by_round[rn]:
-                min_by_round[rn] = p
+            min_by_round[rn] = min(min_by_round[rn], p)
         else:
             rounds.append(rn)
             min_by_round[rn] = p

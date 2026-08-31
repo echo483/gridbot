@@ -11,8 +11,10 @@ postquote samples (+30/+60/+120s) and eventual map outcome. If discounts were
 edge, price would rise toward fair (drift up). If priced-in, price stays or
 falls (we'd be catching falling knives).
 """
-import json, math, time
+import json
+import math
 from collections import defaultdict
+
 
 def wilson(w, n, z=1.96):
     if not n: return (float('nan'),) * 2
@@ -142,4 +144,4 @@ deep_w = deep['won'] + deep2['won']; deep_n = deep['filled'] + deep2['filled']
 mid = stats['10-20']
 print(f"deep discounts (>=20pt): fills={deep_n} win%={deep_w/max(deep_n,1):.2f}")
 print(f"mid discounts (10-20pt): fills={mid['filled']} win%={mid['won']/max(mid['filled'],1):.2f}")
-print(f"corpus anchor was 0.83-0.85. Live verdict: see table above.")
+print("corpus anchor was 0.83-0.85. Live verdict: see table above.")

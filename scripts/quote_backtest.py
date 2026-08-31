@@ -89,28 +89,28 @@ import sys
 from typing import Any
 
 __all__ = [
-    "US_TICK",
-    "DEFAULT_TTL_S",
     "CORE_BAND",
-    "LIVE_BAND_GATE",
     "DEFAULT_ENTRY_CEILING",
+    "DEFAULT_TTL_S",
     "ENTRY_ASK_CEILINGS",
+    "LIVE_BAND_GATE",
     "RULE_IDS",
-    "load_mapentry",
-    "load_winners",
-    "side_bid",
-    "quote_a",
-    "quote_b",
-    "quote_for_rule",
+    "US_TICK",
+    "attach_verdicts",
     "band_label",
     "build_evaluations",
     "build_path_index",
-    "attach_verdicts",
-    "evaluate_fills",
-    "rule_metrics",
     "compute_per_rule",
-    "validate_ttl_s",
+    "evaluate_fills",
+    "load_mapentry",
+    "load_winners",
     "main",
+    "quote_a",
+    "quote_b",
+    "quote_for_rule",
+    "rule_metrics",
+    "side_bid",
+    "validate_ttl_s",
 ]
 
 US_TICK = 0.01                 # one venue tick (mirrors executor intents.US_TICK)
@@ -803,7 +803,7 @@ def main(argv: list[str] | None = None) -> int:
             f"{band}: a_exf={_fmt(per_rule['a'][band]['edge_x_fillrate'])} "
             f"b_exf={_fmt(per_rule['b'][band]['edge_x_fillrate'])}"
         )
-    print(f"quote_backtest: " + " | ".join(parts), file=sys.stderr)
+    print("quote_backtest: " + " | ".join(parts), file=sys.stderr)
     return 0
 
 

@@ -63,12 +63,12 @@ from typing import Any
 __all__ = [
     "DEFAULT_RISE_SPLIT",
     "bucket_label",
-    "load_waves",
-    "load_mapentry",
-    "load_winners",
     "build_team_index",
-    "join_waves",
     "compute_buckets",
+    "join_waves",
+    "load_mapentry",
+    "load_waves",
+    "load_winners",
     "main",
 ]
 
@@ -569,7 +569,7 @@ def main(argv: list[str] | None = None) -> int:
             f"{label}: n={b['n']} n_book={b['n_book']} "
             f"settled_book_edge={_fmt(b['settled_book_edge'])}"
         )
-    print(f"wave_edge_join: " + " | ".join(parts), file=sys.stderr)
+    print("wave_edge_join: " + " | ".join(parts), file=sys.stderr)
     return 0
 
 

@@ -45,7 +45,8 @@ def main() -> int:
     day = "".join(ch for ch in src_path.stem if ch.isdigit())[-8:]
     days = [day]
     if len(day) == 8:
-        from datetime import UTC, datetime as _dt
+        from datetime import UTC
+        from datetime import datetime as _dt
         d = _dt.strptime(day, "%Y%m%d").replace(tzinfo=UTC)
         days.append(f"{_dt.fromtimestamp(d.timestamp() - 86400, UTC):%Y%m%d}")
     copied = 0

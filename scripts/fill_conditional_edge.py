@@ -42,7 +42,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from pmap_calibration import US_TICK, load_rows, load_winners, outcome, posted_price  # noqa: E402
+from pmap_calibration import US_TICK, load_rows, load_winners, outcome, posted_price
 
 MAKER_TTL_S = 150.0  # mirrors engine.MAKER_TTL_S
 

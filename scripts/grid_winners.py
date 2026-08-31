@@ -19,7 +19,7 @@ import json
 import sys
 from pathlib import Path
 
-__all__ = ["process_lines", "main"]
+__all__ = ["main", "process_lines"]
 
 # CS2 MR12 overtime targets step +3 per OT period from the regulation target.
 REGULATION_TARGET = 13

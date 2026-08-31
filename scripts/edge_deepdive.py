@@ -1,9 +1,11 @@
 """Deep-dive on live instances: clock stratification, q-band calibration, new-idea scan."""
 import sys
+
 sys.path.insert(0, "src")
-from gridbot.instruments.verdict import load_instances, build_oracles, resolve_instances
-from collections import defaultdict
 import math
+
+from gridbot.instruments.verdict import build_oracles, load_instances, resolve_instances
+
 
 def wilson(w,n,z=1.96):
     if not n: return (float('nan'),)*2
