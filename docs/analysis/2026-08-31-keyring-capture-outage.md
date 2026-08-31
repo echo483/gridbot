@@ -14,6 +14,8 @@ gnome-keyring restarted locked). Neither was a code fault.
 | 10:25:33 | `grid_ss` counter freezes at 29085 / `polls` at 29003. |
 | 10:49 | `health_check` crosses `GRID_FRESH_S=25min`, writes `ok:false, problems:["GRID data stale"]`, sends its Telegram transition alert. Working as designed. |
 | 11:07:33 | still blocked. 42 min dark, `tracked=25 live=7`. |
+| 12:08:19 | **`secret GRID_API_KEY: keyring healthy again`** — user unlocked. |
+| 12:08:26 | GRID polls return 200 OK; `grid_ss` climbs 29085 -> 29109. |
 
 ## Diagnosis: LOCKED, not deleted
 
@@ -87,4 +89,24 @@ software. The always-on-host question (and its conflict with rail 6 — capture
 reads the GRID key per poll, so an always-on host wants an unlocked-at-boot
 keyring) is now the highest-value ops decision open. Raised 08-30, unresolved.
 
-— orchestrator lane, 2026-08-31 11:10 PDT (outage ongoing at write time)
+## RESOLVED — final accounting
+
+**10:24:15 -> 12:08:19 PDT = 104 minutes dark.** At the measured pre-outage
+rate of ~42 snapshots/min that is **≈4,370 GRID series-state snapshots lost**
+across up to 7 live CS2 series. Polymarket capture ran the whole time
+(pm_books 976,948 -> 1,084,400, **+107,452 book snapshots**), so the window
+holds prices with no game state to join them to — permanently unusable for a
+mapentry row, a q_round, or a verdict instance.
+
+**Recovery needed no restart, exactly as the code predicted.** The first
+healthy read discarded the degraded flag (`config.py:160`), logged
+`keyring healthy again`, and capture resumed on its next poll ~7s later. No
+unit was touched at any point (rail 4). Downstream confirmed flowing within
+seconds: mapentry and intents both writing, 5/5 daemons active, `live=0`
+throughout so rail 3 never came near being tested.
+
+Watch item: `postquote` was ~2h stale at recovery. Expected, not a fault — it
+samples only after QUALIFYING mapentry rows and there were none while GRID was
+dark. It should resume as new qualifiers appear.
+
+— orchestrator lane, 2026-08-31; opened 11:10 PDT, resolved 12:08 PDT
