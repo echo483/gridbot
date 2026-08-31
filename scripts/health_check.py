@@ -65,13 +65,16 @@ def _escalate(service: str, detail: str) -> None:
         import hmac
 
         import httpx
-        import keyring
 
         from gridbot import config as gconfig
 
-        secret = keyring.get_password(
-            gconfig.KEYRING_SERVICE, "HERMES_WEBHOOK_GRIDBOT_HEALTH_SECRET"
-        )
+        # Read through config._secret, NEVER a raw keyring.get_password: a
+        # locked Secret Service makes raw D-Bus reads BLOCK FOREVER (2026-08-26
+        # and again 2026-08-31), and a hang is not an exception — the `except`
+        # below would not catch it, so the 5-minute watchdog would wedge
+        # permanently at exactly the moment it is needed. config._secret runs
+        # the read in a 5s reaper thread with a bounded last-good cache.
+        secret = gconfig._secret("HERMES_WEBHOOK_GRIDBOT_HEALTH_SECRET")
         if not secret:
             return
         ts = str(int(time.time()))
