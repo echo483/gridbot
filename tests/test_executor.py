@@ -187,8 +187,8 @@ def _seed_drift(tmp_path, slug="astatc-cs2-aur-g2-map2",
     filters.
     """
     import json as _json
-
-    from datetime import UTC, datetime as _dt
+    from datetime import UTC
+    from datetime import datetime as _dt
 
     if day is None:
         day = f"{_dt.now(UTC):%Y%m%d}"
@@ -200,8 +200,7 @@ def _seed_drift(tmp_path, slug="astatc-cs2-aur-g2-map2",
         for m in moves
     ]
     with open(shadow / f"postquote-{day}.jsonl", "a") as fh:
-        for r in rows:
-            fh.write(_json.dumps(r) + "\n")
+        fh.writelines(_json.dumps(r) + "\n" for r in rows)
 
 
 
@@ -213,17 +212,17 @@ def _seed_drift_for_side(tmp_path, slug, us_side, moves=(0.01, 0.01, 0.01),
     horizon, so second-side tests need the opposite side seeded explicitly.
     """
     import json as _json
-    from datetime import UTC, datetime as _dt
+    from datetime import UTC
+    from datetime import datetime as _dt
 
     day = day or f"{_dt.now(UTC):%Y%m%d}"
     shadow = tmp_path / "shadow"
     shadow.mkdir(exist_ok=True)
     with open(shadow / f"postquote-{day}.jsonl", "a") as fh:
-        for m in moves:
-            fh.write(_json.dumps({
+        fh.writelines(_json.dumps({
                 "type": "postquote", "slug": slug, "us_side": us_side,
                 "dt_s": 120.0, "oriented_move": m,
-            }) + "\n")
+            }) + "\n" for m in moves)
 
 
 def _mapentry_row(**over) -> dict:
@@ -1389,8 +1388,7 @@ class TestDriftConfirm:
              "dt_s": 120.0, "oriented_move": 0.01},
         ]
         with open(shadow / "postquote-20260828.jsonl", "w") as fh:
-            for r in rows:
-                fh.write(json.dumps(r) + "\n")
+            fh.writelines(json.dumps(r) + "\n" for r in rows)
         assert engine_mod.recent_postquote_moves(
             shadow, self.SLUG, "long", today="20260828"
         ) == [0.01]
@@ -1501,8 +1499,7 @@ class TestDriftLoaderAgainstRealRowShape:
 
         shadow.mkdir(parents=True, exist_ok=True)
         with open(shadow / "postquote-20260828.jsonl", "w") as fh:
-            for r in rows:
-                fh.write(json.dumps(r) + "\n")
+            fh.writelines(json.dumps(r) + "\n" for r in rows)
 
     def test_real_sampler_row_shape_is_matched(self, tmp_path) -> None:
         from gridbot.executor import engine as engine_mod

@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-import fill_conditional_edge as fce  # noqa: E402
+import fill_conditional_edge as fce
 
 
 class TestSideAsk:
