@@ -39,6 +39,7 @@ Run: uv run python scripts/dispatch.py <kind> <prompt-file> [--out FILE]
 from __future__ import annotations
 
 import argparse
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -155,12 +156,34 @@ def _run(kind: str, prompt: str, timeout: int) -> tuple[int, str]:
     return res.returncode, res.stdout
 
 
+def _digests(artifacts: list[str]) -> dict[str, str | None]:
+    """sha256 per artifact, None when absent. `exists()` cannot tell an
+    unchanged pre-existing file from one the builder actually wrote."""
+    out: dict[str, str | None] = {}
+    for a in artifacts:
+        path = Path(a)
+        out[a] = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+    return out
+
+
+def _write_trail(out: str | None, sections: list[tuple[str, str]]) -> None:
+    """Persist the whole relay. The builder's TEXT is part of the evidence:
+    every OpenRouter lane returns code as text (hermes -z --safe-mode cannot
+    write to the repo), so discarding stdout discards the work product."""
+    if not out:
+        return
+    body = "\n\n".join(f"=== {title} ===\n{text}" for title, text in sections if text)
+    Path(out).write_text(body)
+    print(f"pair: trail written to {out} ({len(body)} bytes)", file=sys.stderr)
+
+
 def pair(spec_file: str, artifacts: list[str], timeout: int,
-         reviewer: str = "review", builder: str = "programming") -> int:
-    """A2A development relay (user directive 08-26): glm-5.3-flash BUILDS,
-    the reviewer lane REVIEWS the actual artifacts, the builder REVISES
-    from the review. Claude verifies before anything lands — the relay
-    replaces neither tests nor the human-side review gate.
+         reviewer: str = "review", builder: str = "programming",
+         out: str | None = None) -> int:
+    """A2A development relay (user directive 08-26): the builder lane BUILDS,
+    the reviewer lane REVIEWS the actual artifacts, the builder REVISES from
+    the review. Claude verifies before anything lands — the relay replaces
+    neither tests nor the human-side review gate.
 
     Reviewer choice is a COST decision (user 08-26 late eve — opus eats
     credits fast, input tokens are the driver since review bundles carry
@@ -171,18 +194,46 @@ def pair(spec_file: str, artifacts: list[str], timeout: int,
       connectivity checks, second passes. Also the automatic fallback
       when opus stalls (observed >25min hang via hermes once).
     Anything deferrable to Claude-account usage (Claude's own review or
-    an account-side subagent) should go there instead of paid API."""
+    an account-side subagent) should go there instead of paid API.
+
+    EVIDENCE CONTRACT (2026-08-30 postmortem): the builder's stdout is kept,
+    artifacts are compared by DIGEST not existence, and --out receives the
+    whole trail. A dispatch that produces nothing must say so loudly rather
+    than return 0 with an untouched file.
+    """
     spec = Path(spec_file).read_text()
 
-    rc, _ = _run(builder, spec, timeout)
-    missing = [a for a in artifacts if not Path(a).exists()]
+    before = _digests(artifacts)
+    _, build_text = _run(builder, spec, timeout)
+    after = _digests(artifacts)
+
+    missing = [a for a in artifacts if after[a] is None]
     if missing:
         print(f"pair: builder did not produce {missing}; aborting", file=sys.stderr)
+        _write_trail(out, [("SPEC", spec), ("BUILDER OUTPUT (no files written)", build_text)])
         return 1
 
-    bundle = "\n\n".join(
-        f"=== FILE {a} ===\n{Path(a).read_text()}" for a in artifacts
-    )
+    unchanged = [a for a in artifacts if before[a] == after[a]]
+    if unchanged:
+        print(
+            f"pair: WARNING artifacts UNCHANGED by the builder: {unchanged}. "
+            "This lane returns code as TEXT and cannot write to the repo "
+            "(hermes -z --safe-mode). Its output is preserved in the trail — "
+            "review it there and apply by hand.",
+            file=sys.stderr,
+        )
+
+    # Review what the builder ACTUALLY produced. When it wrote no files but
+    # returned text, reviewing the untouched on-disk file reviews the
+    # pre-build state — which is what happened on 2026-08-30 and wasted the
+    # reviewer leg. Review the text instead.
+    if unchanged == artifacts and build_text.strip():
+        bundle = f"=== BUILDER OUTPUT (text; no files written) ===\n{build_text}"
+    else:
+        bundle = "\n\n".join(
+            f"=== FILE {a} ===\n{Path(a).read_text()}" for a in artifacts
+        )
+
     review_prompt = (
         "Adversarial review of code built by another agent from the spec "
         "below. Numbered findings with severity (BLOCKER/MAJOR/MINOR/NIT), "
@@ -197,6 +248,7 @@ def pair(spec_file: str, artifacts: list[str], timeout: int,
         rc, review = _run(fallback, review_prompt, timeout)
     if not review.strip():
         print("pair: no review produced; artifacts stand UNREVIEWED", file=sys.stderr)
+        _write_trail(out, [("SPEC", spec), ("BUILDER OUTPUT", build_text)])
         return 1
 
     revise_prompt = (
@@ -206,7 +258,13 @@ def pair(spec_file: str, artifacts: list[str], timeout: int,
         "paths. If you reject a finding, say why in a code comment.\n\nSPEC:\n"
         + spec + "\n\nCURRENT FILES:\n" + bundle + "\n\nREVIEW FINDINGS:\n" + review
     )
-    _run(builder, revise_prompt, timeout)
+    _, revise_text = _run(builder, revise_prompt, timeout)
+
+    _write_trail(out, [
+        ("BUILDER OUTPUT", build_text),
+        ("REVIEW FINDINGS", review),
+        ("BUILDER REVISION", revise_text),
+    ])
     print("=== REVIEW TRAIL ===")
     print(review)
     print("pair: relay complete — verify artifacts + run tests before landing",
@@ -238,7 +296,7 @@ def main() -> int:
         if not args.artifact:
             ap.error("pair mode needs at least one --artifact")
         return pair(args.prompt_file, args.artifact, args.timeout,
-                    args.reviewer, args.builder)
+                    args.reviewer, args.builder, args.out)
 
     rc, out = _run(args.kind, Path(args.prompt_file).read_text(), args.timeout)
     if args.out:
