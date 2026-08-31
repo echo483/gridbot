@@ -212,10 +212,23 @@ def parse_bbo(payload: dict) -> tuple[float | None, float | None]:
     return val("bestBid"), val("bestAsk")
 
 
-def _book_level(entry: dict) -> dict | None:
-    """Normalize one book level: ``{price, size}`` floats, dropping dead levels."""
+def _book_level(entry) -> dict | None:
+    """Normalize one book level: ``{price, size}`` floats, dropping dead levels.
+
+    Fail-closed: any level that isn't a well-formed ``{px: {value: ...}, qty: ...}``
+    (the venue occasionally emits junk) is dropped rather than raised — a single
+    malformed level must never void the whole full-depth summary. Catches non-dict
+    levels (None entries, dict keys yielded when bids/offers is itself a dict) and
+    non-dict ``px`` (a bare string), which the old ``(TypeError, ValueError)`` guard
+    let escape as AttributeError.
+    """
+    if not isinstance(entry, dict):
+        return None
+    px = entry.get("px")
+    if not isinstance(px, dict):
+        return None
     try:
-        price = float((entry.get("px") or {}).get("value"))
+        price = float(px.get("value"))
         qty = float(entry.get("qty"))
     except (TypeError, ValueError):
         return None

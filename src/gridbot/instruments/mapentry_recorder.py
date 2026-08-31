@@ -28,6 +28,11 @@ log = logging.getLogger("gridbot.mapentry")
 CYCLE_S = 2.0
 MAPPING_RELOAD_S = 60.0
 BBO_TTL_S = 5.0
+# Bounds the synchronous gateway fetch in the single-threaded eval loop. The
+# library's defaults are 30s; a hung/slow gateway (book or bbo) must not stall
+# the recorder for that long. A short timeout fails the call closed (empty book,
+# gate unaffected) instead of blocking the tail. See F2.
+GATEWAY_TIMEOUT_S = 4.0
 
 
 class BboCache:
@@ -45,7 +50,10 @@ class BboCache:
         if self._client is None:
             from polymarket_us import PolymarketUS
 
-            self._client = PolymarketUS()  # public endpoints only — no keys
+            # Public endpoints only — no keys. Explicit short timeout so a hung
+            # gateway fails closed fast instead of stalling the single-threaded
+            # tail on the library default (30s). See GATEWAY_TIMEOUT_S.
+            self._client = PolymarketUS(timeout=GATEWAY_TIMEOUT_S)
         return self._client
 
     def top(self, slug: str) -> tuple[float | None, float | None]:

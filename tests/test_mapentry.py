@@ -277,6 +277,35 @@ class TestSlateCoverage:
         # entry semantics unchanged against the top-only baseline
         assert row["bid"] == 0.40 and row["ask"] == 0.60
 
+    def test_slate_records_row_when_book_fetch_fails(self, tmp_path) -> None:
+        # A slow/timed-out book fetch must fail closed: the row is still recorded
+        # with no depth, qualifies is untouched by the empty book, and the eval
+        # loop is not killed. (F2 fail-closed + F3)
+        from types import SimpleNamespace
+
+        from gridbot.instruments.mapentry_recorder import Recorder
+
+        class FakeBooks:
+            def top(self, slug: str):
+                # A deep cheap long ask -> qualifies should hold regardless of book.
+                return (0.30, 0.40)
+
+            def book(self, slug: str):
+                raise TimeoutError("simulated gateway hang")  # noqa: TRY301
+
+        rec = Recorder(books=FakeBooks(), out_dir=tmp_path)
+        rec.slate = SimpleNamespace(predict=lambda _f: 0.9)  # strong q -> high p_map
+        rec.mappings = {"777": {"match": {"s": 1}, "us_markets": {"map1": {"market_slug": "m", "sides": {"Alpha": "long"}}}}}
+        disposition = rec.handle_slate(self._ss_record())
+        assert disposition is not None  # row still recorded
+        day_file = list(tmp_path.glob("mapentry-*.jsonl"))[0]
+        row = json.loads(day_file.read_text().splitlines()[0])
+        # depth fetch failed -> no book evidence, but the row survived
+        assert row["book"] is None
+        # the empty book did not break qualification
+        assert row["qualifies"] is True
+        assert row["skip_reason"] in (None, "recorded", "qualifies")
+
 
 class TestBook:
     def test_parse_bbo(self) -> None:
@@ -351,6 +380,48 @@ class TestParseBook:
                                "offers": [{"px": {"value": "garbage"}, "qty": "x"}]}}
         b2 = parse_book(junk)
         assert b2["bid"] is None and b2["ask"] is None
+
+    def test_parse_book_drops_malformed_levels_fail_closed(self) -> None:
+        # Non-dict px (bare string) used to raise AttributeError out of parse_book,
+        # voiding all depth. Both must now be dropped silently, never raised.
+        junk = {"marketData": {
+            "bids": [
+                {"px": {"value": "0.41"}, "qty": "100"},   # clean -> kept
+                {"px": "0.40", "qty": "50"},              # non-dict px -> dropped
+                None,                                     # None element -> dropped
+            ],
+            "offers": [
+                {"px": {"value": "0.42"}, "qty": "200"},  # clean -> kept
+                "0.43",                                   # bare string -> dropped
+            ],
+        }}
+        book = parse_book(junk)
+        assert book["imbalance"] == pytest.approx(0.3333)  # from the kept levels only
+        assert book["depth"]["bids"] == [{"price": 0.41, "size": 100.0}]
+        assert book["depth"]["offers"] == [{"price": 0.42, "size": 200.0}]
+        assert book["bid"] == pytest.approx(0.41)
+        assert book["ask"] == pytest.approx(0.42)
+
+    def test_parse_book_dict_as_bids_drops_keys(self) -> None:
+        # If bids/offers arrive as a dict, iterating yields its keys (strings);
+        # each is a non-dict level and must be dropped, not raised.
+        book = parse_book({
+            "marketData": {"bids": {"L1": {"px": {"value": "0.41"}, "qty": "100"}},
+                           "offers": []},
+        })
+        assert book["bid"] is None
+        assert book["depth"]["bids"] == []
+        assert book["depth"]["offers"] == []
+
+    def test_parse_book_non_dict_px_alone_does_not_raise(self) -> None:
+        # Whole-sides malformed: only a string px and a None element, no clean level.
+        book = parse_book({
+            "marketData": {"bids": [{"px": "0.99", "qty": "1"}, None],
+                           "offers": [[1, 2, 3]]},  # offers a list entry, not dict
+        })
+        assert book["bid"] is None and book["ask"] is None
+        assert book["depth"]["bids"] == []
+        assert book["depth"]["offers"] == []
 
 
 class TestRow:
