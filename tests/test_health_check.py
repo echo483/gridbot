@@ -89,3 +89,49 @@ def test_escalate_never_raises_into_the_watchdog(monkeypatch):
 
     monkeypatch.setattr(gconfig, "_secret", boom)
     health_check._escalate("gridbot-capture.service", "detail")  # must not raise
+
+
+# --- FIX-1/FIX-4: keyring exit-code consumption + targeted suppression -----
+
+
+def test_keyring_rc3_counts_as_problem_and_fires_summary():
+    """FIX-1: rc 3 (locked-path, nothing delivered) is a keyring problem —
+    it lands in the problem list and the red summary includes it."""
+    problems, summary_problems, suppress = health_check._keyring_summary_decision(
+        3, []
+    )
+    assert len(problems) == 1
+    assert "keyring" in problems[0].lower()
+    assert summary_problems == problems
+    assert suppress is False
+
+
+def test_keyring_rc2_sole_problem_suppresses_summary():
+    """rc 2 (alert delivered) with no other problems: problem is recorded but
+    the summary is suppressed — the keyring's own ping is the message."""
+    problems, summary_problems, suppress = health_check._keyring_summary_decision(
+        2, []
+    )
+    assert len(problems) == 1
+    assert summary_problems == []  # keyring line excluded from summary text
+    assert suppress is True
+
+
+def test_keyring_rc2_does_not_swallow_unrelated_problems():
+    """FIX-4: rc 2 with an UNRELATED problem (disk, dead unit) in the same
+    cycle must NOT suppress the summary — the unrelated problem still fires."""
+    problems, summary_problems, suppress = health_check._keyring_summary_decision(
+        2, ["disk low: 3GiB free"]
+    )
+    assert len(problems) == 2  # disk + keyring line recorded
+    assert summary_problems == ["disk low: 3GiB free"]  # keyring line excluded
+    assert suppress is False  # summary fires for the disk problem
+
+
+def test_keyring_rc0_or_none_changes_nothing():
+    assert health_check._keyring_summary_decision(0, ["PM data stale (20m)"]) == (
+        ["PM data stale (20m)"],
+        ["PM data stale (20m)"],
+        False,
+    )
+    assert health_check._keyring_summary_decision(None, []) == ([], [], False)

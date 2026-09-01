@@ -105,13 +105,13 @@ def _send(msg: str) -> None:
     )
 
 
-def _watch_keyring() -> bool:
+def _watch_keyring() -> int | None:
     """Run the keyring lock watchdog (scripts/keyring_watch.py --notify).
 
     Best-effort: any nonzero exit or crash must never break the 5-minute
-    timer. Returns True when the watchdog sent its own Telegram alert this
-    cycle (exit 2 = locked + alerted), so the generic red summary below is
-    suppressed in the same cycle — one ping for the keyring, not two.
+    timer. Returns the watchdog's exit code (2 = locked + alert delivered,
+    3 = locked-path with nothing delivered, 0 = unlocked/ok), or None when
+    the watchdog itself could not be run.
     """
     script = Path(__file__).resolve().parents[1] / "scripts" / "keyring_watch.py"
     try:
@@ -122,11 +122,40 @@ def _watch_keyring() -> bool:
             check=False,
             timeout=45,
         )
-        return r.returncode == 2
+        return r.returncode
     except subprocess.TimeoutExpired:
-        return False
+        return None
     except Exception:  # noqa: BLE001 — best-effort by design
-        return False
+        return None
+
+
+KEYRING_PROBLEM_PREFIX = "keyring locked/unreachable"
+
+
+def _keyring_summary_decision(
+    keyring_rc: int | None, problems: list[str]
+) -> tuple[list[str], list[str], bool]:
+    """Pure decision helper (FIX-1/FIX-4): fold the keyring result into the
+    problem list and decide the red-summary outcome.
+
+    Returns (problems, summary_problems, suppress_summary):
+      - rc 2: a keyring problem line is recorded, but the keyring's own alert
+        already reached Telegram, so it is excluded from the summary text and
+        the summary is suppressed ONLY when the keyring is the sole problem
+        this cycle (FIX-4: unrelated problems still fire the summary).
+      - rc 3: keyring problem present with NOTHING delivered — the line is
+        recorded AND included in the summary; never suppressed.
+      - rc 0 / None: no keyring line, summary unchanged.
+    """
+    keyring_line = None
+    if keyring_rc == 2:
+        keyring_line = f"{KEYRING_PROBLEM_PREFIX} (watchdog alert delivered)"
+    elif keyring_rc == 3:
+        keyring_line = f"{KEYRING_PROBLEM_PREFIX} (watchdog sent NOTHING this cycle)"
+    all_problems = list(problems) + ([keyring_line] if keyring_line else [])
+    summary_problems = all_problems if keyring_rc != 2 else list(problems)
+    suppress = keyring_rc == 2 and not problems
+    return all_problems, summary_problems, suppress
 
 
 def _problems(prev: dict) -> tuple[list[str], dict]:
@@ -184,14 +213,18 @@ def main() -> None:
             pass
     problems, flags = _problems(prev)
     # Keyring lock watchdog runs after the self-heal block, before the
-    # summary: its transition alerts ride Telegram; when it alerted this
-    # cycle (exit 2) the generic red summary is suppressed to keep the
-    # phone quiet (keyring_watch's own message carries the recovery line).
-    keyring_alerted = _watch_keyring()
+    # summary: its transition alerts ride Telegram. rc 2 = its own alert was
+    # delivered (suppress the duplicate summary ONLY if it is the sole
+    # problem); rc 3 = locked-path with nothing delivered — that must stay
+    # loud via the generic red summary (FIX-1/FIX-4).
+    keyring_rc = _watch_keyring()
+    problems, summary_problems, suppress_summary = _keyring_summary_decision(
+        keyring_rc, problems
+    )
     ok = not problems
     stamp = datetime.now(UTC).strftime("%H:%M UTC")
-    if not ok and prev.get("ok", True) and not keyring_alerted:
-        _send("🔴 gridbot health: " + "; ".join(problems) + f" ({stamp})")
+    if not ok and prev.get("ok", True) and not suppress_summary:
+        _send("🔴 gridbot health: " + "; ".join(summary_problems) + f" ({stamp})")
     elif ok and not prev.get("ok", True):
         _send(f"✅ gridbot health recovered ({stamp})")
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)

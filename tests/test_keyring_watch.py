@@ -37,9 +37,18 @@ def state_file(tmp_path, monkeypatch):
 
 @pytest.fixture
 def sent(monkeypatch):
-    messages: list[str] = []
+    """Fake _send recording messages. Set messages.fail_next = True to make
+    exactly one send fail (FIX-1/FIX-2 paths: dead Telegram channel)."""
+
+    class SendLog(list):
+        fail_next = False
+
+    messages = SendLog()
 
     def fake_send(msg: str) -> bool:
+        if messages.fail_next:
+            messages.fail_next = False
+            return False
         messages.append(msg)
         return True
 
@@ -103,8 +112,9 @@ def test_notify_lock_edge_alerts_once(state_file, sent, clock, monkeypatch):
     assert keyring_watch.main(["--notify"]) == 2  # locked + alerted
     assert len(sent) == 1
     assert "gnome-keyring-daemon --replace --unlock" in sent[0]  # recovery one-liner
-    # Within the 15-min cadence and still locked: no second ping, no alert exit.
-    assert keyring_watch.main(["--notify"]) == 0
+    # Within the 15-min cadence and still locked: no second ping; exit 3
+    # (locked-or-error, nothing sent this cycle — new FIX-1 contract).
+    assert keyring_watch.main(["--notify"]) == 3
     assert len(sent) == 1
     state = json.loads(state_file.read_text())
     assert state["state"] == "locked"
@@ -118,7 +128,7 @@ def test_notify_realert_cadence_uses_state_timestamps(state_file, sent, clock, m
     assert keyring_watch.main(["--notify"]) == 2
     assert len(sent) == 1
     clock(899)  # t=1899: 899s since last alert — below the 900s bar, silent
-    assert keyring_watch.main(["--notify"]) == 0
+    assert keyring_watch.main(["--notify"]) == 3  # locked, nothing sent (FIX-1)
     assert len(sent) == 1
     clock(1)  # t=1900: exactly 900s since the state timestamp — re-alert fires
     assert keyring_watch.main(["--notify"]) == 2
@@ -280,8 +290,9 @@ def test_notify_state_file_flag_isolates_drill_state(
     assert not state_file.exists()  # production state untouched
     drill_state = json.loads(drill.read_text())
     assert drill_state["state"] == "locked"
-    # Second cycle within cadence: silent, still isolated.
-    assert keyring_watch.main(["--notify", "--state-file", str(drill)]) == 0
+    # Second cycle within cadence: silent, still isolated (exit 3 = locked,
+    # nothing sent).
+    assert keyring_watch.main(["--notify", "--state-file", str(drill)]) == 3
     assert not state_file.exists()
     # Reset with the flag clears only the drill file.
     assert keyring_watch.main(["--reset", "--state-file", str(drill)]) == 0
@@ -309,3 +320,129 @@ def test_probe_locked_label_forwarded_to_probe_once(monkeypatch):
     assert seen == ["drill"]
     assert keyring_watch.probe_locked(timeout_s=1.0) is False
     assert seen == ["drill", None]
+
+
+# --- FIX-1/FIX-2/FIX-3 behavioral seams (2026-09-01 adversarial review) -----
+
+
+def test_locked_with_failed_send_exits_three_and_keeps_edge(
+    state_file, sent, clock, monkeypatch
+):
+    """FIX-1: locked-path cycle whose Telegram send FAILS must exit 3 (not 0)
+    and leave state locked WITHOUT last_alert, so the edge/cadence retries."""
+    monkeypatch.setattr(
+        keyring_watch, "probe_locked", lambda timeout_s=5.0, collection_label=None: True
+    )
+    sent.fail_next = True
+    assert keyring_watch.main(["--notify"]) == 3
+    assert sent == []  # nothing reached Telegram
+    state = json.loads(state_file.read_text())
+    assert state["state"] == "locked"
+    assert "last_alert" not in state
+    # The following cycle retries the (still-due) alert even without a clock
+    # advance: last_alert never landed, so `due` holds via the 0.0 default.
+    assert keyring_watch.main(["--notify"]) == 2
+    assert len(sent) == 1
+    assert "gnome-keyring-daemon --replace --unlock" in sent[0]
+
+
+def test_locked_still_within_cadence_after_delivered_alert_exits_zero(
+    state_file, sent, clock, monkeypatch
+):
+    """Locked, alert already delivered, cadence NOT yet due: nothing to send
+    this cycle is a benign locked-path cycle — exit 3 per the new contract
+    (locked-or-error, nothing sent), NOT 0; health_check may show the
+    keyring line but the state proves the alert went out."""
+    monkeypatch.setattr(
+        keyring_watch, "probe_locked", lambda timeout_s=5.0, collection_label=None: True
+    )
+    assert keyring_watch.main(["--notify"]) == 2
+    clock(100)
+    assert keyring_watch.main(["--notify"]) == 3
+    assert len(sent) == 1
+
+
+def test_recovered_send_failure_parks_and_retries_exactly_once(
+    state_file, sent, clock, monkeypatch
+):
+    """FIX-2: the unlock-edge recovered send failing must set
+    recovered_unsent (state stays OK) and a later OK cycle retries it
+    exactly once, clearing the flag on success."""
+    locked_then_unlocked = iter([True, False, False, False])
+    monkeypatch.setattr(
+        keyring_watch,
+        "probe_locked",
+        lambda timeout_s=5.0, collection_label=None: next(locked_then_unlocked),
+    )
+    assert keyring_watch.main(["--notify"]) == 2  # lock edge
+    sent.fail_next = True
+    assert keyring_watch.main(["--notify"]) == 0  # unlock edge, recovered LOST
+    assert len(sent) == 1  # only the lock alert; the recovered send failed
+    state = json.loads(state_file.read_text())
+    assert state["state"] == "ok"
+    assert state["recovered_unsent"] is True
+    clock(600)
+    # Next OK cycle retries the recovered ping and clears the flag.
+    assert keyring_watch.main(["--notify"]) == 0
+    assert len(sent) == 2
+    assert "Recovered" in sent[1]
+    state = json.loads(state_file.read_text())
+    assert "recovered_unsent" not in state
+    # And it does NOT retry again.
+    clock(600)
+    assert keyring_watch.main(["--notify"]) == 0
+    assert len(sent) == 2
+
+
+def test_relock_supersedes_pending_recovered_ping(state_file, sent, monkeypatch):
+    """FIX-2 clause: a re-lock clears recovered_unsent (a re-lock supersedes
+    the stale recovery ping; the lock alert takes over)."""
+    probe = iter([True, False, True, True])
+    monkeypatch.setattr(
+        keyring_watch,
+        "probe_locked",
+        lambda timeout_s=5.0, collection_label=None: next(probe),
+    )
+    assert keyring_watch.main(["--notify"]) == 2  # lock edge, delivered
+    sent.fail_next = True
+    assert keyring_watch.main(["--notify"]) == 0  # unlock edge, recovered parked
+    assert json.loads(state_file.read_text())["recovered_unsent"] is True
+    assert keyring_watch.main(["--notify"]) == 2  # re-lock edge: lock alert wins
+    state = json.loads(state_file.read_text())
+    assert state["state"] == "locked"
+    assert "recovered_unsent" not in state
+    assert "Recovered" not in "".join(sent)
+
+
+def test_load_state_preserves_healthy_ok_state(state_file, tmp_path):
+    """FIX-3: a legitimate OK state (no last_alert) must round-trip through
+    _load_state instead of being discarded to {}."""
+    healthy = {"state": "ok", "since": 1234.0}
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps(healthy))
+    assert keyring_watch._load_state(path) == healthy
+
+
+def test_load_state_preserves_locked_without_last_alert(tmp_path):
+    """FIX-3: locked state with no last_alert (FIX-1's send-failed path)
+    survives the load — no spurious edge on the next cycle."""
+    locked = {"state": "locked", "since": 1000.0}
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps(locked))
+    assert keyring_watch._load_state(path) == locked
+
+
+def test_load_state_still_discards_torn_shapes(tmp_path):
+    """FIX-3 guard stays sharp: non-dict, non-numeric last_alert when present,
+    and unknown state values still degrade to {}."""
+    path = tmp_path / "s.json"
+    for bad in (
+        [1, 2],
+        {"state": "locked", "last_alert": "soon"},
+        {"state": "weird", "last_alert": 5.0},
+    ):
+        path.write_text(json.dumps(bad))
+        assert keyring_watch._load_state(path) == {}, bad
+    # And a numeric last_alert without a state key is fine (legacy shape).
+    path.write_text(json.dumps({"last_alert": 5.0}))
+    assert keyring_watch._load_state(path) == {"last_alert": 5.0}
