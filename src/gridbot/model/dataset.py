@@ -12,13 +12,13 @@ history) are dropped too; nothing else is filtered.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
 from gridbot.corpus.rows import FEATURE_NAMES
+from gridbot.jsonl import SkippedCounter, iter_jsonl
 
 
 @dataclass(frozen=True)
@@ -75,27 +75,31 @@ def load_dataset(path: str | Path) -> tuple[np.ndarray, np.ndarray, list[str], D
     row_keys: list[str] = []
     captured_at: list[str] = []
 
-    with Path(path).open(encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            total += 1
-            features = row["features"]
-            missing = any(name not in features for name in FEATURE_NAMES)
-            if missing:
-                missing_key_rows += 1
-            if not _passes_leak_filter(features, row["round_number"]):
-                leak_dropped += 1
-                continue
-            if missing:
-                missing_key_dropped += 1
-                continue
-            xs.append([float(features[name]) for name in FEATURE_NAMES])
-            ys.append(float(row["label"]))
-            groups.append(str(row["series_id"]))
-            row_keys.append(str(row["row_key"]))
-            captured_at.append(str(row["captured_at"]))
+    skipped = SkippedCounter()
+    for row in iter_jsonl(path, skipped=skipped):
+        total += 1
+        features = row["features"]
+        missing = any(name not in features for name in FEATURE_NAMES)
+        if missing:
+            missing_key_rows += 1
+        if not _passes_leak_filter(features, row["round_number"]):
+            leak_dropped += 1
+            continue
+        if missing:
+            missing_key_dropped += 1
+            continue
+        xs.append([float(features[name]) for name in FEATURE_NAMES])
+        ys.append(float(row["label"]))
+        groups.append(str(row["series_id"]))
+        row_keys.append(str(row["row_key"]))
+        captured_at.append(str(row["captured_at"]))
+
+    if skipped.count:
+        # Torn/malformed lines are tolerated (append-only day-file format)
+        # but the count is surfaced — never silent.
+        print(
+            f"[dataset] skipped {skipped.count} malformed jsonl line(s) in {path}"
+        )
 
     meta = DatasetMeta(
         total_rows=total,

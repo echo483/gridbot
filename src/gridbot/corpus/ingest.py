@@ -19,6 +19,7 @@ from pathlib import Path
 from gridbot import config
 from gridbot.corpus.build import build_series_rows
 from gridbot.corpus.sink import upsert_rows
+from gridbot.jsonl import iter_jsonl
 
 CORPUS_DIR = config.DATA_DIR / "corpus"
 STATE_FILE = CORPUS_DIR / ".ingested.json"
@@ -28,26 +29,21 @@ def _load_series(files: list[Path]) -> dict[str, dict]:
     """series_id → {states (capture order), first_file, first_req_ns}."""
     series: dict[str, dict] = {}
     for path in files:
-        with open(path) as fh:
-            for line in fh:
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if rec.get("type") != "ss" or rec.get("title") != "cs2":
-                    continue
-                sid = str(rec.get("series_id"))
-                if sid in config.GRID_TEST_SERIES_IDS:
-                    continue
-                state = (rec.get("data") or {}).get("seriesState")
-                if not state:
-                    continue
-                entry = series.setdefault(
-                    sid, {"states": [], "first_file": str(path), "first_req_ns": None}
-                )
-                entry["states"].append(state)
-                if entry["first_req_ns"] is None and rec.get("req_ns"):
-                    entry["first_req_ns"] = int(rec["req_ns"])
+        for rec in iter_jsonl(path):
+            if rec.get("type") != "ss" or rec.get("title") != "cs2":
+                continue
+            sid = str(rec.get("series_id"))
+            if sid in config.GRID_TEST_SERIES_IDS:
+                continue
+            state = (rec.get("data") or {}).get("seriesState")
+            if not state:
+                continue
+            entry = series.setdefault(
+                sid, {"states": [], "first_file": str(path), "first_req_ns": None}
+            )
+            entry["states"].append(state)
+            if entry["first_req_ns"] is None and rec.get("req_ns"):
+                entry["first_req_ns"] = int(rec["req_ns"])
     return series
 
 

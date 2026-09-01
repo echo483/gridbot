@@ -26,11 +26,11 @@ this module never raises on ledger contents.
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 from gridbot.executor.fills import MANUAL_EXIT_SOURCE, TRUSTED_SETTLE_SOURCES
+from gridbot.jsonl import iter_jsonl
 
 
 def load_records(root: Path) -> list[dict]:
@@ -45,20 +45,7 @@ def load_records(root: Path) -> list[dict]:
     """
     records: list[dict] = []
     for path in sorted(Path(root).glob("intents-*.jsonl")):
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            if isinstance(row, dict):
-                records.append(row)
+        records.extend(iter_jsonl(path))
     return records
 
 

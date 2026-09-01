@@ -53,8 +53,10 @@ import re
 import subprocess
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+
+from gridbot.jsonl import iter_jsonl
 
 US_TICK = 0.01
 CEILING = 0.90
@@ -95,14 +97,9 @@ def load_mapentry_rows(pattern: str) -> list[dict]:
     """
     out: list[dict] = []
     for path in sorted(_glob.glob(pattern)):
-        with open(path) as fh:
-            for line in fh:
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                if rec.get("type") == "mapentry":
-                    out.append(rec)
+        for rec in iter_jsonl(path):
+            if rec.get("type") == "mapentry":
+                out.append(rec)
     return out
 
 
@@ -149,7 +146,7 @@ def iso_to_ns(iso: str) -> int:
     """Epoch nanoseconds for an ISO-8601 timestamp (Z suffix accepted)."""
     dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return int(dt.timestamp() * 1_000_000_000)
 
 
@@ -164,20 +161,15 @@ def holdout_start_iso(registry_path: str | Path | None = None) -> str:
         _ROOT / "docs" / "experiments" / "registry.jsonl"
     )
     try:
-        with open(path) as fh:
-            for line in fh:
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                if rec.get("hypothesis_id") != BOOKPIN_HYPOTHESIS_ID:
-                    continue
-                m = re.search(
-                    r"at or after\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)",
-                    str(rec.get("hypothesis_text", "")),
-                )
-                if m:
-                    return m.group(1)
+        for rec in iter_jsonl(path):
+            if rec.get("hypothesis_id") != BOOKPIN_HYPOTHESIS_ID:
+                continue
+            m = re.search(
+                r"at or after\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)",
+                str(rec.get("hypothesis_text", "")),
+            )
+            if m:
+                return m.group(1)
     except OSError:
         pass
     return HOLD_START_FALLBACK

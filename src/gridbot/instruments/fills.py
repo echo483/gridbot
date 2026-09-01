@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from gridbot.instruments.books import _best
+from gridbot.jsonl import iter_jsonl
 
 TICK = 0.01
 FILL_WINDOW_S = 180.0
@@ -114,12 +115,5 @@ def infer_fills(quotes: list[MakerQuote], records) -> None:
 
 def iter_book_records(book_dir: Path):
     """All pm book records across day files, in file/time order."""
-    import json
-
     for path in sorted(book_dir.glob("books-*.jsonl")):
-        with open(path) as fh:
-            for line in fh:
-                try:
-                    yield json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+        yield from iter_jsonl(path, dicts_only=False)

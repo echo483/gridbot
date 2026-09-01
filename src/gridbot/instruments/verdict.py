@@ -21,6 +21,7 @@ from collections import defaultdict
 from gridbot import config
 from gridbot.corpus import rows as r
 from gridbot.instruments.market_match import market_kind, team_outcome_token
+from gridbot.jsonl import iter_jsonl
 
 # Frozen entry-price triggers from the registry texts (paper eligibility).
 ENTRY_ASK = {"H-MANADV1": 0.85, "H-ECONBUY1": 0.78, "H-PISTOLCARRY1": 0.80}
@@ -40,12 +41,7 @@ VENUE_GATED_STATUS = (
 
 
 def _iter_jsonl(path):
-    with open(path) as fh:
-        for line in fh:
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                continue
+    return iter_jsonl(path, dicts_only=False)
 
 
 def load_instances(replay: bool, include_test: bool) -> list[dict]:

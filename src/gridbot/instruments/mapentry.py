@@ -18,10 +18,10 @@ is not wired, so v1 records map books exclusively.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from gridbot.executor.us_mapping import COVERAGE_FLOOR, _coverage, _tokens
+from gridbot.jsonl import iter_jsonl
 
 HYPOTHESIS_ID = "H-MAPENTRY1"
 RACE_TARGET = 13  # MR12: first to 13 rounds wins the map
@@ -142,14 +142,9 @@ def load_latest_mappings(pmus_dir: Path) -> dict[str, dict]:
         return {}
     out: dict[str, dict] = {}
     for path in files[-2:]:
-        with open(path) as fh:
-            for line in fh:
-                try:
-                    rec = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if rec.get("type") == "grid_pmus_mapping" and rec.get("match"):
-                    out[str(rec.get("grid_series_id"))] = rec  # later snapshot wins
+        for rec in iter_jsonl(path):
+            if rec.get("type") == "grid_pmus_mapping" and rec.get("match"):
+                out[str(rec.get("grid_series_id"))] = rec  # later snapshot wins
     return out
 
 
