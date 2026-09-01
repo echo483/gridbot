@@ -141,7 +141,13 @@ def us_band_gated(p_map: object) -> bool:
     """
     if not isinstance(p_map, (int, float)) or isinstance(p_map, bool):
         return True
-    return not (US_BAND_GATE[0] <= float(p_map) <= US_BAND_GATE[1])
+    try:
+        p = float(p_map)
+    except (TypeError, ValueError, OverflowError):
+        return True  # unconvertible — fail closed (gated)
+    if not math.isfinite(p):
+        return True  # nan/inf — fail closed
+    return not (US_BAND_GATE[0] <= p <= US_BAND_GATE[1])
 
 
 DRIFT_WINDOW = 3  # postquote samples the engine feeds in (most recent first kept)

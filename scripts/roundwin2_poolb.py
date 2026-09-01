@@ -221,7 +221,7 @@ def book_history(postquote_rows: list[dict], horizon: float | None = DRIFT_HORIZ
         move = _finite_num(r.get("oriented_move"))
         if move is None:
             continue    # non-finite / non-numeric / overflow — never evidence
-        key = (str(r.get("slug")), r.get("us_side"))
+        key = (str(r.get("slug") or r.get("market_slug")), r.get("us_side"))
         try:
             hist[key].append((int(r.get("ts_ns")), move))
         except (TypeError, ValueError, OverflowError):

@@ -336,6 +336,24 @@ class TestBandGate:
         assert us_band_gated(None) is True  # fail closed
         assert us_band_gated("0.7") is True
 
+    def test_band_gate_fail_closed_garbage(self) -> None:
+        # Fail closed: any p_map that cannot become a finite float gates
+        # (True) without raising — an engine crash on one row is worse than
+        # a skipped placement.
+        from gridbot.executor.intents import us_band_gated
+
+        for bad in (10**400, float("nan"), float("inf"), -float("inf"),
+                    "not-a-number", None):
+            assert us_band_gated(bad) is True, repr(bad)
+
+    def test_band_gate_boundaries_unchanged(self) -> None:
+        from gridbot.executor.intents import us_band_gated
+
+        assert us_band_gated(0.4999) is True
+        assert us_band_gated(0.50) is False
+        assert us_band_gated(0.80) is False
+        assert us_band_gated(0.8001) is True
+
     def _engine(self, tmp_path, monkeypatch):
         from gridbot import config
         from gridbot.executor import engine as engine_mod

@@ -196,6 +196,15 @@ def test_book_history_garbage_rows_never_crash():
     ])
     assert hist[(SLUG, "long")] == [(3 * NS, 0.05)]
 
+def test_book_history_market_slug_fallback():
+    # Engine parity (engine.py accepts slug or market_slug): a postquote row
+    # carrying only market_slug must still be keyed as evidence.
+    row = mk_postquote(1 * NS, 0.05)
+    del row["slug"]
+    row["market_slug"] = SLUG
+    hist = pb.book_history([row])
+    assert hist[(SLUG, "long")] == [(1 * NS, 0.05)]
+
 def test_prior_moves_visible_by_write_time_strictly_before():
     # Rows are visible by their WRITE time (ts_ns), strictly before the
     # decision (§2.3.1/§2.3.2): a row written at t is not visible at t, and
