@@ -33,6 +33,20 @@ prepends it to every prompt, so lane behavior — rails, output contract,
 craft rules — is declarative and reproducible, not re-typed per dispatch.
 Editing a lane's behavior = editing its file, in review like any code.
 
+BOT MODE (2026-08-31, user-directed): the desktop-app profile team. Unlike
+the -z text lanes above, profile lanes run with a LOCAL TERMINAL at
+/home/ops/gridbot and CAN write to the repo — their behavior contract is the
+profile SOUL (canonical: ~/.hermes/profiles/<name>/SOUL.md; reference
+snapshots mirrored in agents/profiles/). Rules for profile lanes:
+- builder/reasoner write files; reviewer/critical are dispatched --safe-mode
+  (their SOULs are read-only-review anyway — defense in depth).
+- NEVER dispatch two repo-writing lanes onto overlapping file sets at once,
+  and lanes never git add/commit — the ops session reviews and lands.
+- "critical" is Opus 5 via OpenRouter: user directive 2026-08-31 — keep its
+  cost LOW, specific high-stakes artifacts only, never routine work.
+- No preamble prepend for profile lanes: the SOUL already rides server-side;
+  doubling contracts breeds drift.
+
 Run: uv run python scripts/dispatch.py <kind> <prompt-file> [--out FILE]
 """
 
@@ -110,6 +124,18 @@ ROUTES: dict[str, tuple[str, str | None, str | None]] = {
 }
 
 
+PROFILES: dict[str, tuple[str, str, bool]] = {
+    # kind -> (hermes profile, --reasoning, safe_mode). Models are pinned in
+    # each profile's config.yaml (hermes-side); reasoning is forced here
+    # because the profile default is "medium" — the exact thin-output trap
+    # ROUTES already corrects for the -z lanes.
+    "builder": ("gridbot-builder", "high", False),
+    "reasoner": ("gridbot-reasoner", "high", False),
+    "reviewer": ("gridbot-reviewer", "high", True),
+    "critical": ("gridbot-critical", "xhigh", True),  # Opus $ — sparing, user 08-31
+}
+
+
 AGENTS_DIR = Path(__file__).resolve().parents[1] / "agents"
 # Lanes without their own preamble file share the analysis one (bulk
 # data-work contract); every other kind maps to agents/<kind>.md.
@@ -128,6 +154,19 @@ def _preamble(kind: str) -> str:
 
 
 def _run(kind: str, prompt: str, timeout: int) -> tuple[int, str]:
+    if kind in PROFILES:
+        profile, reasoning, safe = PROFILES[kind]
+        cmd = ["hermes", "-p", profile, "--reasoning", reasoning, "-z", prompt]
+        if safe:
+            cmd.append("--safe-mode")
+        print(f"dispatch[{kind}] -> profile {profile}"
+              f"{' (safe-mode)' if safe else ' (REPO-WRITING)'}", file=sys.stderr)
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True,
+                                 timeout=timeout, check=False)
+        except subprocess.TimeoutExpired:
+            return 124, ""
+        return res.returncode, res.stdout
     model, provider, reasoning = ROUTES[kind]
     prompt = _preamble(kind) + prompt
     if provider == "anthropic":
@@ -150,7 +189,8 @@ def _run(kind: str, prompt: str, timeout: int) -> tuple[int, str]:
     cmd += ["-z", prompt, "--safe-mode"]
     print(f"dispatch[{kind}] -> {model}", file=sys.stderr)
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                             check=False)
     except subprocess.TimeoutExpired:
         return 124, ""
     return res.returncode, res.stdout
@@ -274,22 +314,28 @@ def pair(spec_file: str, artifacts: list[str], timeout: int,
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("kind", choices=[*sorted(ROUTES), "pair"])
+    ap.add_argument("kind", choices=[*sorted(ROUTES), *sorted(PROFILES), "pair"])
     ap.add_argument("prompt_file", help="prompt file (for pair: the build spec)")
     ap.add_argument("--out", help="write agent output here (default stdout)")
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--artifact", action="append", default=[],
                     help="pair mode: expected artifact path (repeatable)")
     ap.add_argument("--builder",
-                    choices=["programming", "programming2", "reasoning"],
+                    choices=["programming", "programming2", "reasoning",
+                             "builder", "reasoner"],
                     default="programming",
                     help="pair mode builder lane: programming=glm-flash, "
-                         "programming2=deepseek-0731 (alternate-builder rotation)")
-    ap.add_argument("--reviewer", choices=["review", "review2", "verify"],
+                         "programming2=deepseek-0731 (alternate-builder "
+                         "rotation), builder/reasoner=repo-writing profiles")
+    ap.add_argument("--reviewer",
+                    choices=["review", "review2", "verify", "reviewer",
+                             "critical"],
                     default="review",
                     help="pair mode reviewer lane: review=opus via hermes, "
                          "review2=glm-5.3 (routine), verify=Claude API "
-                         "(console credits; trade-path + quant method)")
+                         "(console credits; trade-path + quant method), "
+                         "reviewer/critical=team profiles (critical=Opus $, "
+                         "sparing)")
     args = ap.parse_args()
 
     if args.kind == "pair":
