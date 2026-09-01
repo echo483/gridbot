@@ -1,0 +1,7 @@
+DRAFT - deep analysis, no verdict.
+
+HEADLINE: 3,871 shadow instances across 198 series sit under book-dependent bars (H-MANADV1, H-ECONBUY1, H-PISTOLCARRY1) and NOT ONE has ever carried a quote. PMUS lists no round books, so clauses (ii)+(iii) of all three lanes are structurally unreachable - as written none can reach a PASS. Meanwhile clause (i) is saturated and passing: ECONBUY >=10k 0.8434 (n=2012), MANADV 0.9139 (n=861). Capture health is clean, so more capture cannot fix this.
+
+NEXT ACTION: registry decision on venue bridge vs bar restructure.
+
+WATCH: PISTOLCARRY1 clause (i) = 0.8031 vs its 0.80 bar, CI [0.772,0.831] straddles.
