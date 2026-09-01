@@ -91,3 +91,25 @@ Known asymmetry (relaxes the replay, if anything): the engine tails only the las
   history-less first crossing.
 - Winners are the first-observation GRID oracle; entries on series whose
   capture has no finished map are excluded (counted), never guessed.
+
+## Post-commit gap-check addendum (2026-08-31 ops review)
+
+- The commit message's "1088 candidates" appears nowhere in this doc, the
+  script, or the tests; the funnel above (3538 candidates → 44 placed,
+  arithmetic reconciling exactly) is the number of record.
+- "Engine-faithful" is scoped to band gate → drift gate → dedup ONLY. The
+  live engine additionally runs REENTRY1 (up to 2 lifetime placements per
+  dedup key — this replay allows exactly 1, so some of the 114
+  "gate-passed duplicates" could have been real second placements), the
+  second-side gate, capacity, and daily-loss gates. n=44 is therefore a
+  signal-eligibility replay, not a literal live-placement count.
+- Replay decision time is the mapentry row's own ts_ns (strict <); the live
+  engine reads whatever is on disk at its processing instant (~2s cycle), so
+  the replay can only UNDER-count evidence vs live — conservative direction,
+  opposite the documented 1MB-tail asymmetry.
+- The ungated contrast (n=3491) drops the BAND gate too, not just
+  drift+dedup — it is not a clean drift-only ablation; band composition
+  confounds it.
+- book_history keys postquote rows on `slug` only; the engine also accepts
+  `market_slug` as a defensive fallback (0/12,969 corpus rows currently need
+  it — latent divergence only).

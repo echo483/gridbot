@@ -29,8 +29,10 @@ scripts/ + systemd user units, no src/ changes, no secrets anywhere.
     one-liner (no secret bytes); re-alert at ≥15-min cadence while locked;
     exactly one `recovered` transition alert on unlock. State key:
     `/home/ops/gridbot/data/ops/keyring_watch_state.json` (gitignored dir).
-  - Cadence guard: skips alerting if health_check already sent a keyring alert
-    in the current cycle (dedup, no double-ping).
+  - Cadence guard (direction matters: it lives in health_check, NOT here):
+    keyring_watch never checks what health_check sent; health_check reads
+    keyring_watch's exit code and suppresses its OWN generic red summary in a
+    cycle where the watchdog already alerted (dedup, no double-ping).
 - Wired into `scripts/health_check.py` (runs after the unit self-heal block,
   before the summary alert; its transition alerts ride the existing Telegram
   path; a keyring alert suppresses the generic red summary in the same cycle

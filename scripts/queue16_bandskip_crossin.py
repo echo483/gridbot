@@ -22,7 +22,7 @@ DATA
 METHOD
 - Population: rows with numeric p_map strictly outside [0.50, 0.80], a
   market_slug, a us_side in {long, short}, and a valid t0 book top (own row's
-  bid/ask; both present, both in (0,1)).
+  bid/ask; both present, both in (0, 1] — the code's half-open check).
 - Dedup: many rows re-evaluate the same round (slate + per-hypothesis triggers
   + dedup_extra variants land within the same second). Keep the FIRST row per
   (series_id, map_number, round_number, slug, us_side).

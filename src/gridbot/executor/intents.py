@@ -208,8 +208,19 @@ def build_us_intent(row: dict, stake_cap_usd: float) -> OrderIntent | None:
     always rests (never matches) and never pays above what the registration
     allows. Integer contracts (venue rule); below one contract -> None.
 
-    Dedup is per (series, map, side, book): ONE entry per map book — later
-    qualifying rounds for the same book never average in.
+    Pure conversion only — qualifying is necessary but not sufficient for
+    placement. engine.Engine.handle still runs the band gate and the
+    drift-confirmation gate (>=3 same-side 120s-horizon postquote samples,
+    mean >= DRIFT_MIN_CONFIRM — H-MAPENTRY1-NOTE3's per-sample bar) before
+    this intent may place. Neither gate consumes the dedup key on failure,
+    so a drift-unconfirmed round retries: the next qualifying mapentry row
+    for the same book calls this function again against a fresh drift check.
+
+    Dedup is per (series, map, side, book) — the key is round-independent,
+    so at most ONE entry is ever placed per map book. The engine consumes
+    the key only on an actual placement/dry_run decision, never on a gate
+    skip: later qualifying rounds either retry the same pending book or,
+    once one has placed, are dropped without averaging in.
     """
     if row.get("type") != "mapentry" or not row.get("qualifies"):
         return None
