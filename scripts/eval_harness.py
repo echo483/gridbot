@@ -20,10 +20,9 @@ import time
 from pathlib import Path
 from statistics import median, quantiles
 
-# Task corpus format (tasks.jsonl):
-# {"kind": "programming", "prompt": "...", "ground_truth": "hash_or_path"}
-# {"kind": "review", "prompt": "...", "ground_truth": "hash_or_path"}
-# ...
+# Each tasks.jsonl row records a task kind (e.g. programming or review), a
+# prompt, and a ground_truth field holding the hash or path of the verified
+# answer for that task.
 
 # Candidate models per kind (expand as needed)
 CANDIDATES = {

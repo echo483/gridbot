@@ -90,6 +90,16 @@ GRIDBOT_LIVE=1 GRIDBOT_MAX_STAKE_USD=3 GRIDBOT_MAX_OPEN=2 \
 systemctl --user start gridbot-executor     # back to dry-run daemon
 ```
 
+### Operator tools (armed nights)
+
+Two read-only scripts keep eyes on the session without touching it:
+
+- `watch -n 5 uv run python scripts/watch_night.py` — live status panel
+  (placed orders, ledger, caps, gate state). Read-only.
+- `uv run python scripts/night_alerts.py` — Telegram alerter for placed /
+  likely-fill / cancel-failure rows. Silent on dry_run and clean band-gate
+  skips, so a quiet phone means nothing needed you.
+
 **Band gate (frozen 2026-08-26 pre-first-fire, H-MAPENTRY1-BANDGATE1):**
 armed placements only while 0.50 ≤ P_map ≤ 0.80. Out-of-band qualifying
 rows are ledgered as `skipped:band_gate` and never placed. **HARM

@@ -208,7 +208,7 @@ class TestCandidateP:
 
 
 # ============================================================
-# Oracle (is_valid_terminal + resolve_map_oracle)
+# Tests for the oracle helpers: is_valid_terminal and resolve_map_oracle.
 # ============================================================
 
 class TestIsValidTerminal:

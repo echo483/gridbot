@@ -1,0 +1,71 @@
+# Codebase map — what everything is, and what to fork
+
+One page for navigation and forkability. Four tiers: **WIRING** (the
+strategy-agnostic machine you'd fork for a new venue/strategy), **STRATEGY**
+(H-MAPENTRY1-era facets — replaceable per experiment), **EVIDENCE** (frozen
+analysis instruments; their outputs are cited by the registry and
+docs/analysis — read them, rerun them, never rewrite them), and **OPS**
+(keeping the machine alive). Orientation order stays: CLAUDE.md → STATE.md →
+registry → LIVE_FIRE.md; this file is the floor plan.
+
+## src/gridbot — the system (47 files)
+
+| package | tier | what it is |
+|---|---|---|
+| capture/ | WIRING | GRID poller + PM books/discovery + day-file supervisor. The corpus moat — never break continuity (rail 4). |
+| corpus/ | WIRING | day files → Supabase ingest + row builders. |
+| executor/ | WIRING+STRATEGY | engine.py (cycle loop, gates, dedup), intents.py (price/size + band + drift gates), pmus.py (wire), ledger/limits/fills/reconcile (accounting + caps + venue truth), us_mapping.py. The gate CONSTANTS and qualification rule are strategy; the order lifecycle is wiring. |
+| instruments/ | STRATEGY | detectors, mapentry recorder + verdicts, postquote sampler, shadow lanes. Each armable lane pairs with a frozen registry row. |
+| model/ | STRATEGY | roundwin training/dataset (LightGBM q). Frozen mapwin-race-v1 aggregation lives with the instruments. |
+| sizing/ | WIRING | kelly + params (quarter-Kelly caps). |
+| analysis/ | OPS | slow-loop Claude analyst (daily, managed) — LLM territory, never trade path (rail 1). |
+| config.py / redaction.py / ratelimit.py / graphql.py | WIRING | keyring-only secrets (5s-timeout reads + last-good cache), log redaction, GRID rate budget, GQL client. |
+
+## scripts/ (61 files) — by tier
+
+**WIRING (fork these with the system):** dispatch.py + _anthropic_lane.py
+(agent-team routing; bot-mode profile lanes), _jsonl.py (tolerant reads),
+grid_winners.py (map-winner oracle — the settlement truth for every
+instrument), replay_harness.py (real capture through the real Engine —
+the verification gauntlet's core), setup_secrets.py, grid_probe.py.
+
+**OPS (live units/crons point here):** health_check.py + keyring_watch.py
+(5-min watchdog), capture_qa.py (hermes cron), backup_raw.py, pmus_map_run.py,
+pmus_watch.py, eod_report.py, morning_report.py, settle_truth.py,
+check_no_secrets.py (pre-commit hook), setup_managed_agent.py.
+**Armed-night operator tools (manual):** watch_night.py (status panel),
+night_alerts.py (Telegram alerter), live_fire_test.py (first-fire plumbing
+check — LIVE_FIRE.md).
+
+**EVIDENCE (frozen instruments; chronological, each cited by a doc or
+registry row):** baseline_recompute → quant_eval → latency_report →
+timing_profile → pmap_calibration → fill_conditional_edge → priced_in_test →
+entry_quality → flow_features_study → postshock_lag → wave_detect +
+wave_edge_join → quote_backtest → mapentry2_score → queue16_bandskip_crossin +
+queue16_phase2_outcomes → roundwin2_poolb → crossin_backtest → pcal_fit →
+postshock_fade (WIP quarantine — see its banner). corpus_pull.py pulls
+training tables for model work. promote_model.py gates any retrain.
+intl_reference.py samples the intl venue read-only.
+
+**SCRATCH:** scripts/_tmp_* — gitignored by policy, on-disk only.
+
+## Everything else
+
+- **data/** (gitignored): the corpus. day-file JSONL per stream; executor
+  ledger; models; analysis outputs. The moat is here, not in git.
+- **deploy/**: systemd user units — what actually runs (STATE.md table).
+- **agents/**: dispatch-lane preambles + profiles/ SOUL snapshots (canonical
+  copies are hermes-side).
+- **docs/experiments/registry.jsonl**: the law. Frozen hypotheses/bars;
+  append-only; nothing trades without a row.
+- **docs/analysis/**: dated evidence reports. docs/learnings/: nightly ops
+  notes. docs/superpowers/specs/: design briefs.
+- **tests/** (740): hermetic — no network, no keyring, no live D-Bus.
+
+## Forking for a new strategy (the intended seam)
+
+Keep: capture/, corpus/, executor/ lifecycle, sizing/, config/redaction/
+ratelimit, dispatch tooling, replay_harness, the registry discipline.
+Replace: instruments/ (your detectors + recorder + verdict), model/, the
+gate constants in intents.py, and the registry contents. The iron rails
+(CLAUDE.md) travel with the fork.

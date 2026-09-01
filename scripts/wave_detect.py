@@ -191,8 +191,8 @@ def detect(
     n_waves = len(waves)
     wave_rate = (n_waves / n_sequences) if n_sequences else 0.0
 
-    bvm = [w["book_vs_model"] for w in waves if w["book_vs_model"] is not None]
-    median_bvm = median(bvm) if bvm else None
+    _bvm = [w["book_vs_model"] for w in waves if w["book_vs_model"] is not None]
+    _median_bvm = median(_bvm) if _bvm else None
 
     # stable ordering for reproducibility
     waves.sort(key=lambda w: (str(w["series_id"]), w["map_number"], str(w["us_side"]), w["ts_ns"]))

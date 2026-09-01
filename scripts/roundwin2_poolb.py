@@ -45,6 +45,7 @@ Run: uv run python scripts/roundwin2_poolb.py [--days 20260827,20260828] ...
 from __future__ import annotations
 
 import argparse
+import datetime
 import glob
 import json
 import math
@@ -56,6 +57,12 @@ from collections import defaultdict
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
+
+# Canonical docs/ report — written ONLY when the operator passes --write-doc
+# (default runs write to data/analysis/, gitignored). Env-overridable so the
+# test suite can pin it to tmp_path instead of the real repo tree.
+DOCS_REPORT_PATH = os.path.join(_PROJECT_ROOT, "docs", "analysis",
+                                "2026-08-31-roundwin2-poolb.md")
 
 from gridbot.executor.intents import (
     DRIFT_MIN_CONFIRM,
@@ -846,8 +853,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--winners", default="",
                     help="grid_winners --out JSON (default: derive from data/grid)")
     ap.add_argument("--out-doc",
-                    default=os.path.join(_PROJECT_ROOT, "docs", "analysis",
-                                         "2026-08-31-roundwin2-poolb.md"))
+                    default=os.path.join(_PROJECT_ROOT, "data", "analysis",
+                                         "roundwin2-poolb-%s.md"
+                                         % datetime.datetime.now(
+                                             datetime.UTC).strftime(
+                                             "%Y%m%dT%H%M%SZ")),
+                    help="markdown report path (default: timestamped file "
+                         "under data/analysis/, which is gitignored)")
+    ap.add_argument("--write-doc", action="store_true",
+                    help="write the report to the canonical docs/ path "
+                         "(docs/analysis/2026-08-31-roundwin2-poolb.md); "
+                         "default runs never touch docs/")
     ap.add_argument("--bootstrap", type=_nonneg_int, default=BOOTSTRAP_B)
     ap.add_argument("--no-reconcile", action="store_true",
                     help="skip the live-ledger reconciliation section "
@@ -866,7 +882,6 @@ def main(argv: list[str] | None = None) -> int:
     me_rows, me_bad = load_jsonl(day_files("mapentry", days))
     pq_rows, pq_bad = load_jsonl(day_files("postquote", days))
 
-    import datetime
     # Record-only gates (NO dedup here): slate exclusion, F1, book/price.
     candidates, counters = select_poolb_entries(me_rows)
     hist = book_history(pq_rows)
@@ -921,8 +936,15 @@ def main(argv: list[str] | None = None) -> int:
         doc["reconciliation"] = reconcile(rdays)
 
     report = build_report(doc)
-    if args.out_doc:
-        write_doc_atomic(args.out_doc, report)
+    out_path = args.out_doc
+    if args.write_doc:
+        # Explicit operator opt-in: overwrite the canonical docs/ report
+        # (exact current path/content behavior). GRIDBOT_POOLEB_DOCS_REPORT
+        # is a test-only override of that path.
+        out_path = os.environ.get("GRIDBOT_POOLEB_DOCS_REPORT",
+                                  DOCS_REPORT_PATH)
+    if out_path:
+        write_doc_atomic(out_path, report)
 
     print(json.dumps(doc, indent=2, sort_keys=True))
     g = doc["gated"]["metrics"]

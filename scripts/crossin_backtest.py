@@ -61,6 +61,7 @@ import collections
 import datetime
 import glob
 import json
+import math
 import random
 import statistics
 import subprocess
@@ -92,7 +93,7 @@ def _finite(v) -> float | None:
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
     f = float(v)
-    return f if f == f and f not in (float("inf"), float("-inf")) else None
+    return f if math.isfinite(f) else None
 
 
 def book_top(row: dict) -> tuple[float, float] | None:
@@ -127,24 +128,12 @@ def in_band(p: float) -> bool:
     return BAND_LO <= p <= BAND_HI
 
 
-def load_population(
-    pattern: str | None = None,
-) -> tuple[list[dict], dict[str, list[tuple[int, float, float]]], dict]:
-    """(deduped skip rows, per-slug quote timeline, counters).
+def _iter_mapentry_rows(pattern: str, c: collections.Counter):
+    """Yield (row, slug, us_side, ts_ns, book_top) per usable mapentry row.
 
-    Skip rows carry series_id, map_number, round_number, slug, us_side,
-    p_map, team, opponent, t0 (ts_ns of the first evaluation).  The timeline
-    is keyed by market_slug and holds every mapentry row's valid long-side
-    book top — identical to phase-2's timeline construction (slate rows
-    included: they are quotes of the same venue book).
+    A torn (unparseable) line is skipped; a row without slug/side/ts is
+    counted and dropped.  book_top is None when the row's book is dead.
     """
-    pattern = pattern or str(DATA / "shadow" / "mapentry-*.jsonl")
-    skips: dict[tuple, dict] = {}
-    timeline: dict[str, list[tuple[int, float, float]]] = collections.defaultdict(list)
-    c = collections.Counter({
-        "mapentry_rows": 0, "no_slug_or_side": 0, "p_map_missing_or_in_band": 0,
-        "dead_book_at_eval": 0, "slate_rows_excluded": 0, "skip_events_raw": 0,
-    })
     for path in sorted(glob.glob(pattern)):
         with open(path, encoding="utf-8") as fh:
             for line in fh:
@@ -161,44 +150,70 @@ def load_population(
                 if not slug or us_side not in ("long", "short") or not ts:
                     c["no_slug_or_side"] += 1
                     continue
-                # timeline: every quote-bearing row for the slug (any round,
-                # any provenance), phase-2 construction
-                top = book_top(r)
-                if top is not None:
-                    timeline[str(slug)].append((int(ts), top[0], top[1]))
-                if r.get("hypothesis_id") != "H-MAPENTRY1":
-                    continue
-                if str(r.get("src_hypothesis_id") or "") == SLATE_SRC:
-                    c["slate_rows_excluded"] += 1
-                    continue
-                p = _finite(r.get("p_map"))
-                if p is None or in_band(p):
-                    c["p_map_missing_or_in_band"] += 1
-                    continue
-                if top is None:
-                    # own-row book dead at evaluation time
-                    c["dead_book_at_eval"] += 1
-                    continue
-                c["skip_events_raw"] += 1
-                key = (str(r.get("series_id")), r.get("map_number"),
-                       r.get("round_number"), str(slug), us_side)
-                row = {
-                    "key": key,
-                    "series_id": str(r.get("series_id")),
-                    "map_number": r.get("map_number"),
-                    "round_number": r.get("round_number"),
-                    "team": r.get("team"),
-                    "opponent": r.get("opponent"),
-                    "slug": str(slug),
-                    "us_side": us_side,
-                    "p_map": p,
-                    "t0": int(ts),
-                }
-                prev = skips.get(key)
-                if prev is None or ts < prev["t0"]:
-                    skips[key] = row
+                yield r, str(slug), us_side, ts, book_top(r)
+
+
+def scan_shadow(
+    pattern: str | None, exclude_slate: bool, c: collections.Counter
+) -> tuple[dict[tuple, dict], dict[str, list[tuple[int, float, float]]]]:
+    """(skip events keyed by evaluation key, per-slug quote timeline).
+
+    The timeline holds every quote-bearing row for the slug (any round, any
+    provenance — slate rows are quotes of the same venue book), phase-2's
+    construction.  Skip rows are band-skipped H-MAPENTRY1 evaluations with an
+    alive own-row book, deduped to the first evaluation per key, and carry
+    series_id, map_number, round_number, slug, us_side, p_map, team,
+    opponent, t0 (ts_ns of that first evaluation).
+    """
+    pattern = pattern or str(DATA / "shadow" / "mapentry-*.jsonl")
+    skips: dict[tuple, dict] = {}
+    timeline: dict[str, list[tuple[int, float, float]]] = collections.defaultdict(list)
+    for r, slug, us_side, ts, top in _iter_mapentry_rows(pattern, c):
+        if top is not None:
+            timeline[slug].append((int(ts), top[0], top[1]))
+        if r.get("hypothesis_id") != "H-MAPENTRY1":
+            continue
+        if exclude_slate and str(r.get("src_hypothesis_id") or "") == SLATE_SRC:
+            c["slate_rows_excluded"] += 1
+            continue
+        p = _finite(r.get("p_map"))
+        if p is None or in_band(p):
+            c["p_map_missing_or_in_band"] += 1
+            continue
+        if top is None:
+            c["dead_book_at_eval"] += 1  # own-row book dead at evaluation time
+            continue
+        c["skip_events_raw"] += 1
+        sid = str(r.get("series_id"))
+        key = (sid, r.get("map_number"), r.get("round_number"), slug, us_side)
+        prev = skips.get(key)
+        if prev is None or ts < prev["t0"]:
+            skips[key] = {
+                "key": key,
+                "series_id": sid,
+                "map_number": r.get("map_number"),
+                "round_number": r.get("round_number"),
+                "team": r.get("team"),
+                "opponent": r.get("opponent"),
+                "slug": slug,
+                "us_side": us_side,
+                "p_map": p,
+                "t0": int(ts),
+            }
     for rows in timeline.values():
         rows.sort()
+    return skips, timeline
+
+
+def load_population(
+    pattern: str | None = None,
+) -> tuple[list[dict], dict[str, list[tuple[int, float, float]]], dict]:
+    """(deduped skip rows ordered by t0, per-slug quote timeline, counters)."""
+    c = collections.Counter({
+        "mapentry_rows": 0, "no_slug_or_side": 0, "p_map_missing_or_in_band": 0,
+        "dead_book_at_eval": 0, "slate_rows_excluded": 0, "skip_events_raw": 0,
+    })
+    skips, timeline = scan_shadow(pattern, True, c)
     return sorted(skips.values(), key=lambda r: r["t0"]), dict(timeline), dict(c)
 
 
@@ -225,7 +240,7 @@ def find_first_crossing(
     lo, hi = t0 + 1, int(t0 + CROSS_WINDOW_S * NS)
     if terminal_ns is not None:
         hi = min(hi, terminal_ns - 1)
-    cross_i = None
+    cross = None
     for i, (ts, bid, ask) in enumerate(tl):
         if ts < lo:
             continue
@@ -233,27 +248,22 @@ def find_first_crossing(
             break
         px = exec_price(us_side, bid, ask)
         if px is not None and in_band(px):
-            cross_i = i
+            cross = (i, ts, px)
             break
-    if cross_i is None:
+    if cross is None:
         return None
-    cts, cbid, cask = tl[cross_i]
-    entry = exec_price(us_side, cbid, cask)
-    if entry is None:  # unreachable given the crossing predicate; fail closed
-        return None
+    cross_i, cts, entry = cross
     # persistence: the NEXT quote row within PERSIST_WINDOW after the crossing
     p_lo, p_hi = cts + 1, int(cts + PERSIST_WINDOW_S * NS)
     if terminal_ns is not None:
         p_hi = min(p_hi, terminal_ns - 1)
-    confirm_ts = confirm_px = None
     for ts, bid, ask in tl[cross_i + 1:]:
         if ts < p_lo:
             continue
         if ts > p_hi:
             break
-        confirm_ts, confirm_px = ts, exec_price(us_side, bid, ask)
-        break
-    return cts, entry, confirm_ts, confirm_px
+        return cts, entry, ts, exec_price(us_side, bid, ask)
+    return cts, entry, None, None
 
 
 def simulate_entries(
@@ -338,7 +348,10 @@ def split_holdout(
     design, holdout = [], []
     for r in rows:
         fm = first_mapped.get(r["series_id"])
-        (holdout if (fm is not None and fm >= HOLDOUT_CUTOFF_NS) else design).append(r)
+        if fm is not None and fm >= HOLDOUT_CUTOFF_NS:
+            holdout.append(r)
+        else:
+            design.append(r)
     return design, holdout
 
 
@@ -424,21 +437,21 @@ def day_of(ts_ns: int) -> str:
 
 def summarize(entries: list[dict]) -> dict:
     resolved = [e for e in entries if e["won"] is not None]
-    won = [e for e in resolved if e["won"]]
+    n_won = sum(1 for e in resolved if e["won"])
     by_series = edge_rows(entries)
-    mean_edge = (
-        sum(x for v in by_series.values() for x in v) /
-        sum(len(v) for v in by_series.values())
-    ) if by_series else None
+    edges = [edge for series_edges in by_series.values() for edge in series_edges]
+    by_day: dict[str, list[dict]] = collections.defaultdict(list)
+    for e in entries:
+        by_day[day_of(e["cross_ts"])].append(e)
     return {
         "n_entries": len(entries),
         "n_series": len({e["series_id"] for e in entries}),
         "n_resolved": len(resolved),
-        "n_won": len(won),
-        "n_lost": len(resolved) - len(won),
+        "n_won": n_won,
+        "n_lost": len(resolved) - n_won,
         "n_unresolved": len(entries) - len(resolved),
-        "win_rate": (len(won) / len(resolved)) if resolved else None,
-        "mean_settled_edge": mean_edge,
+        "win_rate": (n_won / len(resolved)) if resolved else None,
+        "mean_settled_edge": (sum(edges) / len(edges)) if edges else None,
         "edge_ci": bootstrap_ci(by_series),
         "median_entry_price": (
             statistics.median(e["entry_price"] for e in entries)
@@ -451,10 +464,7 @@ def summarize(entries: list[dict]) -> dict:
                 "won": sum(1 for e in ds if e["won"] is True),
                 "lost": sum(1 for e in ds if e["won"] is False),
             }
-            for day, ds in sorted(collections.defaultdict(
-                list, {d: [e for e in entries if day_of(e["cross_ts"]) == d]
-                       for d in {day_of(e["cross_ts"]) for e in entries}}
-            ).items())
+            for day, ds in sorted(by_day.items())
         },
     }
 
@@ -463,51 +473,14 @@ def summarize(entries: list[dict]) -> dict:
 # phase-2 crosser delta (slate-exclusion finding)
 
 
-def phase2_crossers(
-    exclude_slate: bool, pattern: str | None = None
-) -> int:
+def phase2_crossers(exclude_slate: bool, pattern: str | None = None) -> int:
     """Count phase-2 crossers (+120s nearest-quote MID inside band) with or
     without the slate exclusion — the exclusion's delta on the phase-2
     crosser set is itself a finding, reported verbatim."""
     sys.path.insert(0, str(ROOT / "scripts"))
     from queue16_bandskip_crossin import our_side_quote
 
-    pattern = pattern or str(DATA / "shadow" / "mapentry-*.jsonl")
-    skips: dict[tuple, dict] = {}
-    timeline: dict[str, list[tuple[int, float, float]]] = collections.defaultdict(list)
-    for path in sorted(glob.glob(pattern)):
-        with open(path, encoding="utf-8") as fh:
-            for line in fh:
-                try:
-                    r = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(r, dict) or r.get("type") != "mapentry":
-                    continue
-                slug = r.get("market_slug")
-                us_side = r.get("us_side")
-                ts = r.get("ts_ns")
-                if not slug or us_side not in ("long", "short") or not ts:
-                    continue
-                top = book_top(r)
-                if top is not None:
-                    timeline[str(slug)].append((int(ts), top[0], top[1]))
-                if r.get("hypothesis_id") != "H-MAPENTRY1":
-                    continue
-                if exclude_slate and str(
-                        r.get("src_hypothesis_id") or "") == SLATE_SRC:
-                    continue
-                p = _finite(r.get("p_map"))
-                if p is None or in_band(p) or top is None:
-                    continue
-                key = (str(r.get("series_id")), r.get("map_number"),
-                       r.get("round_number"), str(slug), us_side)
-                prev = skips.get(key)
-                if prev is None or ts < prev["t0"]:
-                    skips[key] = {"slug": str(slug), "us_side": us_side,
-                                  "t0": int(ts)}
-    for rows in timeline.values():
-        rows.sort()
+    skips, timeline = scan_shadow(pattern, exclude_slate, collections.Counter())
     n = 0
     for r in skips.values():
         lo, hi = r["t0"] + int(105 * NS), r["t0"] + int(150 * NS)
@@ -580,8 +553,7 @@ def run(mode: str = "design") -> dict:
         "n_skips_pool": len(pool),
         "n_skips_design": len(design_skips),
         "n_skips_holdout": len(holdout_skips),
-        "n_series_holdout": len({
-            r["series_id"] for r in holdout_skips}),
+        "n_series_holdout": len({r["series_id"] for r in holdout_skips}),
         "arms": arms,
         "n_map_winners": len(winners),
     }

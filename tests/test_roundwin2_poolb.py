@@ -571,13 +571,16 @@ def _write_inputs(tmp_path):
     return str(me), str(pq), str(winners)
 
 
-def _run_cli(tmp_path, *extra):
+def _run_cli(tmp_path, *extra, _env_extra=None):
+    env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(_project_root)}
+    if _env_extra:
+        env.update(_env_extra)
     return subprocess.run(
         [sys.executable, "-X", "utf8",
          str(_project_root / "scripts" / "roundwin2_poolb.py"),
          "--no-reconcile", *extra],
         capture_output=True, text=True, timeout=120,
-        env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(_project_root)},
+        env=env,
         cwd=str(tmp_path),
     )
 
@@ -614,6 +617,55 @@ def test_cli_end_to_end_stdout_stderr_and_doc(tmp_path):
     assert "F1 leak filtered" in text and "Describe-only" in text
     assert "slate rows excluded" in text
     assert not list(tmp_path.glob("*.tmp.*"))
+
+def test_cli_default_doc_path_never_touches_docs(tmp_path):
+    """Default run writes the markdown report under data/analysis/ only —
+    the canonical docs/ report is never clobbered without --write-doc."""
+    me, pq, winners = _write_inputs(tmp_path)
+    proc = _run_cli(tmp_path, "--winners", winners, "--bootstrap", "10",
+                    "--days", f"{me},{pq}")
+    assert proc.returncode == 0, proc.stderr
+    # The stderr summary reports the data/-side doc path, not the docs/ one.
+    err = [ln for ln in proc.stderr.splitlines() if ln.strip()]
+    assert len(err) == 1
+    doc_path = err[0].rsplit("doc=", 1)[1].strip()
+    assert "data/analysis/roundwin2-poolb-" in doc_path
+    assert "docs" not in doc_path
+    # ...and the canonical docs/ report was not written.
+    assert not (_project_root / "docs" / "analysis" /
+                "2026-08-31-roundwin2-poolb.md.tmp").exists()
+
+def test_cli_write_doc_flag_targets_docs_path(tmp_path, monkeypatch):
+    """--write-doc pins the output to the canonical docs/ report path (the
+    env override pins that path into tmp_path so the real repo doc is not
+    clobbered by the test run)."""
+    me, pq, winners = _write_inputs(tmp_path)
+    docs_report = tmp_path / "docs" / "analysis" / \
+        "2026-08-31-roundwin2-poolb.md"
+    monkeypatch.setenv("GRIDBOT_POOLEB_DOCS_REPORT", str(docs_report))
+    proc = _run_cli(tmp_path, "--winners", winners, "--bootstrap", "10",
+                    "--days", f"{me},{pq}", "--write-doc",
+                    _env_extra={"GRIDBOT_POOLEB_DOCS_REPORT": str(docs_report)})
+    assert proc.returncode == 0, proc.stderr
+    # The docs/ report WAS written, byte-identical to the default data/ run.
+    assert docs_report.exists()
+    text = docs_report.read_text(encoding="utf-8")
+    assert "Pool B" in text and "Headline metrics" in text
+    assert not list(docs_report.parent.glob("*.tmp.*"))
+
+    # Default (no --write-doc) run: docs/ stays untouched after the earlier
+    # --write-doc write was removed; the report goes to data/analysis/.
+    docs_report.unlink()
+    proc = _run_cli(tmp_path, "--winners", winners, "--bootstrap", "10",
+                    "--days", f"{me},{pq}")
+    assert proc.returncode == 0, proc.stderr
+    assert not docs_report.exists()
+    # Path is announced on stderr and points into data/analysis/, not docs/.
+    err = [ln for ln in proc.stderr.splitlines() if ln.strip()]
+    assert len(err) == 1
+    doc_path = err[0].rsplit("doc=", 1)[1].strip()
+    assert "data/analysis/roundwin2-poolb-" in doc_path
+    assert not doc_path.startswith(str(_project_root / "docs"))
 
 def test_cli_days_filter_selects_files(tmp_path):
     me, pq, winners = _write_inputs(tmp_path)
@@ -657,7 +709,7 @@ def test_postquote_overflow_move_is_not_evidence(tmp_path):
         r = json.loads(line)
         if r.get("type") == "postquote":
             if slug is None:
-                slug, side, move, ts = r["slug"], r["us_side"], r["oriented_move"], r["ts_ns"]
+                slug, side, _, ts = r["slug"], r["us_side"], r["oriented_move"], r["ts_ns"]
             if r["slug"] == slug and r["us_side"] == side:
                 pre_count += 1
     if slug is None:

@@ -3,7 +3,8 @@
 Experiment factory trading esports prediction markets (Polymarket) on GRID Open Access
 data. Read `docs/superpowers/specs/2026-08-24-gridbot-design.md` before changing anything.
 **Fresh session? `docs/STATE.md` is the orientation baseline** (what's proven, what runs,
-signal path, gotchas, open queue); `docs/LIVE_FIRE.md` has the arming runbook.
+signal path, gotchas, open queue); `docs/LIVE_FIRE.md` has the arming runbook;
+`docs/MAP.md` is the codebase floor plan (wiring vs strategy vs evidence vs ops).
 
 ## Iron rails (merge-blocking)
 

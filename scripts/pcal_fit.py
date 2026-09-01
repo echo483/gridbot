@@ -128,6 +128,17 @@ def first_mapping_ts():
 # Observation construction (first eval per series,map,round, resolved only)
 
 
+def _realized_y(winner_row, team):
+    """1/0 when `team` is the map's winner/loser, else None (unresolved).
+
+    A presentation team matching neither side is never guessed."""
+    if winner_row.get("winner") == team:
+        return 1
+    if winner_row.get("loser") == team:
+        return 0
+    return None
+
+
 def build_observations(rows, winners):
     """Reduce eval rows to resolved first-evaluations.
 
@@ -139,7 +150,7 @@ def build_observations(rows, winners):
       n_unresolved: count of numeric-p_map rows excluded as unresolved or
            unmapped (also counted separately).
     """
-    resolved = []
+    first = {}
     n_unresolved = 0
     for r in rows:
         p = _num(r.get("p_map"))
@@ -152,35 +163,21 @@ def build_observations(rows, winners):
             # Cannot order for dedup — skip as an observation.
             continue
         w = winners.get(f"{sid}:{mn}")
-        if not w:
-            if isinstance(p, float):
-                n_unresolved += 1
+        y = _realized_y(w, r.get("team")) if w else None
+        if y is None:  # unmapped map, or team matching neither side
+            n_unresolved += 1
             continue
-        team = r.get("team")
-        if w.get("winner") == team:
-            y = 1
-        elif w.get("loser") == team:
-            y = 0
-        else:
-            # Presentation team matches neither winner nor loser -> unresolved.
-            if isinstance(p, float):
-                n_unresolved += 1
-            continue
-        resolved.append({
-            "series_id": sid,
-            "map_number": mn,
-            "round_number": r.get("round_number"),
-            "ts_ns": ts,
-            "p_map": p,
-            "y": y,
-        })
-
-    first = {}
-    for o in resolved:
-        key = (o["series_id"], o["map_number"], o["round_number"])
+        key = (sid, mn, r.get("round_number"))
         cur = first.get(key)
-        if cur is None or o["ts_ns"] < cur["ts_ns"]:
-            first[key] = o
+        if cur is None or ts < cur["ts_ns"]:
+            first[key] = {
+                "series_id": sid,
+                "map_number": mn,
+                "round_number": r.get("round_number"),
+                "ts_ns": ts,
+                "p_map": p,
+                "y": y,
+            }
     return list(first.values()), n_unresolved
 
 
@@ -283,6 +280,15 @@ def _mean(xs):
     return sum(xs) / len(xs) if xs else None
 
 
+def _band_gap(pairs):
+    """Armed-band gap over (forecast, y) pairs: mean forecast - realized win
+    rate on rows whose forecast is inside the traded band; None if empty."""
+    band = [(f, y) for f, y in pairs if ARMED_LO <= f <= ARMED_HI]
+    if not band:
+        return None
+    return _mean([f for f, _ in band]) - _mean([y for _, y in band])
+
+
 def metrics(fs, ys):
     """Brier, quintile ECE, armed-band gap, decile table for forecast/real."""
     n = len(fs)
@@ -300,19 +306,20 @@ def metrics(fs, ys):
         byy = _mean([c[1] for c in chunk])
         ece += (len(chunk) / n) * abs(bf - byy)
 
-    # Armed-band gap: mean forecast - realized win rate over banded rows.
-    band = [(f, y) for f, y in zip(fs, ys) if ARMED_LO <= f <= ARMED_HI]
-    gap = (_mean([c[0] for c in band]) - _mean([c[1] for c in band])) if band else None
+    gap = _band_gap(zip(fs, ys))
 
     # Decile reliability table: 10 equal-width forecast bins.
     dec = []
     for b in range(10):
         lo, hi = b / 10.0, (b + 1) / 10.0
-        cells = [(f, y) for f, y in zip(fs, ys) if lo <= f < hi]
         if b == 9:  # top bin includes the 1.0 boundary
-            cells = [(f, y) for f, y in zip(fs, ys) if 0.9 <= f <= 1.0]
+            label = "[0.9,1.0]"
+            cells = [(f, y) for f, y in zip(fs, ys) if lo <= f <= 1.0]
+        else:
+            label = f"[{lo:.1f},{hi:.1f})"
+            cells = [(f, y) for f, y in zip(fs, ys) if lo <= f < hi]
         dec.append({
-            "bin": f"[{lo:.1f},{hi:.1f})" if b < 9 else "[0.9,1.0]",
+            "bin": label,
             "n": len(cells),
             "mean_f": _mean([c[0] for c in cells]),
             "mean_y": _mean([c[1] for c in cells]),
@@ -347,10 +354,9 @@ def series_clustered_bootstrap(obs, compute, reps=BOOT_REPS, seed=BOOT_SEED):
     stats.sort()
     if not stats:
         return None, None
-    idx_lo = round(reps * 0.025)
-    idx_hi = round(reps * 0.975) - 1
-    idx_lo = max(0, min(idx_lo, len(stats) - 1))
-    idx_hi = max(0, min(idx_hi, len(stats) - 1))
+    last = len(stats) - 1
+    idx_lo = max(0, min(round(reps * 0.025), last))
+    idx_hi = max(0, min(round(reps * 0.975) - 1, last))
     return stats[idx_lo], stats[idx_hi]
 
 
@@ -362,8 +368,6 @@ def score_obs(obs, g):
     """Evaluate raw p_map vs p_cal on resolved observations.
 
     Returns a report dict; when g is None, scores raw p_map only."""
-    fs_raw = [o["p_map"] for o in obs]
-    ys = [o["y"] for o in obs]
 
     def _brier_diff(sample):
         d = 0.0
@@ -373,37 +377,31 @@ def score_obs(obs, g):
         return d / len(sample)
 
     def _raw_gap(sample):
-        band = [o for o in sample if ARMED_LO <= o["p_map"] <= ARMED_HI]
-        if not band:
-            return None
-        return _mean([o["p_map"] for o in band]) - _mean([o["y"] for o in band])
+        return _band_gap((o["p_map"], o["y"]) for o in sample)
 
     def _cal_gap(sample):
-        band = [o for o in sample if ARMED_LO <= _num(g(o["p_map"])) <= ARMED_HI]
-        if not band:
-            return None
-        return _mean([_num(g(o["p_map"])) for o in band]) - _mean([o["y"] for o in band])
-
-    raw = metrics(fs_raw, ys)
-    cal = None
-    if g is not None:
-        fs_cal = [_num(g(f)) for f in fs_raw]
-        cal = metrics(fs_cal, ys)
+        return _band_gap((_num(g(o["p_map"])), o["y"]) for o in sample)
 
     report = {"n_obs": len(obs),
               "n_series": len({o["series_id"] for o in obs})}
+    if len(obs) < HOLDOUT_MIN_OBS:
+        return report
 
-    if len(obs) >= HOLDOUT_MIN_OBS:
-        report["raw"] = raw
-        if cal is not None:
-            report["cal"] = cal
-        report["brier_diff_cal_minus_raw"] = (
-            (cal["brier"] - raw["brier"]) if (raw["brier"] is not None
-                                              and cal["brier"] is not None) else None)
-        report["brier_diff_ci95"] = series_clustered_bootstrap(obs, _brier_diff)
-        report["raw_armed_gap_ci95"] = series_clustered_bootstrap(obs, _raw_gap)
-        if cal is not None:
-            report["cal_armed_gap_ci95"] = series_clustered_bootstrap(obs, _cal_gap)
+    fs_raw = [o["p_map"] for o in obs]
+    ys = [o["y"] for o in obs]
+    raw = metrics(fs_raw, ys)
+    cal = metrics([_num(g(f)) for f in fs_raw], ys) if g is not None else None
+
+    report["raw"] = raw
+    if cal is not None:
+        report["cal"] = cal
+    report["brier_diff_cal_minus_raw"] = (
+        (cal["brier"] - raw["brier"]) if (raw["brier"] is not None
+                                          and cal["brier"] is not None) else None)
+    report["brier_diff_ci95"] = series_clustered_bootstrap(obs, _brier_diff)
+    report["raw_armed_gap_ci95"] = series_clustered_bootstrap(obs, _raw_gap)
+    if cal is not None:
+        report["cal_armed_gap_ci95"] = series_clustered_bootstrap(obs, _cal_gap)
     return report
 
 
@@ -423,20 +421,20 @@ def artifact_sha256(path):
 # CLI
 
 
-def cmd_fit(args):
-    rows = load_jsonl(SHADOW_GLOB)
-    winners = read_oracle()
-    obs, n_unresolved = build_observations(rows, winners)
-    mapping_ts = first_mapping_ts()
-    pre, _hold, _absent = classify_holdout({o["series_id"] for o in obs}, mapping_ts)
+def load_populations():
+    """Shared fit/eval load: (obs, n_unresolved) plus the BOOKPIN1 split."""
+    obs, n_unresolved = build_observations(load_jsonl(SHADOW_GLOB), read_oracle())
+    pre, hold, absent = classify_holdout({o["series_id"] for o in obs}, first_mapping_ts())
+    return obs, n_unresolved, pre, hold, absent
 
+
+def cmd_fit(args):
+    obs, n_unresolved, pre, _hold, _absent = load_populations()
     fit_obs = [o for o in obs if o["series_id"] in pre]
 
     # --- sanity anchors (STOP-grade) ---
     n = len(fit_obs)
-    band = [o for o in fit_obs if ARMED_LO <= o["p_map"] <= ARMED_HI]
-    gap = (_mean([o["p_map"] for o in band]) - _mean([o["y"] for o in band])
-           if band else None)
+    gap = _band_gap((o["p_map"], o["y"]) for o in fit_obs)
     print(f"[fit] pre-holdout resolved obs={n}, resolved-maps({n_unresolved} "
           f"unresolved skipped), buy-band raw gap={gap}")
     if n < ANCHOR_MIN_OBS or gap is None or not (ANCHOR_GAP_LO <= gap <= ANCHOR_GAP_HI):
@@ -472,15 +470,8 @@ def cmd_eval(args):
         art = json.load(fh)
     g = make_g(art["breakpoints_x"], art["breakpoints_y"])
 
-    rows = load_jsonl(SHADOW_GLOB)
-    winners = read_oracle()
-    obs, n_unresolved = build_observations(rows, winners)
-    mapping_ts = first_mapping_ts()
-    pre, hold, absent = classify_holdout({o["series_id"] for o in obs}, mapping_ts)
-
-    pop_key = hold if holdout_mode else pre
-    pop = [o for o in obs if o["series_id"] in pop_key]
-    absent_series = len(absent)
+    obs, n_unresolved, pre, hold, absent = load_populations()
+    pop = [o for o in obs if o["series_id"] in (hold if holdout_mode else pre)]
 
     report = {
         "mode": args.population,
@@ -490,7 +481,7 @@ def cmd_eval(args):
         "train_cutoff_ns": HOLDOUT_CUTOFF_NS,
         "n_series": len({o["series_id"] for o in pop}),
         "n_unresolved_skipped": n_unresolved,
-        "absent_from_mappings_series": absent_series,
+        "absent_from_mappings_series": len(absent),
     }
 
     if holdout_mode and len(pop) < HOLDOUT_MIN_OBS:
