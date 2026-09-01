@@ -14,7 +14,6 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-
 from typing import Any
 
 import pytest
@@ -26,7 +25,6 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 from scripts import quote_backtest as qb
-
 
 TTL_NS = 150_000_000_000
 

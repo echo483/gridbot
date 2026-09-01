@@ -22,13 +22,12 @@ _project_root = Path(__file__).resolve().parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
-from scripts.postshock_lag import (  # noqa: E402
+from scripts.postshock_lag import (
     NS_PER_S,
     SOURCE_FILE_TAG,
     detect,
     load_data,
 )
-
 
 S = NS_PER_S
 

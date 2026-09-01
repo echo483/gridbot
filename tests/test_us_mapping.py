@@ -165,8 +165,9 @@ class TestLiveWindowTeamNames:
         assert names == ("Alpha", "Bravo")
 
     def test_dedup_and_test_series_excluded(self) -> None:
-        from gridbot.executor.us_mapping import live_window_team_names
         import datetime as dt
+
+        from gridbot.executor.us_mapping import live_window_team_names
 
         now = 2_000_000.0
         iso = dt.datetime.fromtimestamp(now, dt.UTC).isoformat()

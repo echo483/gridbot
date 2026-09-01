@@ -19,7 +19,6 @@ import json
 import time
 from pathlib import Path
 from statistics import median, quantiles
-from typing import Dict, List, Tuple
 
 # Task corpus format (tasks.jsonl):
 # {"kind": "programming", "prompt": "...", "ground_truth": "hash_or_path"}
@@ -63,7 +62,7 @@ LATENCY_WEIGHT = 0.0  # 0.0 = async (don't care); >0 = real-time sensitive
 COST_WEIGHT = 1.0
 
 
-def load_tasks(kind: str) -> List[Dict]:
+def load_tasks(kind: str) -> list[dict]:
     """Load tasks of given kind from tasks.jsonl."""
     tasks = []
     with open("tasks.jsonl") as f:
@@ -74,7 +73,7 @@ def load_tasks(kind: str) -> List[Dict]:
     return tasks
 
 
-def run_task(task: Dict, model: str) -> Tuple[bool, float, float]:
+def run_task(task: dict, model: str) -> tuple[bool, float, float]:
     """
     Run task through model; return (correctness, cost, latency).
     TODO: Implement actual dispatch + verification.
@@ -118,7 +117,7 @@ def evaluate_kind(kind: str, n_holdout: int = 2):
     print(f"Tasks: {len(train_tasks)} train, {len(holdout_tasks)} holdout")
     print(f"{'='*60}\n")
 
-    results: Dict[str, List[float]] = {model: [] for model in CANDIDATES[kind]}
+    results: dict[str, list[float]] = {model: [] for model in CANDIDATES[kind]}
 
     # Train phase
     for task in train_tasks:
@@ -150,8 +149,11 @@ def evaluate_kind(kind: str, n_holdout: int = 2):
         rankings.append((med, iqr, model))
         print(f"{model:30s} median={med:.3f} ±{iqr:.3f} (n={len(scores)})")
 
-    rankings.sort(reverse=True)
-    print(f"\nRecommended default for '{kind}': {rankings[0][2]}")
+    if rankings:
+        rankings.sort(reverse=True)
+        print(f"\nRecommended default for '{kind}': {rankings[0][2]}")
+    else:
+        print(f"\nNo results for '{kind}'")
 
     # Holdout validation (if any)
     if holdout_tasks:
@@ -187,7 +189,7 @@ def main():
         return
 
     if args.all_kinds:
-        for kind in CANDIDATES.keys():
+        for kind in CANDIDATES:
             evaluate_kind(kind, n_holdout=args.holdout)
     elif args.task_kind:
         if args.task_kind not in CANDIDATES:

@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-import pmap_calibration as pc  # noqa: E402
+import pmap_calibration as pc
 
 WINNERS = {"S1:1": {"series_id": "S1", "map_number": 1,
                     "winner": "HAVU", "loser": "Saint Sinners"}}

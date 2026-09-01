@@ -16,8 +16,8 @@ from gridbot.instruments.mapentry import (
     map_win_prob,
     market_for_instance,
     p_future,
-    parse_book,
     parse_bbo,
+    parse_book,
     race_win_prob,
     round_probability,
     side_ask,
@@ -291,7 +291,7 @@ class TestSlateCoverage:
                 return (0.30, 0.40)
 
             def book(self, slug: str):
-                raise TimeoutError("simulated gateway hang")  # noqa: TRY301
+                raise TimeoutError("simulated gateway hang")
 
         rec = Recorder(books=FakeBooks(), out_dir=tmp_path)
         rec.slate = SimpleNamespace(predict=lambda _f: 0.9)  # strong q -> high p_map

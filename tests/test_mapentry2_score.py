@@ -21,7 +21,6 @@ if str(_project_root) not in sys.path:
 import pytest
 
 from scripts.mapentry2_score import (
-    CANDIDATE_LAMBDAS,
     _build_dp,
     _winning_target,
     band_settled_edge,
@@ -29,7 +28,6 @@ from scripts.mapentry2_score import (
     build_scoring_dataset,
     compute_candidate_p,
     compute_p_map,
-    cross_check_oracle,
     ece_score,
     is_valid_terminal,
     load_data,
@@ -38,7 +36,6 @@ from scripts.mapentry2_score import (
     run_scoring_pipeline,
     series_clustered_bootstrap,
 )
-
 
 # ============================================================
 # helpers

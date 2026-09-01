@@ -24,7 +24,6 @@ if str(_project_root) not in sys.path:
 
 from scripts import wave_edge_join as wej
 
-
 # ── synthetic-input builders ────────────────────────────────────────────────
 
 def mk_wave(ts_ns: object = 100, series_id="s1", map_number=1, rise=0.40,
