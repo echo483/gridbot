@@ -9,3 +9,8 @@ data/
 .ruff_cache/
 dist/
 .worktrees/
+
+# session-churn artifacts (2026-09-01): runtime lock re-dirties every session;
+# scripts/_tmp_* are tmp-owned scratch per queue15 doc policy
+.claude/scheduled_tasks.lock
+scripts/_tmp_*
