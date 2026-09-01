@@ -70,8 +70,14 @@ class ProbeError(RuntimeError):
     """D-Bus probe failed or exceeded the hard time bound (fail loud)."""
 
 
-def _probe_locked_once() -> bool:
+def _probe_locked_once(collection_label: str | None = None) -> bool:
     """One Secret Service read; raises ProbeError on any failure.
+
+    With ``collection_label`` set, resolve the collection by its Secret
+    Service Label among ``get_all_collections`` (drill path: a locked TEST
+    collection can never be the default collection). Unknown label raises
+    ProbeError (fail loud, locked path). Default behavior (no label) is
+    byte-for-byte unchanged.
 
     Lazy imports keep startup fast and keep the hermetic test suite off the
     real D-Bus entirely.
@@ -82,7 +88,19 @@ def _probe_locked_once() -> bool:
 
     bus = open_dbus_connection()  # jeepney default: the session bus
     try:
-        collection = secretstorage.get_default_collection(bus)
+        if collection_label is None:
+            collection = secretstorage.get_default_collection(bus)
+        else:
+            matches = [
+                c
+                for c in secretstorage.get_all_collections(bus)
+                if c.get_label() == collection_label
+            ]
+            if not matches:
+                raise LookupError(
+                    f"no Secret Service collection with label {collection_label!r}"
+                )
+            collection = matches[0]
         address = DBusAddress(
             collection.collection_path,
             bus_name=SECRETS_BUS_NAME,
@@ -101,8 +119,14 @@ def _probe_locked_once() -> bool:
         bus.close()
 
 
-def probe_locked(timeout_s: float = PROBE_TIMEOUT_S) -> bool:
-    """Return True when the default collection reports locked.
+def probe_locked(
+    timeout_s: float = PROBE_TIMEOUT_S, collection_label: str | None = None
+) -> bool:
+    """Return True when the probed collection reports locked.
+
+    With ``collection_label`` set, the probe targets that labeled collection
+    instead of the default one (drill path); an unknown label is a probe
+    error (fail loud). Otherwise the default collection is probed, unchanged.
 
     Runs the D-Bus read in a daemon reaper thread joined at ``timeout_s``: a
     wedged Secret Service must not hang the probe (the 08-26 failure mode).
@@ -113,11 +137,13 @@ def probe_locked(timeout_s: float = PROBE_TIMEOUT_S) -> bool:
 
     def _run() -> None:
         try:
-            box["locked"] = _probe_locked_once()
+            box["locked"] = _probe_locked_once(collection_label)
         except Exception as exc:  # noqa: BLE001 — any failure is a probe error
             box["exc"] = exc
 
-    worker = threading.Thread(target=_run, daemon=True, name="keyring-watch-probe")
+    worker = threading.Thread(
+        target=_run, daemon=True, name="keyring-watch-probe"
+    )
     worker.start()
     worker.join(timeout_s)
     if worker.is_alive():
@@ -153,11 +179,11 @@ def _send(msg: str) -> bool:
         return False
 
 
-def _load_state() -> dict:
-    if not STATE_FILE.exists():
+def _load_state(state_path: Path = STATE_FILE) -> dict:
+    if not state_path.exists():
         return {}
     try:
-        state = json.loads(STATE_FILE.read_text())
+        state = json.loads(state_path.read_text())
     except (OSError, json.JSONDecodeError):
         return {}
     # Shape guard (review B): a torn or hostile-but-valid-JSON file must not
@@ -169,26 +195,33 @@ def _load_state() -> dict:
     return state
 
 
-def _save_state(state: dict) -> None:
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+def _save_state(state: dict, state_path: Path = STATE_FILE) -> None:
+    state_path.parent.mkdir(parents=True, exist_ok=True)
     # Atomic write (review B): tmp + rename so a torn write can never leave
     # a half-JSON state file behind.
-    tmp = STATE_FILE.with_suffix(".json.tmp")
+    tmp = state_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(state))
-    tmp.replace(STATE_FILE)
+    tmp.replace(state_path)
 
 
-def cmd_check() -> int:
+def cmd_check(collection_label: str | None = None) -> int:
     """--check: probe once; no state, no alert. 0 unlocked / 2 locked / 3 error."""
     try:
-        locked = bool(probe_locked())
+        locked = bool(probe_locked(collection_label=collection_label))
     except ProbeError:
         return 3
     return 2 if locked else 0
 
 
-def cmd_notify() -> int:
+def cmd_notify(
+    collection_label: str | None = None, state_file: Path | None = None
+) -> int:
     """--notify: probe + state transitions + Telegram alerts.
+
+    ``state_file`` overrides STATE_FILE (drill path: a drill must never touch
+    the production state file, or the next production cycle would see
+    prev==locked on the unlocked default collection and fire a spurious
+    recovered alert).
 
     Lock edge (ok -> locked) alerts immediately; while locked, re-alerts at
     >= RE_ALERT_S since the last alert (timestamps persist in state); the
@@ -196,11 +229,12 @@ def cmd_notify() -> int:
     locked path (fail loud): the ok -> error edge alerts immediately, later
     errors ride the re-alert cadence and never spam.
     """
-    state = _load_state()
+    state_path = state_file if state_file is not None else STATE_FILE
+    state = _load_state(state_path)
     prev = state.get("state", OK)
     now = _now()
     try:
-        locked = bool(probe_locked())
+        locked = bool(probe_locked(collection_label=collection_label))
         probe_failed = False
     except ProbeError:
         locked = True
@@ -221,7 +255,7 @@ def cmd_notify() -> int:
         state["state"] = OK
         state["since"] = now
         state.pop("last_alert", None)
-    _save_state(state)
+    _save_state(state, state_path)
     if alerted and locked:
         return 2  # locked-path alert sent this cycle; health_check suppresses its summary
     if locked and probe_failed:
@@ -229,10 +263,10 @@ def cmd_notify() -> int:
     return 0
 
 
-def cmd_reset() -> int:
+def cmd_reset(state_file: Path | None = None) -> int:
     """--reset: clear persisted state (the next notify run starts from ok)."""
     try:
-        STATE_FILE.unlink()
+        (state_file if state_file is not None else STATE_FILE).unlink()
     except FileNotFoundError:
         pass
     return 0
@@ -250,12 +284,22 @@ def main(argv: list[str] | None = None) -> int:
                        help="probe + state transitions + Telegram alerts")
     group.add_argument("--reset", action="store_true",
                        help="clear the persisted state file")
+    parser.add_argument(
+        "--collection-label", default=None,
+        help="probe the collection with this Secret Service Label instead of the "
+        "default one (drill path); unknown label = probe error, fail loud",
+    )
+    parser.add_argument(
+        "--state-file", default=None, type=Path,
+        help="override the persisted-state path (drill path; default: "
+        "data/ops/keyring_watch_state.json)",
+    )
     args = parser.parse_args(argv)
     if args.reset:
-        return cmd_reset()
+        return cmd_reset(args.state_file)
     if args.check:
-        return cmd_check()
-    return cmd_notify()
+        return cmd_check(args.collection_label)
+    return cmd_notify(args.collection_label, args.state_file)
 
 
 if __name__ == "__main__":
