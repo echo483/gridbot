@@ -132,3 +132,66 @@ Claude's notes on the draft (read before adopting):
 77. Log every eligible opportunity, including skipped opportunities, with a machine-readable skip reason.
 78. Produce separate reports for primary taker, maker diagnostic, UP, DOWN, and control arms.
 79. Preserve the raw evidence needed to reproduce the holdout funnel without accessing secrets or modifying the frozen hypothesis.
+
+---
+
+## Adversarial method review of the reconciled funnel (deepseek-v4-pro-0813, dispatch `reasoning3`, 2026-09-03 eve)
+
+Claude's triage, before the verbatim findings:
+
+| # | finding | status | action |
+|---|---|---|---|
+| 1 | the "shock" is post-round information; the entry is a pre-round quote | this IS the mechanism under test (latency lead), but the backtest must show the quote survives our pipe | diagnostic: time-to-convergence vs 15s pipe (dispatched) |
+| 2 | exact reproduction of the reference is by construction | accepted; in-sample only, holdout starved | none — already stated everywhere |
+| 3 | staleness + persistence select dead books | plausible, unmeasured | diagnostic: never-converged share, edge split (dispatched) |
+| 4 | per-arm dedup lets one market enter both arms | real possibility; JSON has no per-entry rows to check | diagnostic: cross-arm overlap + global-dedup variant (dispatched) |
+| 5 | taker price with no size check | real; `book.bid_size/ask_size` exist on the shock row | diagnostic: top size distribution, share < $5 (dispatched) |
+| 6 | NEXT-quote persistence is fragile | measured "immaterial" by the lane, not shown | diagnostic: flip count any-vs-next (dispatched) |
+| 7 | oracle survivorship | 1 unresolved entry per arm on this pool; negligible here | print counts (already) |
+| 8 | "both arms positive" over-read: the UP CI includes zero | **accepted** — STATE.md/memory wording corrected: DOWN +0.19 [+0.08, +0.30] is the significant number; UP +0.15 [−0.03, +0.33] is not; the fade's asymmetry is neither confirmed nor refuted | wording fixed 09-03 |
+| 9 | priced row vs leak-guard timestamp may diverge | **refuted by construction**: `find_shock_row` matches `ts_ns == rec["shock_ts_ns"]` exactly | none; a nonzero-count print is included anyway |
+
+FINDING 1 — Look-ahead: the "shock" is post-round information the book hasn't priced yet, so both arms are front-running, not fading.
+Claim: p_map on the shock row is updated from the live GSR score the instant the round resolves (a team wins the round → its win prob jumps ≥25pt). The entry fills at the shock-row BOOK quote, which still reflects the pre-round price because makers re-quote later. That makes DOWN (short the dump) and UP (long the surge) both positive for the same reason — the model leads the book in both directions — which is exactly the anomaly the OLD spec said a fade could not produce. This is measured model correctness, not a fade.
+Why it matters: if the entry price is a book that couldn't yet have the round result but p_map could, the "edge" is unearned information transfer and vanishes in live trading where you can never access p_map before the market does.
+Check: for each entered shock, pull the GSR round_number / round-end timestamp and the shock row's book-quote timestamp; report the fraction where a round boundary falls inside the 45s shock window but the entry bid/ask is a snapshot from before that boundary. Non-negligible → leakage confirmed.
+
+FINDING 2 — In-sample circularity: exact reproduction of the reference (72/58, 38/35) is the same funnel re-derived on the same corpus, not independent confirmation.
+Claim: the amendment "voids the old 70/32 anchors and pins the spec-literal funnel as reference," and the rewrite matches it exactly. Matching is expected when two implementations encode the same gates over the same in-sample design rows; it says nothing about whether those gates are correct. The holdout floor is NOT met (14 resolved / 12 series vs floor 40/15 → INCONCLUSIVE_STARVED), so the positive win rates/edges rest entirely on in-sample data with zero out-of-sample falsification.
+Why it matters: this is the per-registration discipline's first rail — a funnel can reproduce its own reference by construction and still be tuned/leaky; "matches the reference" is the weakest possible validation of the ONLY numbers with a real sign.
+Check: diff the reference anchor-trace §3 gate implementation against this one and confirm whether the ENTRY SET is identical at the (series,map,slug) level or merely the counts. If identical, also report which series are shared with the reference's design set — if the reference and this run share design rows, there is no held-out evidence at all.
+
+FINDING 3 — The staleness gate (≥0.10) plus persistence (≥0.05 at next quote) jointly SELECT dead/illiquid books, so the "edge" is an uncapturable artifact.
+Claim: a book ≥10pt stale that is STILL ≥5pt stale 45s later is by construction a book nobody is converging — the MM has withdrawn or never quoted. Pricing a systematically-stale dead book against a no-friction map-winner oracle yields an artificial high hit-rate: the oracle always resolves correctly, the dead book never reprices, so you "win" on paper. You cannot actually take that taker price because there is no live counterparty. maker fills 11/71 (15%) and 14/37 (38%) corroborate limited fillability.
+Why it matters: even with zero leakage, a 62% "win rate" on books selected for their failure to converge is not a tradable edge — it's the corollary of "thin/squared books are wrong and stay wrong."
+Check: for each entered book, measure spread-vs-p_map convergence between entry and resolution; report the fraction of entries whose book had converged to within ~5pt at any later point. If the entered books are concentrated in the never-converge tail, the edge is a dead-book selection artifact, not a captured fill.
+
+FINDING 4 — Dedup is per-arm, so one (series,map,slug) can enter BOTH arms, double-counting outcomes and cross-contaminating the two "independent" positives.
+Claim: the `seen` dict is reset inside the per-arm loop, so the dedup key (series,map,slug) does NOT include the arm. A market that produced both a down shock and an up shock yields one DOWN entry AND one UP entry whose resolution is the SAME map outcome. The spec clause says "ONE entry per (series, map, slug)" — no arm qualifier.
+Why it matters: the arms are no longer independent samples; a handful of high-variance markets that shocked both ways drive "both arms positive" on the same underlying resolution, and the entry/win counts are inflated.
+Check: compute the set intersection of (series_id,map_number,market_slug) across the DOWN and UP entry lists. If nonzero, re-run with GLOBAL dedup and report the resulting entry counts and win rates — if they move materially, the two-arm POSITIVE is partly one market counted twice.
+
+FINDING 5 — Taker entry price = shock-row ask/bid with no size or depth check on a book already selected for illiquidity.
+Claim: short/long fills at the shock-row top with no min-size test. On the dead books FINDING 3 selects, the displayed top is frequently a remnant stub (a few shares, or a withdrawn order's ghost) at trivial dollar size, not a fillable offer at meaningful size.
+Why it matters: a "taker fill" at $0.14 of displayed size is not a position; the reported median entry px (0.410 / 0.465) is not a price you could actually buy/sell the intended size at.
+Check: report the best-ask size (UP) / best-bid size (DOWN) at each shock-row entry; count entries whose available size at the entry price is below a $ threshold (e.g. <$5). If most entries are sub-threshold, the edge is not sizeable.
+
+FINDING 6 — Persistence is NEXT-quote-only: a single transient quote flips the entry decision, and the gate is admitted to be definition-fragile.
+Claim: `_persistence_ok` returns on the FIRST live quote's gap (≥0.05) and never looks at the rest of the 45s window. One fast quote (a maker snapping the book for an instant) kills an otherwise-persistent entry, or one stub-wide quote passes a book that is actually converged. The docstring concedes "any-vs-next was measured immaterial at this cadence" — but if the distinction is immaterial, the gate is be defined by noise and shouldn't pin a funnel whose numbers are cited.
+Why it matters: a definitional ambiguity that is "immaterial" under one test can become material at the tail (dead books → sparse quotes → the first quote IS often the only quote), destabilizing the entry set and therefore the win/edge stats.
+Check: recompute each entry's persistence under BOTH interpretations (any live quote in 45s ≥5pt, vs next-only) and count the entries whose verdict flips. A material flip count means the numbers are unstable to a pinned-but-unmotivated definition.
+
+FINDING 7 — Oracle survivorship: only maps with a recorded winner resolve; post-entry restarts/forfeits/voids vanish from the denominator.
+Claim: `resolve()` runs against a winner table keyed by (series,map) with first_seen_ts_ns; a map that never recorded a terminal winner simply drops out of won/lost (unresolved). `ended_by_restart` catches PRE-shock restarts only; a restart/forfeit that occurs AFTER the entry but before a winner is recorded removes that trade from the sample non-randomly.
+Why it matters: conditioning on "the map resolved" removes exactly the adverse tail (the shock that was wrong and then the map voided/restarted), biasing win rate upward; it is a selection-on-outcome problem independent of the settlement-leak guard.
+Check: enumerate all series/maps that produced an entry but have NO winner record, plus maps whose restart/abandonment timestamp is after the shock_ts_ns; best-effort classify each into won/lost and report whether they skew losing. A losing skew = survivorship bias in the oracle.
+
+FINDING 8 — "UP control is positive" is over-read: the UP CI includes zero, so it is NOT a violation of the fade hypothesis.
+Claim: UP edge +0.147 with 95% CI [-0.026, +0.327] crosses zero; only DOWN (+0.188, CI [+0.075,+0.299]) is significant. With n=37 the UP arm is consistent with the fade's expectation (UP ≈ 0), so the stated alarm that "both arms positive is what a fade forbids" is not actually supported by the numbers.
+Why it matters: the leakage/bug narrative (FINDING 1) is being justified partly by a "violation" that the confidence intervals do not establish — conflating a point estimate with significance inflates the case for a bug and can misdirect debugging effort.
+Check: compute the two-sided series-clustered p-value for the UP arm's mean edge; report it alongside the CI. Non-significant → treat UP as null and let DOWN's significance carry the evidence, rather than citing the UP point estimate as anomalous.
+
+FINDING 9 — The entry price, persistence window, and settlement-exclusion anchor come from possibly DIFFERENT timestamps (sr vs rec["shock_ts_ns"]).
+Claim: the entry bid/ask and p_map are taken from `sr` (find_shock_row's returned row), but the persistence window and the terminal-exclusion test use `ts0 = rec["shock_ts_ns"]` (the detect record's timestamp). If find_shock_row returns a row whose ts_ns ≠ rec["shock_ts_ns"], the book you price at and the instant you anchor the leak guard to diverge by one row.
+Why it matters: a one-row skew between the priced book and the terminal-exclusion timestamp can admit an entry priced against a pre-terminal book while `ts0` sits past terminal (or vice-versa), silently defeating the settlement-leak exclusion that clause 5 depends on.
+Check: assert, for every produced entry, that `sr["ts_ns"] == rec["shock_ts_ns"]` (or log the delta); count mismatches and re-check the terminal/after_terminal classification on those rows specifically.

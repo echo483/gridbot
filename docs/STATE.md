@@ -459,10 +459,11 @@ Only the quintile figure is the bar.
    pinned corpus). RECONCILED 2026-09-03 eve (reasoner lane, Claude review;
    commit b6a8c4d): the script reproduces the reference funnel to the
    digit (72/58 DOWN, 38/35 UP on the design pool) and prints it per
-   gate. Read: BOTH arms positive in-sample (DOWN->short edge +0.19
-   [+0.08, +0.30], UP->long +0.15 [-0.03, +0.33], series-clustered) — the
-   fade's own control expectation fails; the book UNDER-reacts to the
-   model after shocks. Momentum, not fade, and the same mechanism the
+   gate. Read (in-sample, series-clustered): DOWN->short edge +0.19
+   [+0.08, +0.30] is significant; UP->long +0.15 [-0.03, +0.33] is positive
+   but NOT significant (deepseek-pro review F8: the fade's asymmetry is
+   neither confirmed nor refuted). Both point estimates run TOWARD the
+   model after a shock — the book under-reacts — the same mechanism the
    timing chain found. Holdout starved (14/12 vs 40/15). Open caveats:
    staleness gate may select dead books; taker price has no size check;
    NOTE6 fill selection. H-MODELMOMENTUM1 brief + adversarial review
