@@ -1,17 +1,19 @@
 """H-POSTSHOCKFADE1: post-shock fade backtest (analysis only, describe-only).
 
-█ STATUS 2026-09-01 (ops): WIP — UNVERIFIED, DO NOT CITE ITS NUMBERS. █
-The builder lane hit its run budget after writing this file: no tests, no
-analysis doc, no self-report. Its design-mode run FAILS the spec's anchors
-(59 candidate / 37 control entries vs the reasoner's verified 70/32;
-pre-persistence 211 {162 down, 49 up} vs 108) — the two pipelines disagree
-somewhere in the gates. Its output also VIOLATES the spec's clause-(iv)
-expectation (UP control +0.158 CI [-0.042, +0.345], not <= +0.02) with BOTH
-arms strongly positive — either a bug or a real "book lags the model after
->=25pt shocks in both directions" effect; ops verified entries are NOT
-resolution-proximate (median entry->map-terminal ~1,800s, none <= 60s), so
-it is not settlement leakage by proximity. Next step (queued): anchor
-reconciliation against the reasoner's pipeline + tests, THEN read numbers.
+█ STATUS 2026-09-03: RECONCILED 2026-09-03 to the amended brief; funnel
+matches the spec-literal reference. █
+The 2026-09-01 WIP state is superseded: the AMENDMENT 2026-09-03 block atop
+docs/superpowers/specs/2026-09-01-postshock-fade-design.md voids the old
+108/70/32 anchors and pins the SPEC-LITERAL funnel
+(docs/analysis/2026-09-01-postshock-anchor-trace.md §3) as the reference.
+This file now implements that funnel stage-for-stage: every §1.2 clause-1
+population gate (prev_p_map >= 0.40, not ended_by_restart, market_slug
+present, shock-row book alive) applies to BOTH arms (§1.3 UP mirror, pinned
+2026-09-03), clause 1 reads the shock row ITSELF (a live quote after the
+shock row never rescues a dead one), and clause 3 is the NEXT live quote
+strictly after the shock row within 45s.  Per-gate counters print in the
+anchor-trace format.  Still STRICTLY DESCRIBE-ONLY: no registry edit, no
+src/, no orders.
 
 Operationalizes the frozen design brief
 docs/superpowers/specs/2026-09-01-postshock-fade-design.md EXACTLY — every
@@ -81,6 +83,7 @@ import collections
 import datetime
 import glob
 import json
+import math
 import random
 import statistics
 import subprocess
@@ -90,12 +93,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from postshock_lag import (  # noqa: E402  (reuse pinned constants + engine)
+from postshock_lag import (
     DEFAULT_CONVERGE,
     DEFAULT_SHOCK,
     DEFAULT_WINDOW_S,
     NS_PER_S,
-    SOURCE_FILE_TAG,
     _seq_key,
     detect,
     load_data,
@@ -143,7 +145,7 @@ def run_detect(rows: list[dict]) -> dict:
     return detect(rows, DEFAULT_SHOCK, DEFAULT_WINDOW_S, DEFAULT_CONVERGE)
 
 
-def sequences_by_key(rows: list[dict]) -> "SeqIndex":
+def sequences_by_key(rows: list[dict]) -> SeqIndex:
     """Index rows by postshock_lag's exact sequence key, ts-sorted.
 
     detect() records do not carry the per-file provenance tag, so a record
@@ -221,7 +223,7 @@ def _finite(v) -> float | None:
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
     f = float(v)
-    return f if f == f and f not in (float("inf"), float("-inf")) else None
+    return f if math.isfinite(f) else None
 
 
 def book_top(row: dict) -> tuple[float, float] | None:
@@ -275,138 +277,158 @@ def find_shock_row(seq: list[dict], rec: dict) -> dict | None:
 # entry simulation (§1.2 / §1.3)
 
 
+def _persistence_ok(
+    arm: str,
+    seq: list[dict],
+    ts0: int,
+    terminal: int | None,
+) -> bool:
+    """§1.2 clause 3 (amendment wording, 2026-09-03): persistence = the NEXT
+    same-sequence live quote STRICTLY AFTER the shock row, within 45s of the
+    shock ts_ns, showing gap >= 0.05.  Non-live rows are skipped inside the
+    window (they are not quotes); the first live quote decides — any-vs-next
+    was measured immaterial at this cadence, but the text pins NEXT.  Quotes
+    at/after the map-terminal observation are settlement-informed and
+    invisible (§1.2 clause 5).  No live quote in window => no entry.
+    """
+    hi = ts0 + PERSIST_WINDOW_S * NS_PER_S
+    for r in seq:
+        if r["ts_ns"] <= ts0:
+            continue
+        if r["ts_ns"] > hi:
+            break
+        if terminal is not None and r["ts_ns"] >= terminal:
+            continue
+        top = book_top(r)
+        p = _finite(r.get("p_map"))
+        if top is None or p is None:
+            continue  # not a live quote; keep scanning within 45s
+        return arm_gap(arm, top[0], top[1], p) >= PERSIST_GATE
+    return False
+
+
 def simulate_entries(
     shocks: list[dict],
-    seq_index: "SeqIndex",
+    seq_index: SeqIndex,
     terminal_by_map: dict[tuple, int] | None = None,
-) -> tuple[list[dict], dict, dict, dict]:
-    """Entry simulation over detect() shock records.
+) -> tuple[list[dict], dict, dict]:
+    """Spec-literal entry funnel (§1.2/§1.3, AMENDMENT 2026-09-03).
 
-    Returns (entries, counters, pre_persist_arms, resolution_counts) where
-    pre_persist_arms counts shocks passing every gate EXCEPT persistence
-    (the anchor's "before persistence" number, per arm) and
-    resolution_counts reports how SeqIndex pinned each record to its
+    Stage-for-stage the reference funnel of
+    docs/analysis/2026-09-01-postshock-anchor-trace.md §3, applied per arm
+    in the reference gate ORDER: shocks -> priced (n_book_obs > 0) ->
+    prev_p_map >= 0.40 -> not ended_by_restart -> market_slug present ->
+    shock-row book alive (the shock row ITSELF: bid and ask numeric, > 0,
+    ask > bid — a live quote after the shock row never rescues a dead one)
+    -> staleness gate >= 0.10 on the shock row -> persistence (the NEXT live
+    quote strictly after the shock row within 45s, gap >= 0.05) -> dedup
+    (ONE entry per (series_id, map_number, market_slug), earliest qualifying
+    shock wins; persistence-failed shocks consume nothing).
+
+    Amendment 2026-09-03: every clause-1 population gate mirrors onto the UP
+    control arm (§1.3), including prev_p_map >= 0.40 — the old DOWN-only
+    reading is void.
+
+    Returns (entries, funnel, seq_res_counts).  ``funnel[arm]`` carries the
+    per-stage counts under the anchor-trace labels plus diagnostics
+    (shock_row_not_found / after_terminal / dedup_slots_lost).
+    ``seq_res_counts`` reports how SeqIndex pinned each slugged record to its
     per-file sequence rows.
 
     ``terminal_by_map`` maps (series_id, map_number) -> the oracle's first
-    terminal observation ts_ns (§1.2 gate 5 / crossin F1 pin): the entry row
-    and all persistence-window quotes at/after it are settlement-informed
+    terminal observation ts_ns (§1.2 clause 5 / crossin F1 pin): entries at
+    or after it, and persistence quotes at/after it, are settlement-informed
     and excluded.
 
     Entries carry ``_seq_key`` (the postshock_lag sequence key parts) for the
     describe-only maker-leg join.
     """
-    c = collections.Counter({
-        "shocks": 0, "priced_shocks": 0, "down_priced_shocks": 0,
-        "restart_excluded": 0, "fallen_favorite_excluded": 0,
-        "no_slug": 0, "dead_book_at_shock": 0, "shock_row_not_found": 0,
-        "staleness_gate_failed": 0, "after_terminal": 0,
-        "candidates_pre_persistence": 0, "failed_persistence": 0,
-        "persisted": 0, "dedup_slots_lost": 0, "entries": 0,
-    })
-    pre_persist: dict[str, int] = {"down": 0, "up": 0}
+    funnel: dict[str, dict] = {}
+    entries: list[dict] = []
     res_counts: collections.Counter = collections.Counter()
-
-    # Map each detect() record to its per-file-partitioned sequence rows via
-    # SeqIndex (detect() records do not carry the provenance tag).
-    cands: list[dict] = []
-    for rec in shocks:
-        seq, res_status = seq_index.for_rec(rec)
-        res_counts[f"seq_{res_status}"] += 1
-        c["shocks"] += 1
-        if rec["n_book_obs"] > 0:
-            c["priced_shocks"] += 1
-        arm = rec["direction"]
-        if arm == "down" and rec["n_book_obs"] > 0:
-            c["down_priced_shocks"] += 1
-        if rec["ended_by_restart"]:
-            c["restart_excluded"] += 1
-            continue
-        # DEVIATION 1: fallen-favorite filter (DOWN arm only).
-        if arm == "down" and not (
-                (_finite(rec.get("prev_p_map")) or 0.0) >= FALLEN_FAVORITE_MIN):
-            c["fallen_favorite_excluded"] += 1
-            continue
-        if not rec.get("market_slug"):
-            c["no_slug"] += 1
-            continue
-        shock_row = find_shock_row(seq, rec)
-        if shock_row is None:
-            c["shock_row_not_found"] += 1
-            continue
-        top = book_top(shock_row)
-        if top is None:
-            c["dead_book_at_shock"] += 1
-            continue
-        bid, ask = top
-        p = _finite(shock_row.get("p_map"))
-        if p is None:
-            c["dead_book_at_shock"] += 1
-            continue
-        if arm_gap(arm, bid, ask, p) < STALENESS_GATE:
-            c["staleness_gate_failed"] += 1
-            continue
-        ts0 = rec["shock_ts_ns"]
-        terminal = (terminal_by_map or {}).get(
-            (str(rec["series_id"]), rec["map_number"]))
-        if terminal is not None and ts0 >= terminal:
-            c["after_terminal"] += 1
-            continue
-        c["candidates_pre_persistence"] += 1
-        pre_persist[arm] += 1
-        # PERSISTENCE: the NEXT same-sequence live quote within 45s (§1.2 g3).
-        persist_ok = False
-        p_hi = ts0 + PERSIST_WINDOW_S * NS_PER_S
-        for r in seq:
-            if r["ts_ns"] <= ts0:
+    for arm in ("down", "up"):
+        arm_shocks = [r for r in shocks if r["direction"] == arm]
+        priced = [r for r in arm_shocks if r["n_book_obs"] > 0]
+        # prev_p_map >= 0.40 on BOTH arms (§1.1 DEVIATION 1 mirrored onto
+        # the UP population by §1.3, pinned 2026-09-03).  Missing prev -> -1
+        # sentinel, as in the reference funnel.
+        prev_ok = [
+            r for r in priced
+            if (_finite(r.get("prev_p_map")) or -1.0) >= FALLEN_FAVORITE_MIN]
+        no_res = [r for r in prev_ok if not r["ended_by_restart"]]
+        slugged = [r for r in no_res if r.get("market_slug")]
+        alive: list[tuple] = []
+        n_row_missing = 0
+        for rec in slugged:
+            seq, status = seq_index.for_rec(rec)
+            res_counts[f"seq_{status}"] += 1
+            sr = find_shock_row(seq, rec) if seq else None
+            if sr is None:
+                n_row_missing += 1
                 continue
-            if r["ts_ns"] > p_hi:
-                break
-            if terminal is not None and r["ts_ns"] >= terminal:
-                continue  # settlement-informed: invisible
-            rtop = book_top(r)
-            rp = _finite(r.get("p_map"))
-            if rtop is None or rp is None:
-                continue  # not a live quote; keep scanning within 45s
-            persist_ok = arm_gap(arm, rtop[0], rtop[1], rp) >= PERSIST_GATE
-            break
-        if not persist_ok:
-            c["failed_persistence"] += 1
-            continue  # failed persistence does NOT consume the dedup slot
-        c["persisted"] += 1
-        entry = taker_price(arm, bid, ask)
-        cands.append({
-            "arm": arm,
-            "series_id": str(rec["series_id"]),
-            "map_number": rec["map_number"],
-            "team": rec["team"],
-            "opponent": shock_row.get("opponent"),
-            "market_slug": str(rec["market_slug"]),
-            "shock_ts_ns": ts0,
-            "p_map": round(p, 6),
-            "prev_p_map": rec["prev_p_map"],
-            "delta": rec["delta"],
-            "bid": bid,
-            "ask": ask,
-            "entry_price": entry,
-            "maker_post_price": round(entry - MAKER_TICK, 6),
-            "staleness_gap": round(arm_gap(arm, bid, ask, p), 6),
-            "_seq_key": list(_seq_key(shock_row)),
-        })
-
-    # Dedup: ONE entry per (series_id, map_number, market_slug); earliest
-    # qualifying shock wins the slot (§1.2; persistence-failed shocks never
-    # got here, so they consume nothing).
-    seen: dict[tuple, dict] = {}
-    for cand in sorted(cands, key=lambda x: (x["shock_ts_ns"], x["series_id"])):
-        key = (cand["series_id"], cand["map_number"], cand["market_slug"])
-        if key in seen:
-            c["dedup_slots_lost"] += 1
-            continue
-        seen[key] = cand
-    entries = sorted(seen.values(), key=lambda x: x["shock_ts_ns"])
-    c["entries"] = len(entries)
-    return entries, dict(c), pre_persist, dict(res_counts)
+            top = book_top(sr)
+            p = _finite(sr.get("p_map"))
+            if top is None or p is None:
+                continue  # dead book ON THE SHOCK ROW: no rescue, no entry
+            alive.append((rec, seq, sr, top[0], top[1], p))
+        gated = [t for t in alive
+                 if arm_gap(arm, t[3], t[4], t[5]) >= STALENESS_GATE]
+        persisted: list[dict] = []
+        n_after_terminal = 0
+        for rec, seq, sr, bid, ask, p in gated:
+            ts0 = rec["shock_ts_ns"]
+            terminal = (terminal_by_map or {}).get(
+                (str(rec["series_id"]), rec["map_number"]))
+            if terminal is not None and ts0 >= terminal:
+                n_after_terminal += 1
+                continue
+            if not _persistence_ok(arm, seq, ts0, terminal):
+                continue  # failed persistence does NOT consume the dedup slot
+            entry_px = taker_price(arm, bid, ask)
+            persisted.append({
+                "arm": arm,
+                "series_id": str(rec["series_id"]),
+                "map_number": rec["map_number"],
+                "team": rec["team"],
+                "opponent": sr.get("opponent"),
+                "market_slug": str(rec["market_slug"]),
+                "shock_ts_ns": ts0,
+                "p_map": round(p, 6),
+                "prev_p_map": rec["prev_p_map"],
+                "delta": rec["delta"],
+                "bid": bid,
+                "ask": ask,
+                "entry_price": entry_px,
+                "maker_post_price": round(entry_px - MAKER_TICK, 6),
+                "staleness_gap": round(arm_gap(arm, bid, ask, p), 6),
+                "_seq_key": list(_seq_key(sr)),
+            })
+        # Dedup per arm (the reference funnel dedups within each arm): ONE
+        # entry per (series_id, map_number, market_slug), earliest shock wins.
+        seen: dict[tuple, dict] = {}
+        for cand in sorted(persisted,
+                           key=lambda x: (x["shock_ts_ns"], x["series_id"])):
+            key = (cand["series_id"], cand["map_number"], cand["market_slug"])
+            seen.setdefault(key, cand)
+        arm_entries = sorted(seen.values(), key=lambda x: x["shock_ts_ns"])
+        funnel[arm] = {
+            "shocks": len(arm_shocks),
+            "priced": len(priced),
+            "prev>=0.40": len(prev_ok),
+            "no-restart": len(no_res),
+            "slug": len(slugged),
+            "alive": len(alive),
+            "gate": len(gated),
+            "persist-raw": len(persisted),
+            "deduped": len(seen),
+            "series": len({e["series_id"] for e in arm_entries}),
+            "shock_row_not_found": n_row_missing,
+            "after_terminal": n_after_terminal,
+            "dedup_slots_lost": len(persisted) - len(seen),
+        }
+        entries.extend(arm_entries)
+    entries.sort(key=lambda x: x["shock_ts_ns"])
+    return entries, funnel, dict(res_counts)
 
 
 # --------------------------------------------------------------------------
@@ -488,7 +510,7 @@ def maker_fills(
     return None, None
 
 
-def maker_summary(entries: list[dict], seq_index: "SeqIndex",
+def maker_summary(entries: list[dict], seq_index: SeqIndex,
                   terminal_by_map: dict[tuple, int]) -> dict:
     """Describe-only maker leg (§1.2): NOTE6 fill proxy within TTL 150s,
     edge accounting restricted to fills inside the +30s offset cap.  The
@@ -666,7 +688,7 @@ def run_entries(mode: str, mapentry_pattern: str | None = None) -> dict:
         (str(w["series_id"]), w["map_number"]): w["first_seen_ts_ns"]
         for w in winners.values() if w.get("first_seen_ts_ns") is not None
     }
-    entries, counters, pre_persist, seq_res = simulate_entries(
+    entries, funnel, seq_res = simulate_entries(
         pool, seq_index, terminal_by_map)
     for e in entries:
         e["won"], e["res_status"] = resolve(e, winners, excluded)
@@ -707,9 +729,8 @@ def run_entries(mode: str, mapentry_pattern: str | None = None) -> dict:
         "n_shocks_pool": len(pool),
         "n_shocks_design": len(design_shocks),
         "n_shocks_holdout": len(holdout_shocks),
-        "entry_counters": counters,
+        "funnel": funnel,
         "sequence_resolution": seq_res,
-        "candidates_pre_persistence_by_arm": pre_persist,
         "arms": arms,
         "n_map_winners": len(winners),
         "holdout_accrual": {
@@ -843,9 +864,9 @@ def run_spreads(mapentry_pattern: str | None = None) -> dict:
             skipped["no_gap_window_quotes"] += 1
             continue
 
-        def med(w):
-            return (round(statistics.median(spreads_by[w]), 6)
-                    if spreads_by[w] else None)
+        def med(w, _sb=spreads_by):
+            return (round(statistics.median(_sb[w]), 6)
+                    if _sb[w] else None)
 
         med_gap, med_pre, med_rec = med("gap"), med("pre"), med("reconverge")
         episodes.append({
@@ -929,10 +950,10 @@ def run_spreads(mapentry_pattern: str | None = None) -> dict:
         },
         "confirmation": confirm,
         "caveats": [
-            "Spread is only observable when BOTH sides are quoted; the test "
-            "is conditional on the book being alive (CROSSIN1 F2 selection).",
-            "A withdrawing MM may widen by pulling the BID — the side we "
-            "would sell into; one-sided death rates per window are reported.",
+            ("Spread is only observable when BOTH sides are quoted; the test "
+             "is conditional on the book being alive (CROSSIN1 F2 selection)."),
+            ("A withdrawing MM may widen by pulling the BID — the side we "
+             "would sell into; one-sided death rates per window are reported."),
             "Describe-only join: cannot arm anything (spec §2).",
         ],
         "episodes_sample": episodes[:20],
@@ -992,7 +1013,7 @@ def main() -> int:
     with open(out_json, "w", encoding="utf-8") as fh:
         json.dump(res, fh, indent=2, sort_keys=True)
 
-    sc, ec = res["shock_counts"], res["entry_counters"]
+    sc, fn = res["shock_counts"], res["funnel"]
     print(f"== H-POSTSHOCKFADE1 post-shock fade [{res['label']}] ==")
     print(f"mode: {args.mode}")
     print(f"shocks: {sc['n_shocks']}  priced {sc['n_priced']}  "
@@ -1000,16 +1021,17 @@ def main() -> int:
           f"(DOWN-priced ended_by_restart {sc['n_down_priced_restarted']})")
     print(f"shock pool: {res['n_shocks_pool']} "
           f"(design {res['n_shocks_design']} / holdout {res['n_shocks_holdout']})")
-    print(f"gates: restart-excluded {ec['restart_excluded']}  "
-          f"fallen-favorite-excluded {ec['fallen_favorite_excluded']}  "
-          f"no-slug {ec['no_slug']}  dead-book {ec['dead_book_at_shock']}  "
-          f"staleness-failed {ec['staleness_gate_failed']}  "
-          f"after-terminal {ec['after_terminal']}  "
-          f"candidates pre-persistence {ec['candidates_pre_persistence']} "
-          f"{res['candidates_pre_persistence_by_arm']}")
-    print(f"persistence: failed {ec['failed_persistence']}  passed "
-          f"{ec['persisted']}  dedup slots lost {ec['dedup_slots_lost']}  "
-          f"ENTRIES: {ec['entries']}")
+    print("spec-literal funnel (anchor-trace §3 format, per arm):")
+    for arm, label in (("down", "DOWN candidate"), ("up", "UP control")):
+        f = fn[arm]
+        print(f"  [{label}] shocks {f['shocks']} priced {f['priced']} "
+              f"prev>=0.40 {f['prev>=0.40']} no-restart {f['no-restart']} "
+              f"slug {f['slug']} alive {f['alive']} gate {f['gate']} "
+              f"persist-raw {f['persist-raw']} deduped {f['deduped']} "
+              f"series {f['series']}")
+        print(f"      (shock_row_not_found {f['shock_row_not_found']}  "
+              f"after_terminal {f['after_terminal']}  "
+              f"dedup_slots_lost {f['dedup_slots_lost']})")
     print(f"map-winner oracle: {res['n_map_winners']} resolved (series,map) keys")
     print()
     ha = res["holdout_accrual"]
