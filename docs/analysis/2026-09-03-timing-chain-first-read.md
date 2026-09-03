@@ -124,3 +124,40 @@ row older than 35s is a coverage gap (None). Requiring a row strictly inside
 the window would drop exactly the quiet books and bias every horizon toward
 movers (the lane's first cut did; +30s rows 320 → 343 after the fix). A
 single-series CI is reported as "no interval", never as a zero-width one.
+
+## Addendum 2 (16:40 PDT) — next-round-bounded move: the round is not the event
+
+Bounding each event's horizon at the NEXT round end of the same map
+(`move_next_round`; 334/389 events with a covered bounded row, 12 series):
+mean oriented +0.003 [−0.002, +0.007], median 0; 27.5% reach +3 ticks; direction
+agreement **50.2%** (n_nonzero = 257). Attributing each move to exactly one round
+removes the last of the "signal": the round winner does not predict the book's
+next move at all.
+
+Split by which side won the round, the RAW (unoriented) move explains why:
+
+| round winner | n | raw mean move | share raw > 0 (nonzero) |
+|---|---|---|---|
+| the named (Yes) team | 198 | +0.016 | 0.59 |
+| the other team | 136 | +0.016 | 0.62 |
+
+The book moves UP by the same ~1.6 ticks whether the named team or its opponent
+won the round. A martingale price cannot drift the same way after both
+outcomes, so this book is not pricing rounds — it is catching up to the map
+STATE over minutes (the named team led most of these maps). That is the rail-B
+mechanism (the book lags the model / the state) seen from the venue side, and
+it is why the round-oriented direction figure is a coin flip: the round is the
+wrong event to orient on. Per-slug agreement ranges 0.18–0.78 at n = 6–33, in
+the pattern "drift toward the eventual map winner" (e.g. leo-tlr map 2: 0.78
+agreement, named team won 92% of rounds), not the pattern of a flipped market
+orientation (which would put a favorite-dominated slug near 0.2). One day; not
+proven.
+
+**Next amendment:** orient on the MODEL, not the round. Join each event to its
+mapentry row (round n+1 — the pipeline join already exists), take
+d = p_map(Yes) − mid_before, and report: (i) the share of nonzero bounded moves
+with sign(move_raw) = sign(d); (ii) the mean move projected on sign(d), with the
+series-clustered CI; (iii) the same at +30/60/120s; (iv) all of it by |d| bucket
+(≥ 4pt is the entry band). A projected mean above zero with the CI clear of it
+is the venue-side evidence a latency / model-momentum instrument would be
+pre-registered against. Until then nothing here is a trading number.

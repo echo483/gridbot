@@ -29,9 +29,13 @@ event also carries the size-and-horizon read of Step 2b.
 Step 2b — size and horizon reading. ``move_30s`` / ``move_60s`` /
 ``move_120s``: mid of the last ``pmus_bbo`` row with ``req_ns <= t_obs +
 h`` minus the pre-event mid, ORIENTED toward the round winner's side
-(us_side long -> +delta, short -> -delta); None at a horizon whose window
-(t_obs, t_obs + h] holds no row — the pre-event row alone is not an
-observation at that horizon.
+(us_side long -> +delta, short -> -delta). Coverage-aware: the tape is
+change-only with a 30s per-slug heartbeat, so a covered slug always has a
+row within COVERAGE_SLACK_S before any instant — a silent book is a real
+0.0 move; a last row older than that is a coverage gap (None).
+``move_next_round``: the same oriented move with the horizon cut at the
+NEXT round end of the same map (last covered row at or before its
+``t_prev``), so each move is attributed to exactly one round.
 ``t_move3_ns`` / ``lead3_vs_obs_s`` / ``direction3_agrees``: the first
 >=3-tick (0.03) move, same semantics as the 1-tick fields. Summary
 intervals are series-clustered bootstraps (resample series_id with
@@ -337,6 +341,49 @@ def join_books(events: list[dict], mappings: dict[str, dict],
             ev["lead3_vs_obs_s"] = round((res["t_move3_ns"] - ev["t_obs_ns"]) / 1e9, 3)
             up3 = res["move_size_3"] > 0
             ev["direction3_agrees"] = (up3 and us_side == "long") or (not up3 and us_side == "short")
+    bound_next_round_moves(events, books)
+
+
+def bound_next_round_moves(events: list[dict],
+                           books: dict[str, tuple[list[int], list[float]]],
+                           slack_s: float = COVERAGE_SLACK_S) -> None:
+    """Bound each joined event's oriented move at the NEXT round end of its map (in place).
+
+    The 300s/120s horizon windows span later rounds (~90-120s each), so their
+    direction agreement is diluted by construction. ``move_next_round`` is the
+    oriented mid move (same sign rule as ``move_30s``: + toward the winner's
+    side) from this event's ``mid_before`` to the mid of the last covered row
+    at or before the next event's ``t_prev_ns`` — the next round's last poll
+    before observation — so each move is attributed to exactly one round.
+    Coverage uses the ``horizon_moves`` rule: a row within ``slack_s`` before
+    that instant, else None (a silent book is a real 0.0, a stale one a gap).
+    ``next_round_gap_s`` is the next ``t_prev_ns`` minus this ``t_obs_ns``.
+    Both are None when no next event exists for the map. ``round_end_events``
+    emits events in global req_ns order (series interleaved), so sort locally.
+    """
+    slack_ns = int(slack_s * 1e9)
+    ordered = sorted(events, key=lambda ev: (ev["series_id"], ev["map_number"],
+                                             ev["round_number"], ev["t_obs_ns"]))
+    for i, ev in enumerate(ordered):
+        if ev["outcome"] not in ("moved", "no_move_300s"):
+            continue
+        nxt = (ordered[i + 1] if i + 1 < len(ordered)
+               and (ordered[i + 1]["series_id"], ordered[i + 1]["map_number"])
+               == (ev["series_id"], ev["map_number"]) else None)
+        if nxt is None:
+            ev["move_next_round"] = None
+            ev["next_round_gap_s"] = None
+            continue
+        ev["next_round_gap_s"] = round((nxt["t_prev_ns"] - ev["t_obs_ns"]) / 1e9, 3)
+        series = books.get(ev["slug"])
+        move = None
+        if series:
+            times, mids = series
+            hi = bisect_right(times, nxt["t_prev_ns"])  # rows at or before it are [0, hi)
+            if hi > 0 and nxt["t_prev_ns"] - times[hi - 1] <= slack_ns:
+                sign = 1.0 if ev["us_side"] == "long" else -1.0
+                move = round(sign * (mids[hi - 1] - ev["mid_before"]), 4)
+        ev["move_next_round"] = move
 
 
 # --- step 3: our own pipeline legs -------------------------------------------
@@ -498,6 +545,26 @@ def _horizon_block(evs: list[dict], h: int) -> dict:
     }
 
 
+def _next_round_block(evs: list[dict]) -> dict:
+    """Bounded-horizon read: oriented mid move over exactly one round (the next one)."""
+    pairs = [(ev["series_id"], ev["move_next_round"]) for ev in evs
+             if ev.get("move_next_round") is not None]
+    nonzero = [v for _, v in pairs if v != 0]
+    return {
+        "n": len(evs),
+        "n_with_row": len(pairs),
+        "mean_oriented": bootstrap_ci(pairs, "mean"),
+        "median_oriented": bootstrap_ci(pairs, "median"),
+        "share_ge_3t": (None if not pairs
+                        else round(sum(1 for _, v in pairs if v >= 3 * TICK - TICK_EPS)
+                                   / len(pairs), 3)),
+        "direction_agreement_rate": (None if not nonzero
+                                     else round(sum(1 for v in nonzero if v > 0)
+                                                / len(nonzero), 3)),
+        "n_nonzero": len(nonzero),
+    }
+
+
 def summarize(day: str, events: list[dict]) -> dict:
     outcomes = Counter(ev["outcome"] for ev in events)
     moved = [ev for ev in events if ev["outcome"] == "moved"]
@@ -515,6 +582,7 @@ def summarize(day: str, events: list[dict]) -> dict:
         "outcomes": dict(sorted(outcomes.items())),
         "moved": _moved_block(moved),
         "moved3": _moved3_block(moved),
+        "next_round": _next_round_block(oriented),
         "horizons": {
             "n": len(oriented),
             "by_horizon": {f"{h}s": _horizon_block(oriented, h) for h in HORIZONS_S},
@@ -608,6 +676,22 @@ def render(summary: dict) -> str:
         f"| lead3_vs_obs_s p90 | {_fmt(m3['lead3_vs_obs_s']['p90'])} |",
         f"| book first (lead3_vs_obs_s < 0) | {_fmt(m3['book_first_share'])} |",
         f"| direction agreement | {_fmt(m3['direction_agreement_rate'])} |",
+        "",
+        f"## next-round-bounded move (moved + no_move_300s, n={summary['next_round']['n']})",
+        "",
+        "Same oriented mid move, but the horizon is cut at the NEXT round end of the",
+        "same map (last covered row at or before its t_prev): every move is attributed",
+        "to exactly one round, so direction agreement is not diluted by later rounds.",
+        "",
+        "| stat | value |",
+        "|---|---|",
+        (f"| mean oriented [95% CI] | {_fmt_ci(summary['next_round']['mean_oriented'])} |"),
+        (f"| median oriented [95% CI] | {_fmt_ci(summary['next_round']['median_oriented'])} |"),
+        (f"| rows with a bounded move | {summary['next_round']['n_with_row']}/{summary['next_round']['n']} |"),
+        (f"| share of events with move_next_round >= +0.03 | "
+         f"{_fmt(summary['next_round']['share_ge_3t'])} |"),
+        (f"| direction agreement (move_next_round > 0 among nonzero, n_nonzero="
+         f"{summary['next_round']['n_nonzero']}) | {_fmt(summary['next_round']['direction_agreement_rate'])} |"),
         "",
         "## by map phase (moved only)",
         "",

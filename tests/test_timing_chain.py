@@ -604,3 +604,99 @@ class TestSummaryAdditions:
         assert "n=4, series=2" in text  # n and n_series beside the CI
         assert "first >=3-tick move" in text
         assert "share of events with oriented +120s move >= +0.03" in text
+
+
+class TestNextRoundBounded:
+    """move_next_round: horizon cut at the NEXT round end of the same map."""
+
+    def test_bounded_at_next_t_prev_and_later_rows_do_not_count(self):
+        # ev1: round 4 observed at T0+12s; ev2: round 5 with t_prev = T0+100s.
+        # The book rows after ev2's t_prev (T0+150s, T0+170s) must NOT count —
+        # the horizon stops at ev2's t_prev, so the bounded move reads 0.53.
+        rows = [_bbo(T0 - 2 * NS, 0.49, 0.51),          # mid_before 0.50
+                _bbo(T0 + 5 * NS, 0.51, 0.53),          # ev1's 1-tick move (pre-t_obs)
+                _bbo(T0 + 85 * NS, 0.52, 0.54),         # mid 0.53, 15s before ev2 t_prev
+                _bbo(T0 + 150 * NS, 0.56, 0.58),        # after ev2 t_prev: must be ignored
+                _bbo(T0 + 170 * NS, 0.58, 0.60)]
+        ev1 = _event(n=4, t_prev=T0, t_obs=T0 + 12 * NS)
+        ev2 = _event(n=5, t_prev=T0 + 100 * NS, t_obs=T0 + 112 * NS)
+        books = tc.book_series(rows)
+        tc.join_books([ev2, ev1], {SID: _mapping()}, books)  # unsorted on purpose
+        assert ev1["move_next_round"] == 0.03            # 0.53 - 0.50, bounded at ev2 t_prev
+        assert ev1["next_round_gap_s"] == 88.0           # (T0+100s - (T0+12s))
+        # ev2 is the last event of the map: no next round to bound at.
+        assert ev2["move_next_round"] is None and ev2["next_round_gap_s"] is None
+
+    def test_short_event_orients_the_bounded_sign(self):
+        # Falcons named -> us_side short; mid FALLING from 0.60 toward Vexar is
+        # oriented positive, exactly like move_30s.
+        rows = [_bbo(T0 - 2 * NS, 0.59, 0.61),           # mid_before 0.60
+                _bbo(T0 + 5 * NS, 0.57, 0.59),
+                _bbo(T0 + 30 * NS, 0.57, 0.59),          # covered +30s horizon: mid 0.58
+                _bbo(T0 + 95 * NS, 0.55, 0.57)]          # mid 0.56 at the next t_prev
+        ev1 = _event(n=4, winner="Vexar", loser="Falcons", t_prev=T0, t_obs=T0 + 12 * NS)
+        ev2 = _event(n=5, winner="Vexar", loser="Falcons",
+                     t_prev=T0 + 100 * NS, t_obs=T0 + 112 * NS)
+        tc.join_books([ev1, ev2], {SID: _mapping(named="Falcons")}, tc.book_series(rows))
+        assert ev1["us_side"] == "short" and ev1["outcome"] == "moved"
+        assert ev1["move_next_round"] == 0.04            # raw 0.56 - 0.60 = -0.04 -> +0.04
+        assert ev1["move_30s"] == 0.02                   # raw 0.58 - 0.60 = -0.02 -> +0.02
+
+    def test_coverage_gap_before_the_next_t_prev_is_none(self):
+        # ev1's last book row before ev2's t_prev is 90s old (heartbeat is 30s):
+        # the recorder was not covering the slug -> None, not a fabricated move.
+        rows = [_bbo(T0 - 2 * NS, 0.49, 0.51),
+                _bbo(T0 + 5 * NS, 0.51, 0.53),
+                _bbo(T0 + 10 * NS, 0.51, 0.53, heartbeat=True),  # 90s before ev2 t_prev
+                _bbo(T0 + 190 * NS, 0.55, 0.57)]                 # after ev2 t_prev anyway
+        ev1 = _event(n=4, t_prev=T0, t_obs=T0 + 12 * NS)
+        ev2 = _event(n=5, t_prev=T0 + 100 * NS, t_obs=T0 + 112 * NS)
+        tc.join_books([ev1, ev2], {SID: _mapping()}, tc.book_series(rows))
+        assert ev1["move_next_round"] is None and ev1["next_round_gap_s"] == 88.0
+
+    def test_next_map_or_series_is_not_a_next_round(self):
+        # A later event of a DIFFERENT map (or series) must not bound this event.
+        rows1 = [_bbo(T0 - 2 * NS, 0.49, 0.51), _bbo(T0 + 5 * NS, 0.51, 0.53)]
+        ev1 = _event(n=4, t_prev=T0, t_obs=T0 + 12 * NS)
+        tc.join_books([ev1], {SID: _mapping()}, tc.book_series(rows1))
+        assert ev1["move_next_round"] is None and ev1["next_round_gap_s"] is None
+        # Same on the series axis: same map_number, different series_id.
+        other_sid = "2999840"
+        other_slug = "astatc-cs2-vexar-falcons-2026-09-03-map1-B"
+        rows2 = [_bbo(T0 - 2 * NS, 0.49, 0.51, slug=other_slug),
+                 _bbo(T0 + 5 * NS, 0.51, 0.53, slug=other_slug),
+                 _bbo(T0 + 90 * NS, 0.55, 0.57, slug=other_slug)]
+        ev1 = _event(n=4, t_prev=T0, t_obs=T0 + 12 * NS)
+        ev2 = _event(n=5, t_prev=T0 + 100 * NS, t_obs=T0 + 112 * NS)
+        ev2["series_id"] = other_sid
+        mapping = _mapping()
+        other_mapping = {**mapping, "grid_series_id": other_sid,
+                         "us_markets": {"map1": {**mapping["us_markets"]["map1"],
+                                                 "market_slug": other_slug}}}
+        tc.join_books([ev2, ev1], {SID: mapping, other_sid: other_mapping},
+                      tc.book_series(rows1 + rows2))
+        assert ev1["move_next_round"] is None and ev1["next_round_gap_s"] is None
+
+    def test_summary_next_round_block_and_render_section(self):
+        evs = []
+        for i, mv in enumerate([0.04, 0.02, 0.00, -0.03]):
+            evs.append({**_event(n=[4, 8, 12, 16][i], t_obs=T0 + i * NS),
+                        "series_id": f"s{i % 2}", "outcome": "moved", "us_side": "long",
+                        "move_next_round": mv, "next_round_gap_s": 90.0,
+                        "lead_vs_obs_s": 1.0, "lead_vs_prev_s": 2.0,
+                        "direction_agrees": True})
+        s = tc.summarize(DAY, evs)
+        blk = s["next_round"]
+        assert blk["n"] == 4 and blk["n_with_row"] == 4
+        assert blk["mean_oriented"]["n"] == 4 and blk["mean_oriented"]["n_series"] == 2
+        assert blk["mean_oriented"]["point"] == pytest.approx(0.0075)
+        # share with move_next_round >= +0.03: only 0.04 qualifies -> 1/4
+        assert blk["share_ge_3t"] == 0.25
+        # agreement among NONZERO (0.04, 0.02, -0.03): 2/3 -> 0.667, n_nonzero=3
+        assert blk["direction_agreement_rate"] == 0.667 and blk["n_nonzero"] == 3
+        text = tc.render(s)
+        assert "next-round-bounded move" in text
+        assert "move_next_round >= +0.03" in text and "n_nonzero=3" in text
+        # the section sits directly after the first >=3-tick move section
+        assert text.index("first >=3-tick move") < text.index("next-round-bounded move") \
+            < text.index("by map phase")
