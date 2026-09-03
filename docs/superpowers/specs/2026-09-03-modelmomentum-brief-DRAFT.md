@@ -213,3 +213,17 @@ shock) with an execution-realism gate (depth-limited taker fill at the
 stale quote before it disappears), which is the H-MAPENTRY1 thesis
 restricted to shocks — and H-MAPENTRY1 is where fill selection ate the
 paper edge. Decide after the post-shock diagnostics land.
+
+## Premise update 2 (17:10 PDT, Claude) — recommendation: do not register on this evidence
+
+The post-shock diagnostics landed (anchor-trace doc, 2026-09-03 section):
+the entire in-sample edge sits in entries whose book never came within 5pt
+of the model before resolution (95% win, +0.55 to +0.64 edge) — books with
+no depth (86–92% of shock rows carry none; ~10 contracts where present).
+The books that were alive enough to reprice ran negative (−2.6pt DOWN,
+−33pt UP). There is no quote to hit and, where there is one, the model is
+the side that is wrong. §1's expectation cannot be met by a depth-limited
+taker fill because the population with depth is the negative one. Claude's
+recommendation: close this draft; the reusable output is §3 (depth-limited
+fills as the only admissible execution model) and §5 (the artifact checks,
+now confirmed as the right ones). The user decides.

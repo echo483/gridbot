@@ -463,11 +463,15 @@ Only the quintile figure is the bar.
    [+0.08, +0.30] is significant; UP->long +0.15 [-0.03, +0.33] is positive
    but NOT significant (deepseek-pro review F8: the fade's asymmetry is
    neither confirmed nor refuted). Both point estimates run TOWARD the
-   model after a shock — the book under-reacts — the same mechanism the
-   timing chain found. Holdout starved (14/12 vs 40/15). Open caveats:
-   staleness gate may select dead books; taker price has no size check;
-   NOTE6 fill selection. H-MODELMOMENTUM1 brief + adversarial review
-   dispatched; REGISTRATION IS THE USER'S CALL. No tests yet (queued).
+   model after a shock. THEN the review diagnostics (same evening, anchor-
+   trace doc): the whole edge sits in books that NEVER reprice before
+   resolution (95% win, +0.55..+0.64) and carry no depth (86-92% of shock
+   rows); the books alive enough to reprice run NEGATIVE (-2.6pt DOWN,
+   -33pt UP). Dead-book artifact — the second instance of NOTE6's rule
+   (a backtest number without a depth/fill model is not a number). Fade
+   dead, momentum dead; H-MODELMOMENTUM1 draft carries a close
+   recommendation; THE USER DECIDES. Timing chain agrees: the book does
+   not move toward p_map within a round (Addendum 3). No tests yet.
 15. Real-order fill statistics re-cut on RESTED orders only (NOTE7):
    timing_profile quote lifetimes, entry_quality fills tagging, nightly
    placed/filled counts. The NOTE6 proxy fill-conditional edge is unaffected.

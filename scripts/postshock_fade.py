@@ -114,6 +114,9 @@ OFFSET_CAP_S = 30            # fills/marks later than +30s are outside the mecha
 MAKER_TICK = 0.01            # maker posts one tick better than the taker price
 MAKER_TTL_S = 150            # standing MAKER_TTL_S (NOTE6 fill proxy window)
 
+# REVIEW diagnostics (describe-only; do not gate anything)
+CONVERGE_WITHIN_15S = 15.0   # converge inside 15s => could not hit at shock px (R1 look-ahead)
+
 # §1.4 statistics
 BOOTSTRAP_N = 1000
 BOOT_SEED = 17               # CROSSIN1 continuity
@@ -307,6 +310,61 @@ def _persistence_ok(
     return False
 
 
+def _converge_s(
+    arm: str,
+    seq: list[dict],
+    ts0: int,
+    terminal: int | None,
+) -> float | None:
+    """Seconds from the shock to the FIRST later live quote (before the
+    terminal cutoff) whose arm gap falls below the persistence threshold
+    (< 0.05) — i.e. the book converges back within 5pt of p_map.  None when
+    it never converges before terminal.  REVIEW finding 3 (the staleness +
+    persistence gates may SELECT dead books that never converge) and finding 1
+    (a book converging inside ~15s is one we could NOT have hit at the shock
+    price — look-ahead)."""
+    for r in seq:
+        if r["ts_ns"] <= ts0:
+            continue
+        if terminal is not None and r["ts_ns"] >= terminal:
+            continue
+        top = book_top(r)
+        p = _finite(r.get("p_map"))
+        if top is None or p is None:
+            continue
+        if arm_gap(arm, top[0], top[1], p) < PERSIST_GATE:
+            return round((r["ts_ns"] - ts0) / NS_PER_S, 6)
+    return None
+
+
+def _persist_any_ok(
+    arm: str,
+    seq: list[dict],
+    ts0: int,
+    terminal: int | None,
+) -> bool:
+    """Persistence under the ANY-quote reading (finding 6): True iff at least
+    one live quote within 45s shows gap >= 0.05, versus the pinned NEXT-quote
+    rule (the FIRST live quote decides).  ANY is strictly looser (NEXT ⊆ ANY),
+    so every surviving entry (which passed NEXT) has persist_any_ok == True —
+    the flip diagnostic is a structural sanity check, not a discriminator."""
+    hi = ts0 + PERSIST_WINDOW_S * NS_PER_S
+    for r in seq:
+        if r["ts_ns"] <= ts0:
+            continue
+        if r["ts_ns"] > hi:
+            break
+        if terminal is not None and r["ts_ns"] >= terminal:
+            continue
+        top = book_top(r)
+        p = _finite(r.get("p_map"))
+        if top is None or p is None:
+            continue
+        if arm_gap(arm, top[0], top[1], p) >= PERSIST_GATE:
+            return True
+    return False
+
+
 def simulate_entries(
     shocks: list[dict],
     seq_index: SeqIndex,
@@ -385,6 +443,22 @@ def simulate_entries(
             if not _persistence_ok(arm, seq, ts0, terminal):
                 continue  # failed persistence does NOT consume the dedup slot
             entry_px = taker_price(arm, bid, ask)
+            # REVIEW diagnostics (findings 1/3/5/6/9) — additive, describe-only.
+            # Taker side size mirrors taker_price's side choice: DOWN sells Yes
+            # into the BID (bid_size); UP buys Yes at the ASK (ask_size).  Sizes
+            # live in the side-channel sr["book"] (None on rows without a book).
+            book = sr.get("book")
+            top_size = None
+            if isinstance(book, dict):
+                size_field = "bid_size" if arm == "down" else "ask_size"
+                sz = _finite(book.get(size_field))
+                if sz is not None:
+                    top_size = sz
+            top_size_usd = (round(top_size * entry_px, 6)
+                            if top_size is not None else None)
+            converge_s = _converge_s(arm, seq, ts0, terminal)
+            persist_any = _persist_any_ok(arm, seq, ts0, terminal)
+            sr_ts_delta_ns = sr["ts_ns"] - ts0
             persisted.append({
                 "arm": arm,
                 "series_id": str(rec["series_id"]),
@@ -401,6 +475,13 @@ def simulate_entries(
                 "entry_price": entry_px,
                 "maker_post_price": round(entry_px - MAKER_TICK, 6),
                 "staleness_gap": round(arm_gap(arm, bid, ask, p), 6),
+                "top_size": top_size,
+                "top_size_usd": top_size_usd,
+                "converge_s": converge_s,
+                "converge_within_15s": (
+                    converge_s is not None and converge_s <= CONVERGE_WITHIN_15S),
+                "persist_any_ok": persist_any,
+                "sr_ts_delta_ns": sr_ts_delta_ns,
                 "_seq_key": list(_seq_key(sr)),
             })
         # Dedup per arm (the reference funnel dedups within each arm): ONE
@@ -667,6 +748,105 @@ def summarize(entries: list[dict]) -> dict:
     }
 
 
+def _pct(vals: list[float], q: float) -> float | None:
+    """Linear-interpolation percentile (numpy 'linear' default); None if empty."""
+    if not vals:
+        return None
+    s = sorted(vals)
+    n = len(s)
+    if n == 1:
+        return round(s[0], 6)
+    pos = q * (n - 1)
+    lo, hi = math.floor(pos), math.ceil(pos)
+    if lo == hi:
+        return round(s[lo], 6)
+    frac = pos - lo
+    return round(s[lo] + frac * (s[hi] - s[lo]), 6)
+
+
+def _plain_stats(es: list[dict]) -> dict:
+    """Plain win rate + mean settled edge over resolved entries (no CI)."""
+    res = [e for e in es if e["won"] is not None]
+    if not res:
+        return {"n": 0, "n_won": 0, "win_rate": None, "mean_settled_edge": None}
+    w = sum(1 for e in res if e["won"])
+    edges = [(1.0 if e["won"] else 0.0) - e["entry_price"] for e in res]
+    return {
+        "n": len(res),
+        "n_won": w,
+        "win_rate": w / len(res),
+        "mean_settled_edge": sum(edges) / len(edges),
+    }
+
+
+def diagnostics(entries: list[dict]) -> dict:
+    """Describe-only review diagnostics (findings 1/3/4/5/6/9).
+
+    Everything here MEASURES and prints — nothing gates.  The funnel and arm
+    tables are unchanged; these counters answer the adversarial review's
+    checks that the aggregate JSON could not (no per-entry rows)."""
+    def key(e):
+        return (e["series_id"], e["map_number"], e["market_slug"])
+
+    per_arm: dict[str, dict] = {}
+    sr_ts_delta_nz = 0
+    for arm in ("down", "up"):
+        es = [e for e in entries if e["arm"] == arm]
+        n = len(es)
+        sr_ts_delta_nz += sum(1 for e in es if e.get("sr_ts_delta_ns", 0) != 0)
+        top_sizes = [e["top_size"] for e in es if e["top_size"] is not None]
+        n_top_none = sum(1 for e in es if e["top_size"] is None)
+        n_lt5 = sum(1 for e in es
+                    if e["top_size_usd"] is not None and e["top_size_usd"] < 5.0)
+        conv = [e["converge_s"] for e in es if e["converge_s"] is not None]
+        n_never = sum(1 for e in es if e["converge_s"] is None)
+        n_within15 = sum(1 for e in es if e["converge_within_15s"])
+        converged = [e for e in es if e["converge_s"] is not None]
+        never = [e for e in es if e["converge_s"] is None]
+        n_flips = sum(1 for e in es if not e["persist_any_ok"])
+        per_arm[arm] = {
+            "n_entries": n,
+            "top_size_p10": _pct(top_sizes, 0.10),
+            "top_size_p50": _pct(top_sizes, 0.50),
+            "top_size_p90": _pct(top_sizes, 0.90),
+            "n_top_size_usd_lt5": n_lt5,
+            "share_top_size_usd_lt5": (n_lt5 / n) if n else None,
+            "n_top_size_none": n_top_none,
+            "share_top_size_none": (n_top_none / n) if n else None,
+            "n_never_converge": n_never,
+            "share_never_converge": (n_never / n) if n else None,
+            "converge_s_p10": _pct(conv, 0.10),
+            "converge_s_p50": _pct(conv, 0.50),
+            "converge_s_p90": _pct(conv, 0.90),
+            "n_converge_within_15s": n_within15,
+            "share_converge_within_15s": (n_within15 / n) if n else None,
+            "converged": _plain_stats(converged),
+            "never_converged": _plain_stats(never),
+            "n_persist_flips": n_flips,
+        }
+
+    down = [e for e in entries if e["arm"] == "down"]
+    up = [e for e in entries if e["arm"] == "up"]
+    dk, uk = {key(e) for e in down}, {key(e) for e in up}
+    overlap = dk & uk
+    by_key: dict[tuple, dict] = {}
+    for e in sorted(entries, key=lambda x: (x["shock_ts_ns"], x["series_id"])):
+        by_key.setdefault(key(e), e)
+    gd = list(by_key.values())
+    return {
+        "per_arm": per_arm,
+        "cross_arm_overlap_keys": len(overlap),
+        "global_dedup": {
+            "n_entries": len(gd),
+            "n_down_entries": sum(1 for e in gd if e["arm"] == "down"),
+            "n_up_entries": sum(1 for e in gd if e["arm"] == "up"),
+            "down": _plain_stats([e for e in gd if e["arm"] == "down"]),
+            "up": _plain_stats([e for e in gd if e["arm"] == "up"]),
+        },
+        "sr_ts_delta_ns_nonzero": sr_ts_delta_nz,
+    }
+
+
 # --------------------------------------------------------------------------
 # entries subcommand
 
@@ -699,6 +879,7 @@ def run_entries(mode: str, mapentry_pattern: str | None = None) -> dict:
             [e for e in entries if e["arm"] == a], seq_index, terminal_by_map)
 
     cand = [e for e in entries if e["arm"] == "down"]
+    diag = diagnostics(entries)
     return {
         "hypothesis_id": "H-POSTSHOCKFADE1",
         "mode": mode,
@@ -732,6 +913,10 @@ def run_entries(mode: str, mapentry_pattern: str | None = None) -> dict:
         "funnel": funnel,
         "sequence_resolution": seq_res,
         "arms": arms,
+        "diagnostics": diag,
+        "entries": [
+            {k: v for k, v in e.items() if k != "_seq_key"} for e in entries
+        ],
         "n_map_winners": len(winners),
         "holdout_accrual": {
             "n_candidate_entries_total": arms["down"]["n_entries"],
@@ -778,6 +963,63 @@ def arm_table(arms: dict) -> str:
                 f"+{OFFSET_CAP_S}s cap) "
                 f"{fmt(m['mean_settled_edge_filled_within_cap'])}"
             )
+    return "\n".join(lines)
+
+
+def fmt_wr(x):
+    return "n/a" if x is None else f"{x * 100:.1f}%"
+
+
+def fmt_share(x):
+    return "n/a" if x is None else f"{x * 100:.1f}%"
+
+
+def print_diagnostics(diag: dict) -> str:
+    """Print the REVIEW DIAGNOSTICS block (describe-only, findings 1/3/4/5/6/9)."""
+    pa = diag["per_arm"]
+    lines = ["REVIEW DIAGNOSTICS (describe-only; findings 1/3/4/5/6/9)"]
+    for arm, label in (("down", "DOWN candidate"), ("up", "UP control")):
+        a = pa[arm]
+        n = a["n_entries"]
+        lines.append(
+            f"  [{label}] entries {n}\n"
+            f"    top_size p10/p50/p90: {fmt(a['top_size_p10'], 1)} / "
+            f"{fmt(a['top_size_p50'], 1)} / {fmt(a['top_size_p90'], 1)} "
+            f"contracts\n"
+            f"    top_size_usd<5 {fmt_share(a['share_top_size_usd_lt5'])} "
+            f"({a['n_top_size_usd_lt5']}/{n})   top_size None "
+            f"{fmt_share(a['share_top_size_none'])} ({a['n_top_size_none']}/{n})\n"
+            f"    never-converge {a['n_never_converge']}/{n} "
+            f"({fmt_share(a['share_never_converge'])})\n"
+            f"    converge_s p10/p50/p90 (convergers): "
+            f"{fmt(a['converge_s_p10'], 1)} / {fmt(a['converge_s_p50'], 1)} / "
+            f"{fmt(a['converge_s_p90'], 1)} s\n"
+            f"    converge_within_15s {a['n_converge_within_15s']}/{n} "
+            f"({fmt_share(a['share_converge_within_15s'])})\n"
+            f"    converged: n={a['converged']['n']} win "
+            f"{fmt_wr(a['converged']['win_rate'])} edge "
+            f"{fmt(a['converged']['mean_settled_edge'], 4)} | "
+            f"never: n={a['never_converged']['n']} win "
+            f"{fmt_wr(a['never_converged']['win_rate'])} edge "
+            f"{fmt(a['never_converged']['mean_settled_edge'], 4)}\n"
+            f"    persistence flips (persist_any_ok != pinned NEXT): "
+            f"{a['n_persist_flips']}"
+        )
+    g = diag["global_dedup"]
+    lines.append(
+        f"  cross-arm overlap: {diag['cross_arm_overlap_keys']} "
+        f"(series_id,map_number,market_slug) keys in BOTH arms"
+    )
+    lines.append(
+        f"  global-dedup (earliest shock per key): {g['n_entries']} entries — "
+        f"DOWN {g['n_down_entries']} (win {fmt_wr(g['down']['win_rate'])} edge "
+        f"{fmt(g['down']['mean_settled_edge'], 4)}) | "
+        f"UP {g['n_up_entries']} (win {fmt_wr(g['up']['win_rate'])} edge "
+        f"{fmt(g['up']['mean_settled_edge'], 4)})"
+    )
+    lines.append(
+        f"  sr_ts_delta_ns nonzero: {diag['sr_ts_delta_ns_nonzero']} (expect 0)"
+    )
     return "\n".join(lines)
 
 
@@ -1047,6 +1289,8 @@ def main() -> int:
               f"(full JSON written to {out_json}).")
         return 0
     print(arm_table(res["arms"]))
+    print()
+    print(print_diagnostics(res["diagnostics"]))
     print(f"\nJSON: {out_json}")
     return 0
 

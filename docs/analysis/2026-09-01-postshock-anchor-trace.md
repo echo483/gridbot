@@ -395,3 +395,48 @@ proceed against 67/37 (anchor corpus) or 72/38 (current corpus), not 108/70.
 — gridbot-reasoner, 2026-09-01. All runs executed this session (read-only;
 no writes beyond this file, no src/, no scripts/, no commits). Transcript
 evidence: session 20260901_031304_d9fdf2, msgs 284–287.
+
+## 2026-09-03 eve — review diagnostics: the in-sample edge is a dead-book artifact
+
+After the reconcile (funnel reproduced to the digit: DOWN 72/58, UP 38/35),
+the deepseek-v4-pro adversarial review asked for per-entry checks; the
+reasoner lane added them (`entries --design` → "REVIEW DIAGNOSTICS", all
+describe-only, funnel and arm tables unchanged). Design pool, in-sample:
+
+| | DOWN candidate (72) | UP control (38) |
+|---|---|---|
+| top-of-book size present on the shock row | 10/72 (14%) | 3/38 (8%) |
+| size when present, p50 | 9.5 contracts | 11 contracts |
+| never converges to within 5pt of p_map before the map ends | 23 (32%) | 21 (55%) |
+| convergers: time to converge p10/p50/p90 | 158 / 487 / 1226 s | 198 / 584 / 1268 s |
+| converges within 15s (our pipe) | 0 | 0 |
+| **never-converged entries: win / settled edge** | **95.7% / +0.636** | **95.0% / +0.550** |
+| **converged entries: win / settled edge** | **45.8% / −0.026** | **17.6% / −0.327** |
+| same (series, map, slug) in BOTH arms | 10 keys | |
+| global dedup (earliest shock wins) | 100 entries: DOWN 64 (61.9%, +0.187), UP 36 (60.0%, +0.154) | |
+| priced row vs leak-guard timestamp mismatches | 0 | |
+
+**Reading.** The whole positive edge sits in the entries whose book never
+came within 5pt of the model before resolution — quotes nobody was
+maintaining. On those rows the "taker fill" is fiction: 86–92% of shock rows
+carry no depth at all, and where depth exists the top is ~10 contracts. The
+books that were alive enough to reprice ran NEGATIVE (−2.6pt DOWN, −33pt UP):
+when a real counterparty disagrees with p_map by ≥10pt after a shock and then
+reprices, the model was the one that was wrong — adverse selection in
+calibration space, exactly NOTE5/NOTE6. Ten markets entered both arms (the
+review's finding 4), but global dedup barely moves the aggregates; the
+split, not the dedup, is the story. Convergence, where it happens, takes
+minutes, so the look-ahead concern (finding 1) does not bite at this
+cadence — it doesn't need to: there is nothing to hit.
+
+**Verdict on the instrument.** H-POSTSHOCKFADE1's design-pool numbers are
+not evidence of edge in either direction. The fade is dead (its control
+expectation failed), and the momentum reading of the same numbers is dead
+too (the momentum lives only in unquoted books). No holdout verdict is
+needed to say so; the holdout stays starved regardless. Second instance of
+the corpus rule first seen in NOTE6: **a backtest number without a depth /
+fill model is not a number.** Carry to gridbot-lab as a design constraint
+(every backtest fill must be depth-limited and quote-lifetime-aware).
+
+Repro: `uv run python scripts/postshock_fade.py entries --design`; per-entry
+rows now ride in the JSON under `entries`.
