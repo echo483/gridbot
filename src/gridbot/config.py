@@ -80,12 +80,24 @@ class MissingSecret(RuntimeError):
 # deletion kill switch must stay bounded even when the keyring is down).
 # A healthy keyring answering None (secret deleted) clears the entry.
 _SECRET_CACHE: dict[str, tuple[str, float]] = {}
-# name -> (worker thread, result box) of a read whose result is not harvested yet
-_KEYRING_INFLIGHT: dict[str, tuple[threading.Thread, dict]] = {}
+# name -> (worker thread, result box, started_at) of a read whose result is not
+# harvested yet
+_KEYRING_INFLIGHT: dict[str, tuple[threading.Thread, dict, float]] = {}
+# Reads abandoned because their D-Bus call never returned (2026-09-03: one
+# such call wedged the capture daemon for ~6h — every later _secret() saw
+# "read still blocked" and never asked the keyring again, while a fresh
+# process could read the key in 0.1s). After KEYRING_ABANDON_S a blocked
+# worker is dropped from the inflight table (it stays a daemon thread) and a
+# NEW read is issued; at most KEYRING_MAX_ABANDONED such threads may be alive
+# at once — beyond that we keep failing closed and leave recovery to the
+# health-check restart.
+_ABANDONED: list[threading.Thread] = []
 _DEGRADED: set[str] = set()  # names being served from cache (log transitions once)
 _SECRET_LOCK = threading.Lock()
 KEYRING_TIMEOUT_S = 5.0
 KEYRING_CACHE_MAX_AGE_S = 600.0
+KEYRING_ABANDON_S = 120.0
+KEYRING_MAX_ABANDONED = 8
 
 log = logging.getLogger("gridbot.config")
 
@@ -119,19 +131,31 @@ def _secret(name: str) -> str | None:
     with _SECRET_LOCK:
         prior = _KEYRING_INFLIGHT.get(name)
         if prior is not None:
-            prior_worker, prior_box = prior
+            prior_worker, prior_box, started_at = prior
             if prior_worker.is_alive():
-                # A previous read is still stuck in D-Bus — don't stack
-                # another blocked thread; serve degraded from cache.
-                return _from_cache(name, "read still blocked")
-            # Harvest a late completion: a keyring that answers slower than
-            # the timeout but SUCCEEDS must still refresh the cache, or a
-            # consistently-slow-but-healthy keyring disarms the engine at
-            # the cache age bound (code-review f15).
-            _KEYRING_INFLIGHT.pop(name, None)
-            val = _finish_read(name, prior_box)
-            if val is not None:
-                return val
+                _ABANDONED[:] = [t for t in _ABANDONED if t.is_alive()]
+                if (time.monotonic() - started_at < KEYRING_ABANDON_S
+                        or len(_ABANDONED) >= KEYRING_MAX_ABANDONED):
+                    # A previous read is still stuck in D-Bus — don't stack
+                    # another blocked thread; serve degraded from cache.
+                    return _from_cache(name, "read still blocked")
+                # Wedged for too long: abandon it and ask the keyring again.
+                # A read that succeeds now (the daemon came back) refreshes
+                # the cache and un-degrades the process without a restart.
+                _ABANDONED.append(prior_worker)
+                _KEYRING_INFLIGHT.pop(name, None)
+                log.warning("secret %s: abandoning a keyring read blocked for "
+                            ">%.0fs; issuing a fresh read (%d abandoned alive)",
+                            name, KEYRING_ABANDON_S, len(_ABANDONED))
+            else:
+                # Harvest a late completion: a keyring that answers slower than
+                # the timeout but SUCCEEDS must still refresh the cache, or a
+                # consistently-slow-but-healthy keyring disarms the engine at
+                # the cache age bound (code-review f15).
+                _KEYRING_INFLIGHT.pop(name, None)
+                val = _finish_read(name, prior_box)
+                if val is not None:
+                    return val
 
         box: dict[str, object] = {}
 
@@ -144,7 +168,7 @@ def _secret(name: str) -> str | None:
                 box["exc"] = exc
 
         worker = threading.Thread(target=_read, daemon=True, name=f"keyring:{name}")
-        _KEYRING_INFLIGHT[name] = (worker, box)
+        _KEYRING_INFLIGHT[name] = (worker, box, time.monotonic())
         worker.start()
         worker.join(KEYRING_TIMEOUT_S)
         if worker.is_alive():

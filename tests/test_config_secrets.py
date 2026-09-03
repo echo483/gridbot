@@ -123,3 +123,53 @@ def test_healthy_none_clears_cache_and_disarms(monkeypatch) -> None:
         _fake_keyring(lambda s, n: (_ for _ in ()).throw(RuntimeError("out"))),
     )
     assert config._secret(NAME) is None
+
+
+def test_wedged_read_is_abandoned_and_a_fresh_read_recovers(monkeypatch) -> None:
+    """2026-09-03: one D-Bus call that never returned blinded the capture
+    daemon for ~6h — every later _secret() saw the stuck worker, said "read
+    still blocked", and never asked the keyring again, while a fresh process
+    read the key in 0.1s. After KEYRING_ABANDON_S the stuck worker must be
+    abandoned and a NEW read issued; when the keyring answers, the process
+    recovers in place."""
+    import threading
+
+    gate = threading.Event()
+    calls = {"n": 0}
+
+    def get_password(service, name):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            gate.wait()  # the first read never returns (wedged D-Bus)
+            return None
+        return "fresh"
+
+    monkeypatch.setitem(sys.modules, "keyring", _fake_keyring(get_password))
+    monkeypatch.setattr(config, "KEYRING_ABANDON_S", 120.0)
+    config._ABANDONED.clear()
+    assert config._secret(NAME) is None          # times out, nothing cached
+    assert config._secret(NAME) is None          # still blocked, no new read
+    assert calls["n"] == 1
+    monkeypatch.setattr(config, "KEYRING_ABANDON_S", 0.0)  # window elapsed
+    assert config._secret(NAME) == "fresh"       # abandoned + fresh read
+    assert calls["n"] == 2
+    gate.set()
+
+
+def test_abandonment_is_capped(monkeypatch) -> None:
+    import threading
+
+    gate = threading.Event()
+
+    def get_password(service, name):
+        gate.wait()
+
+    monkeypatch.setitem(sys.modules, "keyring", _fake_keyring(get_password))
+    monkeypatch.setattr(config, "KEYRING_ABANDON_S", 0.0)
+    monkeypatch.setattr(config, "KEYRING_MAX_ABANDONED", 2)
+    config._ABANDONED.clear()
+    for _ in range(6):
+        assert config._secret(NAME) is None
+    alive = sum(1 for th in threading.enumerate() if th.name == f"keyring:{NAME}")
+    assert alive <= 3  # 2 abandoned + the current inflight one — never unbounded
+    gate.set()

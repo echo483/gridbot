@@ -1,0 +1,19 @@
+# PMUS book recorder — timing-chain Part A (spec 2026-09-03). Read-only
+# diagnostic instrument: continuous BBO on the Polymarket US books we trade,
+# joined offline to GRID round ends by scripts/timing_chain.py. Public
+# gateway, no credentials, never places orders.
+# Evidence rows -> data/pmus/books-YYYYMMDD.jsonl.
+[Unit]
+Description=gridbot PMUS book recorder (read-only public BBO; timing evidence)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/home/ops/gridbot
+ExecStart=/home/ops/.local/bin/uv run python -m gridbot.capture.pmus_books
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

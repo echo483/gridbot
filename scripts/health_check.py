@@ -158,6 +158,27 @@ def _keyring_summary_decision(
     return all_problems, summary_problems, suppress
 
 
+STALE_RESTART_COOLDOWN_S = 3600.0
+
+
+def _stale_grid_restart_wanted(grid_age: float, capture_active: bool, graphical: bool,
+                               last_restart: float, now: float,
+                               fresh_s: float = GRID_FRESH_S,
+                               cooldown_s: float = STALE_RESTART_COOLDOWN_S) -> bool:
+    """Pure decision: restart an ACTIVE capture unit whose GRID tape went stale.
+
+    Never outside the graphical session (a keyring-anchored unit would come
+    back locked and silently dark), never more than once per cooldown, and
+    only while the unit is active — an inactive unit is the DOWN branch's job.
+    """
+    return (
+        grid_age > fresh_s
+        and capture_active
+        and graphical
+        and now - last_restart > cooldown_s
+    )
+
+
 def _problems(prev: dict) -> tuple[list[str], dict]:
     problems: list[str] = []
     now = time.time()
@@ -196,6 +217,25 @@ def _problems(prev: dict) -> tuple[list[str], dict]:
     grid_age = now - _newest_mtime(config.DATA_DIR / "grid")
     if grid_age > GRID_FRESH_S:
         problems.append(f"GRID data stale ({int(grid_age / 60)}m)")
+        # 2026-09-03: capture stayed ACTIVE (heartbeats every minute) while
+        # every GRID poll failed for ~6h — its in-process keyring read had
+        # wedged — and this check only alerted. A fresh process read the key
+        # in 0.1s. So: stale GRID data with the unit active is a restart
+        # case, once per hour, inside the graphical session only (a locked
+        # keyring makes the restarted unit fail fast -> the DOWN branch above
+        # escalates on the next pass).
+        if _stale_grid_restart_wanted(
+            grid_age, _is_active("gridbot-capture.service"), graphical,
+            healed_at.get("gridbot-capture.service:stale", 0), now,
+        ):
+            if _restart("gridbot-capture.service"):
+                _send(f"🩹 GRID data stale {int(grid_age / 60)}m with capture ACTIVE "
+                      "(wedged keyring read?) — capture restarted")
+            else:
+                problems.append("capture restart after stale GRID data FAILED")
+                _escalate("gridbot-capture.service",
+                          "stale GRID data; restart did not bring the unit up")
+            healed_at["gridbot-capture.service:stale"] = now
     import shutil
 
     free_gib = shutil.disk_usage(config.DATA_DIR).free // 2**30

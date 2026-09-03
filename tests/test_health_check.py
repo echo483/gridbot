@@ -135,3 +135,16 @@ def test_keyring_rc0_or_none_changes_nothing():
         False,
     )
     assert health_check._keyring_summary_decision(None, []) == ([], [], False)
+
+
+def test_stale_grid_restart_only_when_active_graphical_and_cooled():
+    import health_check as hc
+
+    now = 10_000.0
+    stale = hc.GRID_FRESH_S + 60
+    assert hc._stale_grid_restart_wanted(stale, True, True, 0.0, now)
+    assert not hc._stale_grid_restart_wanted(60.0, True, True, 0.0, now)      # fresh
+    assert not hc._stale_grid_restart_wanted(stale, False, True, 0.0, now)    # DOWN branch owns it
+    assert not hc._stale_grid_restart_wanted(stale, True, False, 0.0, now)    # no graphical session
+    assert not hc._stale_grid_restart_wanted(stale, True, True, now - 600, now)  # cooldown
+    assert hc._stale_grid_restart_wanted(stale, True, True, now - 3601, now)
