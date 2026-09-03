@@ -161,3 +161,43 @@ series-clustered CI; (iii) the same at +30/60/120s; (iv) all of it by |d| bucket
 (≥ 4pt is the entry band). A projected mean above zero with the CI clear of it
 is the venue-side evidence a latency / model-momentum instrument would be
 pre-registered against. Until then nothing here is a trading number.
+
+## Addendum 3 (17:05 PDT) — model-momentum read: NULL at the round horizon
+
+Orienting every move on the MODEL instead of the round (`toward_model_*` =
+raw Yes-price move projected on the sign of p_yes − mid_before, p_yes from
+the event's next-round H-MODELENTRY1 row; 292 events joined, 11 series):
+
+| horizon | entry band (|gap| ≥ 0.04), n | mean toward-model [95% CI] | share > 0 (nonzero) |
+|---|---|---|---|
+| +30s | 237 | +0.003 [−0.003, +0.010] | 0.535 |
+| +60s | 237 | +0.003 [−0.006, +0.011] | 0.536 |
+| +120s | 232 | −0.005 [−0.014, +0.004] | 0.473 |
+| next round | 233 | −0.003 [−0.013, +0.007] | 0.451 |
+
+- 83% of model-joined events sit in the entry band: the model disagrees with
+  the book by ≥ 4pt almost always after a round end (the NOTE5 overconfidence
+  population, seen from the tape).
+- Every interval straddles zero; share-positive is a coin flip. **The book
+  does not converge toward p_map within a round on this tape.** Whatever the
+  model knows after a round, the book does not price it in the next two
+  minutes — nor does it price the opposite.
+
+**What this does to the mechanism.** "The book lags the model" survives only
+at the SETTLEMENT horizon: the post-shock instrument's +19pt settled edge
+(DOWN arm, in-sample) is the model being right more often than the book on
+the resolved outcome, not a reprice we could capture in minutes. That is the
+H-MAPENTRY1 thesis (enter ≥ 4pt under fair, hold to settlement) restricted
+to fresh ≥ 25pt shocks — and H-MAPENTRY1 is where fill selection ate the
+paper edge. So the trading question collapses to one: at the moment of a
+large fresh model move, can we actually fill at the stale quote, in size,
+before it disappears — and is the fill population the one that wins? The
+post-shock diagnostics in flight (top-of-book size, time-to-convergence vs
+our ~15s pipe, never-converged share, cross-arm overlap) answer exactly
+that. The H-MODELMOMENTUM1 draft brief's premise ("captures part of the gap"
+as a reprice) is amended accordingly: the claim, if kept, is a settlement-
+horizon claim with an execution-realism gate, not a momentum scalp.
+
+Measurement note: `toward_model` is None when |gap| < 0.005 (no direction) or
+when the horizon has no covered observation; n and n_series ride with every
+interval as before.

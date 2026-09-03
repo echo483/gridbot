@@ -45,6 +45,15 @@ every CI — never pooled without an interval.
 Step 3 — our own pipeline legs on the same events (instances, mapentry
 rows, order intents): reported where joinable, never imputed.
 
+Step 4 — model-momentum (Addendum 2). Because the book moves UP after every
+round end regardless of winner (catching up to the map, not pricing the
+round), each joined event is re-oriented toward the model's fair value:
+the round is the wrong event to orient on, so toward-model = raw move
+projected on the sign of (p_yes - mid_before), with p_yes = the model's
+map-probability for the Yes side from the event's next-round
+H-MODELENTRY1 row. Reported by |model_gap| bucket (>=0.04 is the entry
+band) per horizon.
+
 TRAP D2: ``lead_vs_obs_s`` is a LOWER bound on the true GRID lead — round
 ends are seen at poll granularity (12s live cadence) and the book at the 2s
 recorder cadence. Never compare it to the cs2agent-era intl 13-27s figure
@@ -86,6 +95,11 @@ COVERAGE_SLACK_S = 35.0        # recorder heartbeat (30s) + cycle jitter: a cove
 BOOTSTRAP_SEED = 17            # series-clustered CI resampling
 BOOTSTRAP_REPS = 1000
 INTENT_JOIN_WINDOW_S = 120.0  # an intent this long after its mapentry row is a different event
+MODEL_ENTRY_HID = "H-MODELENTRY1"    # the ONLY src_hypothesis_id carrying the model's q (D2)
+MODEL_DIR_EPS = 0.005                # |model_gap| below this counts as model_dir 0 (not tradable)
+MODEL_HORIZONS = ("30s", "60s", "120s", "next_round")      # move fields to project on model_dir
+MODEL_BUCKETS = ("all", "<0.02", "0.02-0.04", ">=0.04")    # by |model_gap|; >=0.04 is the entry band
+MODEL_ENTRY_BAND = 0.04              # |model_gap| >= this is the pre-registered entry band
 PHASES = (("early (round <= 6)", 1, 6), ("mid (7-18)", 7, 18), ("late (>= 19)", 19, 10**9))
 LEGS = (
     ("grid_rtt_ms", "GRID round trip (ss.ts_ns - req_ns)"),
@@ -446,6 +460,83 @@ def join_pipeline(events: list[dict], instances: list[dict], mapentries: list[di
             legs["total_ms"] = round((it_ts - ev["t_obs_ns"]) / 1e6, 1)
 
 
+def _model_bucket(g: float) -> str:
+    """|model_gap| bucket label; exactly 0.04 lands in the >=0.04 entry band."""
+    g = abs(g)
+    if g < 0.02:
+        return "<0.02"
+    if g < 0.04:
+        return "0.02-0.04"
+    return ">=0.04"
+
+
+def join_model(events: list[dict], mapentries: list[dict]) -> None:
+    """Re-orient every open event's move toward the MODEL's fair value (in place).
+
+    Addendum 2 (docs/analysis/2026-09-03-timing-chain-first-read.md): the book
+    moves UP ~1.6 ticks after a round end no matter which team won, so it is
+    not pricing rounds — it is catching up to the map state. The trading
+    question is therefore whether the book moves TOWARD the model's fair value,
+    so each joined event sheds "toward the round winner" and adopts "toward
+    q\".
+
+    The model read is the event's mapentry row evaluated for the NEXT round
+    (the same join ``join_pipeline`` does): row.round_number ==
+    ev.round_number + 1, same series_id (as str) and map_number, and
+    row.market_slug == ev.slug (rows with market_slug None are unmapped —
+    skip). Only src_hypothesis_id == "H-MODELENTRY1" rows carry the model's q
+    (TRAP D2); the event-lane fair values of H-MAPENTRY1-SLATE / H-ECONBUY1 /
+    H-MANADV1 / H-PISTOLCARRY1 are excluded. Earliest matching row by ts_ns
+    wins; p_map None -> no join.
+
+    TRAP D1: the ROW's us_side is about the row's team (the named/Yes side of
+    the row's slug) — never mix it with the EVENT's us_side, which is about the
+    round winner. p_yes = p_map if row.us_side == "long" else 1 - p_map. bid/
+    ask on the row are Yes prices (TRAP D4), unused here.
+    """
+    model_by: dict[tuple[str, int, int, str], list[dict]] = defaultdict(list)
+    for row in mapentries:
+        if row.get("type") != "mapentry" or row.get("src_hypothesis_id") != MODEL_ENTRY_HID:
+            continue
+        sid, rn, mn, slug = row.get("series_id"), row.get("round_number"), \
+            row.get("map_number"), row.get("market_slug")
+        ts = row.get("ts_ns")
+        if not (isinstance(ts, int) and isinstance(rn, int) and isinstance(mn, int)
+                and sid and slug and row.get("p_map") is not None):
+            continue
+        model_by[(str(sid), mn, rn, str(slug))].append(row)
+    for rows in model_by.values():
+        rows.sort(key=lambda x: x["ts_ns"])
+
+    for ev in events:
+        if ev["outcome"] not in ("moved", "no_move_300s"):
+            continue
+        rows = model_by.get((str(ev["series_id"]), ev["map_number"],
+                             ev["round_number"] + 1, str(ev.get("slug"))))
+        row = rows[0] if rows else None
+        if row is None:
+            ev["p_yes_model"] = ev["model_gap"] = ev["model_ts_ns"] = ev["model_dir"] = None
+            for h in MODEL_HORIZONS:
+                ev[f"toward_model_{h}"] = None
+            continue
+        p_map = row["p_map"]
+        p_yes = p_map if row.get("us_side") == "long" else 1 - p_map
+        ev["p_yes_model"] = round(p_yes, 4)
+        gap = round(p_yes - ev["mid_before"], 4)
+        ev["model_gap"] = gap
+        ev["model_ts_ns"] = row["ts_ns"]
+        md = 0 if abs(gap) < MODEL_DIR_EPS else (1 if gap > 0 else -1)
+        ev["model_dir"] = md
+        # RAW Yes-price move = oriented * (+1 if long else -1); then project on md.
+        ev_sign = 1.0 if ev["us_side"] == "long" else -1.0
+        for h in MODEL_HORIZONS:
+            oriented = ev.get(f"move_{h}")
+            if oriented is None or md == 0:
+                ev[f"toward_model_{h}"] = None
+            else:
+                ev[f"toward_model_{h}"] = round(ev_sign * oriented * md, 4)
+
+
 # --- summary + output --------------------------------------------------------
 
 
@@ -565,6 +656,41 @@ def _next_round_block(evs: list[dict]) -> dict:
     }
 
 
+def _model_momentum_block(evs: list[dict]) -> dict:
+    """Cross model-joined events: toward-model move by horizon and |model_gap| bucket.
+
+    ``model_gap`` = p_yes - mid_before (p_yes = q for the Yes side); toward-model
+    projection sign tracks WHERE the book is expected to go, not the round winner.
+    Buckets split by |model_gap| with the >=0.04 bucket as the entry band; the per-
+    bucket bootstrap CI is series-clustered like every other interval here.
+    """
+    joined = [ev for ev in evs if ev.get("p_yes_model") is not None]
+    by_horizon: dict[str, dict[str, dict]] = {}
+    for h in MODEL_HORIZONS:
+        per_bucket: dict[str, dict] = {}
+        for label in MODEL_BUCKETS:
+            members = joined if label == "all" else \
+                [ev for ev in joined if _model_bucket(abs(ev["model_gap"])) == label]
+            pairs = [(ev["series_id"], ev[f"toward_model_{h}"])
+                     for ev in members if ev.get(f"toward_model_{h}") is not None]
+            nonzero = [v for _, v in pairs if v != 0]
+            per_bucket[label] = {
+                "n": len(members),
+                "mean_toward_model": bootstrap_ci(pairs, "mean"),
+                "share_positive_nonzero": (None if not nonzero
+                                           else round(sum(1 for v in nonzero if v > 0)
+                                                      / len(nonzero), 3)),
+                "n_nonzero": len(nonzero),
+            }
+        by_horizon[h] = per_bucket
+    gap_ge_band = sum(1 for ev in joined if abs(ev["model_gap"]) >= MODEL_ENTRY_BAND)
+    return {
+        "n_joined_to_model": len(joined),
+        "by_horizon": by_horizon,
+        "share_gap_ge_0_04": (None if not joined else round(gap_ge_band / len(joined), 3)),
+    }
+
+
 def summarize(day: str, events: list[dict]) -> dict:
     outcomes = Counter(ev["outcome"] for ev in events)
     moved = [ev for ev in events if ev["outcome"] == "moved"]
@@ -583,6 +709,7 @@ def summarize(day: str, events: list[dict]) -> dict:
         "moved": _moved_block(moved),
         "moved3": _moved3_block(moved),
         "next_round": _next_round_block(oriented),
+        "model_momentum": _model_momentum_block(oriented),
         "horizons": {
             "n": len(oriented),
             "by_horizon": {f"{h}s": _horizon_block(oriented, h) for h in HORIZONS_S},
@@ -692,6 +819,37 @@ def render(summary: dict) -> str:
          f"{_fmt(summary['next_round']['share_ge_3t'])} |"),
         (f"| direction agreement (move_next_round > 0 among nonzero, n_nonzero="
          f"{summary['next_round']['n_nonzero']}) | {_fmt(summary['next_round']['direction_agreement_rate'])} |"),
+    ]
+    mm = summary["model_momentum"]
+    lines += [
+        "",
+        f"## model-momentum reading (moved + no_move_300s, model-joined n={mm['n_joined_to_model']})",
+        "",
+        "Addendum 2: the book moves UP ~1.6 ticks after any round end (catching up to",
+        "the map, not pricing the round), so each move is re-oriented toward the MODEL's",
+        "fair value instead of toward the round winner: toward-model > 0 means the book",
+        "moved toward q. p_yes = q for the Yes side from the event's next-round",
+        "H-MODELENTRY1 row; |model_gap| = |p_yes - mid_before|. Buckets split by",
+        "|model_gap| with the >=0.04 bucket as the pre-registered entry band. Mean is a",
+        "series-clustered bootstrap 95% CI (resample series_id, 1000 reps, seed 17);",
+        "n and n_series ride with every interval.",
+        "",
+        (f"- share of model-joined events with |model_gap| >= 0.04 (entry band): "
+         f"**{_fmt(mm['share_gap_ge_0_04'])}** (n={mm['n_joined_to_model']})"),
+    ]
+    for h in MODEL_HORIZONS:
+        lines += [
+            "",
+            f"### toward-model {h}",
+            "",
+            "| |model_gap| bucket | n | mean toward-model [95% CI] | share > 0 (nonzero) |",
+            "|---|---|---|---|---|",
+        ]
+        for label in MODEL_BUCKETS:
+            blk = mm["by_horizon"][h][label]
+            lines.append(f"| {label} | {blk['n']} | {_fmt_ci(blk['mean_toward_model'])} | "
+                         f"{_fmt(blk['share_positive_nonzero'])} (n_nonzero={blk['n_nonzero']}) |")
+    lines += [
         "",
         "## by map phase (moved only)",
         "",
@@ -731,12 +889,14 @@ def run_day(day: str, data: Path) -> int:
         return 1
     events = round_end_events(load_rows(data / "grid" / f"series_state-{day}.jsonl"))
     join_books(events, load_mappings(data / "pmus", day), book_series(bbo_rows))
+    mapentries = load_rows(data / "shadow" / f"mapentry-{day}.jsonl")
     join_pipeline(
         events,
         load_rows(data / "shadow" / f"instances-{day}.jsonl"),
-        load_rows(data / "shadow" / f"mapentry-{day}.jsonl"),
+        mapentries,
         load_rows(data / "executor" / f"intents-{day}.jsonl"),
     )
+    join_model(events, mapentries)
     summary = summarize(day, events)
     print(render(summary))
     out_dir = data / "analysis"

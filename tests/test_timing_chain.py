@@ -700,3 +700,135 @@ class TestNextRoundBounded:
         # the section sits directly after the first >=3-tick move section
         assert text.index("first >=3-tick move") < text.index("next-round-bounded move") \
             < text.index("by map phase")
+
+
+# --- join_model: toward-the-model orientation (Addendum 2) -------------------
+
+
+def _model_row(rn: int = 5, p_map: float | None = 0.7, us_side: str = "long",
+               ts_ns: int = T0 + 5 * NS, slug: str = SLUG, sid: str = SID,
+               map_number: int = 1, src: str = "H-MODELENTRY1", **overrides) -> dict:
+    """A shape-faithful H-MODELENTRY1 mapentry row — the only src with the model's q."""
+    row = {"type": "mapentry", "hypothesis_id": "H-MAPENTRY1", "src_hypothesis_id": src,
+           "series_id": sid, "map_number": map_number, "round_number": rn, "side": "ct",
+           "team": "Vexar", "opponent": "Falcons", "a": 1, "b": 0, "q_round": 0.5,
+           "p_map": p_map, "dedup_extra": "ct:0.5", "market_slug": slug, "us_side": us_side,
+           "bid": 0.5, "ask": 0.5, "side_ask": 0.5, "entry_price_max": 0.5,
+           "qualifies": True, "skip_reason": None, "src_ts_ns": T0, "grid_ts_ns": T0,
+           "ts_ns": ts_ns}
+    row.update(overrides)
+    return row
+
+
+def _joined_event(n: int = 4, mid_before: float = 0.50, ev_us_side: str = "long",
+                  mv30: float = 0.05, mv60: float = 0.05, mv120: float = 0.05,
+                  mvnext: float = 0.05, **overrides) -> dict:
+    """A round-end event already carrying slug / orientation / oriented horizon moves."""
+    ev = {**_event(n=n, t_prev=T0, t_obs=T0 + 12 * NS),
+          "outcome": "moved", "slug": SLUG, "us_side": ev_us_side, "mid_before": mid_before,
+          "move_30s": mv30, "move_60s": mv60, "move_120s": mv120, "move_next_round": mvnext,
+          "next_round_gap_s": 88.0, "lead_vs_obs_s": 1.0, "lead_vs_prev_s": 2.0,
+          "direction_agrees": True}
+    ev.update(overrides)
+    return ev
+
+
+class TestJoinModel:
+    def test_short_row_p_yes_is_1_minus_p_map(self):
+        # row us_side short, p_map 0.70 -> the model's Yes fair value is 0.30.
+        ev = _joined_event(n=4, mid_before=0.60, ev_us_side="short")
+        tc.join_model([ev], [_model_row(rn=5, p_map=0.70, us_side="short")])
+        assert ev["p_yes_model"] == pytest.approx(0.30)
+        assert ev["model_gap"] == pytest.approx(0.30 - 0.60)   # -0.30
+        assert ev["model_dir"] == -1
+        assert ev["model_ts_ns"] == T0 + 5 * NS
+
+    def test_toward_model_positive_when_the_model_says_down_and_the_book_moves_down(self):
+        # short event: oriented +0.04 means a raw DOWN move (mid falling); the model's
+        # q (0.30) sits BELOW mid_before (0.60), so the book moved toward q -> positive.
+        ev = _joined_event(n=4, mid_before=0.60, ev_us_side="short", mv30=0.04)
+        tc.join_model([ev], [_model_row(rn=5, p_map=0.70, us_side="short")])
+        assert ev["model_dir"] == -1
+        assert ev["toward_model_30s"] == 0.04
+        # and a model that says UP (fair above mid) with the book moving up is positive too
+        ev2 = _joined_event(n=4, mid_before=0.60, ev_us_side="long", mv60=0.06)
+        tc.join_model([ev2], [_model_row(rn=5, p_map=0.70, us_side="long")])
+        assert ev2["model_dir"] == 1
+        assert ev2["toward_model_60s"] == pytest.approx(0.06)
+
+    def test_selection_ignores_other_srcs_slugs_rounds_and_takes_earliest_ts_ns(self):
+        ev = _joined_event(n=4, mid_before=0.50)
+        rows = [
+            _model_row(rn=6, p_map=0.2, ts_ns=T0 + 1 * NS),                     # other round
+            _model_row(rn=5, p_map=0.9, ts_ns=T0 + 2 * NS, slug="other-slug"),  # other slug
+            _model_row(rn=5, p_map=0.8, ts_ns=T0 + 3 * NS,
+                       src="H-MAPENTRY1-SLATE"),                                 # other src
+            _model_row(rn=5, p_map=0.7, ts_ns=T0 + 9 * NS, us_side="long"),      # later match
+            _model_row(rn=5, p_map=0.6, ts_ns=T0 + 4 * NS, us_side="long"),      # earliest match
+        ]
+        tc.join_model([ev], rows)
+        assert ev["model_ts_ns"] == T0 + 4 * NS
+        assert ev["p_yes_model"] == pytest.approx(0.6)
+
+    def test_unmapped_rows_p_map_none_and_no_match_set_fields_none(self):
+        ev = _joined_event(n=4, mid_before=0.50)
+        rows = [_model_row(rn=5, p_map=0.6, ts_ns=T0 + 1 * NS),
+                _model_row(rn=5, p_map=0.8, ts_ns=T0 + 2 * NS, market_slug=None),  # unmapped
+                _model_row(rn=5, p_map=None, ts_ns=T0 + 3 * NS)]                   # no q
+        tc.join_model([ev], rows)
+        assert ev["model_ts_ns"] == T0 + 1 * NS and ev["p_yes_model"] == pytest.approx(0.6)
+        # no matching row at all: every model field is None
+        ev2 = _joined_event(n=4, mid_before=0.50)
+        tc.join_model([ev2], [_model_row(rn=6, p_map=0.6)])
+        assert ev2["p_yes_model"] is None and ev2["model_dir"] is None
+        for h in ("30s", "60s", "120s", "next_round"):
+            assert ev2[f"toward_model_{h}"] is None
+
+    def test_non_open_events_are_left_alone(self):
+        sk = {**_event(), "outcome": "skipped:no_book"}
+        tc.join_model([sk], [_model_row(rn=5)])
+        assert "p_yes_model" not in sk
+
+    def test_small_gap_is_model_dir_zero_and_toward_model_none(self):
+        ev = _joined_event(n=4, mid_before=0.60, mv30=0.05, mvnext=0.05)
+        # gap 0.004: |gap| < 0.005 -> model_dir 0, no direction to project toward q
+        tc.join_model([ev], [_model_row(rn=5, p_map=0.604, us_side="long")])
+        assert ev["model_gap"] == pytest.approx(0.004)
+        assert ev["model_dir"] == 0
+        assert ev["toward_model_30s"] is None
+        assert ev["toward_model_next_round"] is None
+
+
+class TestModelMomentumSummary:
+    def test_buckets_and_render_ordering(self):
+        evs = []
+        for i, gap in enumerate([0.019, 0.02, 0.04, 0.08]):
+            toward_nr = -0.01 if i == 1 else 0.02
+            evs.append({**_joined_event(n=[4, 8, 12, 16][i], t_obs=T0 + i * NS),
+                        "series_id": f"s{i % 2}", "mid_before": 0.50,
+                        "p_yes_model": round(0.50 + gap, 4), "model_gap": gap,
+                        "model_ts_ns": T0, "model_dir": 1,
+                        "move_30s": gap, "move_60s": gap, "move_120s": gap,
+                        "move_next_round": 0.02,
+                        "toward_model_30s": gap, "toward_model_60s": gap,
+                        "toward_model_120s": gap, "toward_model_next_round": toward_nr})
+        s = tc.summarize(DAY, evs)
+        mm = s["model_momentum"]
+        assert mm["n_joined_to_model"] == 4
+        # exact gap 0.04 sits in the >=0.04 entry band (with 0.08): 2/4 overall
+        assert mm["share_gap_ge_0_04"] == 0.5
+        nr = mm["by_horizon"]["next_round"]
+        assert nr["all"]["n"] == 4 and nr["all"]["n_nonzero"] == 4
+        assert nr["all"]["mean_toward_model"]["point"] == pytest.approx(0.0125)
+        assert nr["all"]["share_positive_nonzero"] == 0.75
+        # boundary: 0.019 -> <0.02, 0.02 -> 0.02-0.04, exactly 0.04 -> >=0.04
+        assert nr["<0.02"]["n"] == 1 and nr["0.02-0.04"]["n"] == 1
+        assert nr[">=0.04"]["n"] == 2 and nr[">=0.04"]["n_nonzero"] == 2
+        assert nr[">=0.04"]["mean_toward_model"]["point"] == pytest.approx(0.02)
+        assert nr[">=0.04"]["share_positive_nonzero"] == 1.0
+        # render: the model-momentum section exists and sits after next-round-bounded,
+        # before by map phase; every existing section stays
+        text = tc.render(s)
+        assert "model-momentum reading" in text and "toward-model next_round" in text
+        assert text.index("next-round-bounded move") \
+            < text.index("model-momentum reading") < text.index("by map phase")

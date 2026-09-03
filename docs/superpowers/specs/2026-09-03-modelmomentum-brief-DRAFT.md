@@ -195,3 +195,21 @@ FINDING 9 — The entry price, persistence window, and settlement-exclusion anch
 Claim: the entry bid/ask and p_map are taken from `sr` (find_shock_row's returned row), but the persistence window and the terminal-exclusion test use `ts0 = rec["shock_ts_ns"]` (the detect record's timestamp). If find_shock_row returns a row whose ts_ns ≠ rec["shock_ts_ns"], the book you price at and the instant you anchor the leak guard to diverge by one row.
 Why it matters: a one-row skew between the priced book and the terminal-exclusion timestamp can admit an entry priced against a pre-terminal book while `ts0` sits past terminal (or vice-versa), silently defeating the settlement-leak exclusion that clause 5 depends on.
 Check: assert, for every produced entry, that `sr["ts_ns"] == rec["shock_ts_ns"]` (or log the delta); count mismatches and re-check the terminal/after_terminal classification on those rows specifically.
+
+---
+
+## Premise update (17:05 PDT, Claude) — read before anything above
+
+The timing chain's model-momentum read (Addendum 3 of the first-read doc)
+is a NULL: in the ≥ 4pt entry band the book's move toward p_map over
+30–120s and over the next round is +0.003 / −0.005 / −0.003 with every CI
+straddling zero (n ≈ 235, 11 series). The book does not reprice toward the
+model within a round. §1's statement "the live book converges toward p_map;
+entering on the model's side captures part of the gap" is therefore NOT
+supported as a reprice claim on this tape. If this hypothesis is registered
+at all, it must be a SETTLEMENT-horizon claim (the model is right more
+often than the stale book on the resolved outcome after a large fresh
+shock) with an execution-realism gate (depth-limited taker fill at the
+stale quote before it disappears), which is the H-MAPENTRY1 thesis
+restricted to shocks — and H-MAPENTRY1 is where fill selection ate the
+paper edge. Decide after the post-shock diagnostics land.
