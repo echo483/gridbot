@@ -195,6 +195,12 @@ class Engine:
         # reconciliation (orders.list) is a pre-scaling item: LIVE_FIRE.md.
         self.open_count = 0
         self._daily_loss = 0.0
+        # Audit 1e-M3: a failed ledger read used to leave every cap at its
+        # zero/empty default — fail OPEN. While the most recent read has
+        # failed, placement is blocked (skipped:ledger_unreadable, identical
+        # in dry_run); the next successful read re-opens it. Starts True so
+        # a fresh process is gated by its first cycle's read, not by this flag.
+        self._ledger_ok = True
         # Last reconcile report actually appended: repeat passes with an
         # identical diff neither re-warn nor re-append (the first armed night
         # wrote 558 near-identical rows for one long-cancelled order).
@@ -323,6 +329,13 @@ class Engine:
                      "open/unknown)", intent.dedup_key, intent.us_side,
                      intent.market_slug)
             return "skipped:second_side"
+        # Ledger-unreadable = caps unknown: block (audit 1e-M3, fail closed).
+        # Dedup NOT consumed; the row retries once a read succeeds.
+        if not self._ledger_ok:
+            self._skip_row(intent, record, "skipped:ledger_unreadable", armed)
+            log.error("ledger unreadable — refusing %s until a ledger read "
+                      "succeeds (caps unknown)", intent.dedup_key)
+            return "skipped:ledger_unreadable"
         # Capacity skips do NOT consume the dedup key (M6). They ARE
         # ledgered: a silently dropped would-have-traded row is selection
         # bias in the measurement record (glm review f11).
@@ -348,6 +361,15 @@ class Engine:
                 return None
             self.seen.add(intent.dedup_key)
             status, order_id = pmus.place(intent)
+            if status.startswith("rejected:"):
+                # A definitive refusal (pre-wire, or the venue's synchronous
+                # post-only rejection) never rested: not an entry, so the
+                # book's dedup key stays free for the next qualifying row
+                # (fresh book, fresh price). The ledger-derived cap already
+                # treats rejected as non-placed across restarts; in-process
+                # state used to disagree and lock the book for the process
+                # lifetime. error:* (possibly live on venue) still consumes.
+                self.seen.discard(intent.dedup_key)
             if status.startswith("error:") and intent.market_slug:
                 # A failed/ambiguous ack may still be live on venue: block
                 # the opposite side WITHIN this cycle burst (code-review f4).
@@ -686,8 +708,15 @@ class Engine:
             )
             self.open_count = ledger_mod.open_exposure(records)
             self._refresh_ledger_state(records)
+            self._ledger_ok = True
         except Exception:
-            log.exception("ledger read failed; keeping previous caps state")
+            # Caps are unknown until a read succeeds: handle() blocks every
+            # placement meanwhile (audit 1e-M3). The TTL sweep above keeps
+            # running — cancelling stale quotes is always the safe
+            # direction; the venue-truth pass reads the ledger itself, so
+            # it no-ops (swallowed exception) until the read recovers.
+            self._ledger_ok = False
+            log.exception("ledger read failed; placements BLOCKED until a read succeeds")
         n = 0
         for follow in (self.follow, self.follow_us):
             try:

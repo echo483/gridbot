@@ -214,6 +214,12 @@ def build_us_intent(row: dict, stake_cap_usd: float) -> OrderIntent | None:
     always rests (never matches) and never pays above what the registration
     allows. Integer contracts (venue rule); below one contract -> None.
 
+    ``price`` is OUR side's cost per contract for both sides (a short's
+    side_ask is 1 - long_bid, so its cost is already in cost terms);
+    ``stake_usd`` and the integer-contract sizing are therefore exact cash
+    exposure. The venue's Yes-price convention is applied only in
+    pmus.wire_price (pinned 2026-09-03).
+
     Pure conversion only — qualifying is necessary but not sufficient for
     placement. engine.Engine.handle still runs the band gate and the
     drift-confirmation gate (>=3 same-side 120s-horizon postquote samples,

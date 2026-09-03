@@ -128,15 +128,25 @@ def fill_row(intent_row: dict, order: dict, ts_ns: int) -> dict | None:
     cum = _num(order.get("cumQuantity"))
     if cum <= 0:
         return None
-    price = _amount(order.get("avgPx"))
-    if price is None or price <= 0:
-        price = intent_row.get("price")
+    venue_px = _amount(order.get("avgPx"))
+    if venue_px is None or venue_px <= 0:
+        venue_px = None
+        price = intent_row.get("price")  # already OUR side's cost
+    elif intent_row.get("us_side") == "short":
+        # PRICE CONVENTION (pmus.wire_price): the venue's avgPx is the
+        # Yes/long price; a short's cost per contract is 1 - avgPx. Ledger
+        # prices are our side's cost, so convert here — the raw venue
+        # number rides along as venue_px for forensics.
+        price = round(1.0 - venue_px, 4)
+    else:
+        price = venue_px
     return {
         "type": "fill",
         "dedup_key": intent_row.get("dedup_key"),
         "order_id": str(order.get("id") or intent_row.get("order_id")),
         "market_slug": intent_row.get("market_slug"),
         "price": price,
+        "venue_px": venue_px,
         "shares": cum,
         "partial": cum < _num(order.get("quantity") or cum),
         "source": "venue_order",
@@ -434,10 +444,9 @@ def _positions_index(
         absorb(hint, item)
     for hint, item in available:
         absorb(hint, item)
-    keep = slugs
     return (
-        {s: v for s, v in sizes.items() if s in keep},
-        {s for s in ambiguous if s in keep},
+        {s: v for s, v in sizes.items() if s in slugs},
+        {s for s in ambiguous if s in slugs},
         fully_attributed,
     )
 
@@ -790,8 +799,8 @@ def _sync_fills(
             log.warning("order retrieve %s failed: %s", oid, type(exc).__name__)
             continue
         order = (resp or {}).get("order") or {}
-        terminal = order.get("state") in TERMINAL_STATES
-        if not terminal:
+        venue_state = order.get("state")
+        if venue_state not in TERMINAL_STATES:
             # A live order's cumQuantity can still grow; writing a fill row
             # now would freeze an understated quantity forever (ledger fills
             # are first-wins — glm review 08-26, finding 4). The TTL cancel
@@ -801,7 +810,13 @@ def _sync_fills(
                          "terminal state", intent.get("market_slug"), oid)
             continue
         row = fill_row(intent, order, now_ns)
-        if not row:
+        if row:
+            new_rows.append(row)
+            log.warning("FILL recorded from venue: %s %s x%s @%s%s",
+                        intent.get("market_slug"), intent.get("us_side"),
+                        row["shares"], row["price"],
+                        " (partial)" if row["partial"] else "")
+        else:
             # Persist the venue proof itself (audit F3/F4/F8): ``checked``
             # is process-local, so without this row every restart forgets
             # which oids were venue-confirmed zero-fill — re-entry and the
@@ -809,33 +824,36 @@ def _sync_fills(
             # one rate-limited retrieve at a time. A fill_check row makes
             # the confirmation restart-safe; every ledger consumer filters
             # by type, so the new type is inert everywhere else.
+            # ``venue_state`` says WHY there was no fill: a REJECTED order
+            # never rested (post-only would cross), a CANCELED one did —
+            # fill-rate analyses must not pool them (2026-09-03: 20/48
+            # armed-night orders were rejections counted as resting-unfilled).
             new_rows.append({
                 "type": "fill_check", "order_id": oid,
                 "dedup_key": intent.get("dedup_key"),
                 "market_slug": intent.get("market_slug"),
-                "result": "zero_fill", "ts_ns": now_ns,
-            })
-        if row:
-            new_rows.append(row)
-            log.warning("FILL recorded from venue: %s %s x%s @%s%s",
-                        intent.get("market_slug"), intent.get("us_side"),
-                        row["shares"], row["price"],
-                        " (partial)" if row["partial"] else "")
-        elif oid not in clean_cancelled:
-            # Terminal with ZERO executed and no clean-cancel row of its
-            # own (gone_before_cancel, hand-cancel, venue auto-cancel,
-            # crash orphan): without this corrective row the exposure slot
-            # leaks forever (glm f8 + code-review f5). A clean-cancel row
-            # releases it via the normal ledger semantics.
-            new_rows.append({
-                "type": "cancel", "order_id": oid,
-                "dedup_key": intent.get("dedup_key"),
-                "market_slug": intent.get("market_slug"),
-                "status": "cancelled", "source": "venue_terminal_no_fill",
+                "result": "zero_fill", "venue_state": venue_state,
                 "ts_ns": now_ns,
             })
-            log.warning("order %s was gone_before_cancel but venue shows "
-                        "terminal with no fill — exposure released", oid)
+            if oid not in clean_cancelled:
+                # Terminal with ZERO executed and no clean-cancel row of its
+                # own (gone_before_cancel, hand-cancel, venue auto-cancel,
+                # crash orphan): without this corrective row the exposure slot
+                # leaks forever (glm f8 + code-review f5). A clean-cancel row
+                # releases it via the normal ledger semantics.
+                rejected = venue_state == "ORDER_STATE_REJECTED"
+                new_rows.append({
+                    "type": "cancel", "order_id": oid,
+                    "dedup_key": intent.get("dedup_key"),
+                    "market_slug": intent.get("market_slug"),
+                    "status": "cancelled",
+                    "source": ("venue_rejected_no_fill" if rejected
+                               else "venue_terminal_no_fill"),
+                    "venue_state": venue_state,
+                    "ts_ns": now_ns,
+                })
+                log.warning("order %s was gone_before_cancel but venue shows "
+                            "terminal with no fill — exposure released", oid)
         checked.add(oid)
     return new_rows
 

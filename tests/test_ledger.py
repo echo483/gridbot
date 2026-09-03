@@ -403,3 +403,22 @@ def test_fill_totals_malformed_first_row_does_not_suppress_valid() -> None:
     from gridbot.executor import ledger as ledger_mod
     totals = ledger_mod._fill_totals(records)
     assert totals["k1"][0] == 4.0
+
+
+def test_pnl_short_convention_pinned():
+    """Convention pinned 2026-09-03: ledger ``price`` is OUR side's cost per
+    contract for BOTH sides (a short at 0.51 pays 0.51 and wins 0.49), so the
+    formula is side-agnostic. The venue's own realized number outranks it
+    whenever a settle row carries venue_pnl."""
+    from gridbot.executor import ledger
+
+    rows = [
+        {"type": "order_intent", "status": "placed", "dedup_key": "s", "us_side": "short",
+         "price": 0.51, "shares": 5.0, "order_id": "S"},
+        {"type": "fill", "dedup_key": "s", "order_id": "S", "price": 0.51, "shares": 5.0,
+         "ts_ns": 1},
+        {"type": "settle", "dedup_key": "s", "won": True, "ts_ns": 2},
+    ]
+    assert ledger.realized_pnl(rows) == [("s", 2.45, 2)]
+    rows[-1] = {"type": "settle", "dedup_key": "s", "won": False, "ts_ns": 2}
+    assert ledger.realized_pnl(rows) == [("s", -2.55, 2)]

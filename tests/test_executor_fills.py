@@ -202,19 +202,15 @@ class TestSync:
 def test_pos_size_parses_real_venue_netposition() -> None:
     # Live capture 2026-08-27 13:10Z while HOLDING: the real venue keys
     # positions by slug with the size under "netPosition".
-    from gridbot.executor.fills import _row_sizes
-
     real = {"netPosition": "5", "qtyBought": "5", "qtySold": "0",
             "cost": {"value": "2.8300", "currency": "USD"}, "expired": False}
-    assert 5.0 in _row_sizes(real)
+    assert 5.0 in fills._row_sizes(real)
 
 
 def test_two_sided_slug_never_manual_exit_released() -> None:
     # Audit F2: both sides of one slug filled and unsettled — slug-level
     # flatness (venue may NET the sides) proves nothing about either;
     # neither key may be release-candidate until one side settles.
-    from gridbot.executor.fills import _release_candidates
-
     records = [
         {"type": "order_intent", "status": "placed", "order_id": "L1",
          "dedup_key": "kL", "market_slug": "m1", "us_side": "long"},
@@ -226,12 +222,12 @@ def test_two_sided_slug_never_manual_exit_released() -> None:
          "price": 0.52, "shares": 5.0, "ts_ns": 1},
     ]
     now = 1 + 200_000_000_000  # both fills well past the age guard
-    assert _release_candidates(records, [], set(), now) == []
+    assert fills._release_candidates(records, [], set(), now) == []
     # One side settles -> the OTHER becomes a candidate again.
     records.append({"type": "settle", "dedup_key": "kS",
                     "source": "venue_resolution", "won": False,
                     "venue_pnl": -2.6, "ts_ns": now})
-    cands = _release_candidates(records, [], set(), now)
+    cands = fills._release_candidates(records, [], set(), now)
     assert [c.get("dedup_key") for c in cands] == ["kL"]
 
 
@@ -277,3 +273,46 @@ def test_filled_sides_by_slug_joins_side_from_intent_row() -> None:
         "m1": {"long", "short"}, "m3": {"short"},
     }
 
+
+class TestShortFillConvention:
+    """Venue avgPx is a Yes/long price (settle_truth-20260827.json: our SELL
+    @0.51 short's fill avgPx 0.51 while the position cost 0.49/contract).
+    Ledger prices are OUR side's cost, so short fills convert; longs pass
+    through. The raw venue number is kept as ``venue_px`` for forensics."""
+
+    def test_short_fill_price_is_one_minus_venue_px(self) -> None:
+        row = fills.fill_row(_intent(side="short", price=0.51), _order(cum=5, avg="0.51"), 1)
+        assert row is not None
+        assert row["price"] == 0.49
+        assert row["venue_px"] == 0.51
+
+    def test_long_fill_price_passes_through(self) -> None:
+        row = fills.fill_row(_intent(side="long", price=0.57), _order(cum=5, avg="0.57"), 1)
+        assert row is not None
+        assert row["price"] == 0.57 and row["venue_px"] == 0.57
+
+    def test_short_fallback_to_intent_price_is_already_cost(self) -> None:
+        row = fills.fill_row(_intent(side="short", price=0.51), _order(cum=1, avg=None), 1)
+        assert row is not None
+        assert row["price"] == 0.51 and row["venue_px"] is None
+
+
+class TestVenueStateTagging:
+    """Terminal-zero-fill rows must say WHY: a REJECTED order never rested,
+    a CANCELED one did. 20/48 armed-night orders were venue-rejected and
+    every fill-rate analysis counted them as resting-unfilled."""
+
+    def test_rejected_terminal_is_tagged(self) -> None:
+        client = _FakeClient({"A": _order(cum=0, state="ORDER_STATE_REJECTED")})
+        rows = fills.sync([_intent()], client, set(), 1)
+        assert [r["type"] for r in rows] == ["fill_check", "cancel"]
+        assert rows[0]["venue_state"] == "ORDER_STATE_REJECTED"
+        assert rows[1]["venue_state"] == "ORDER_STATE_REJECTED"
+        assert rows[1]["source"] == "venue_rejected_no_fill"
+        assert rows[1]["status"] == "cancelled"  # release semantics unchanged
+
+    def test_cancelled_terminal_keeps_existing_source(self) -> None:
+        client = _FakeClient({"A": _order(cum=0, state="ORDER_STATE_CANCELED")})
+        rows = fills.sync([_intent()], client, set(), 1)
+        assert rows[0]["venue_state"] == "ORDER_STATE_CANCELED"
+        assert rows[1]["source"] == "venue_terminal_no_fill"

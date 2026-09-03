@@ -173,10 +173,7 @@ class TestPmusWire:
 
 
 def _seed_drift(tmp_path, slug="astatc-cs2-aur-g2-map2",
-                moves=(0.01, 0.01, 0.01), day=None, side="long",
-                us_side=None) -> None:
-    if us_side is not None:
-        side = us_side  # alias: row-field spelling
+                moves=(0.01, 0.01, 0.01), day=None, side="long") -> None:
     """Write a postquote day-file with confirmed oriented drift for slug.
 
     Default moves sum to +0.03 >= DRIFT_MIN_CONFIRM, so drift-gated mapentry
@@ -1661,3 +1658,165 @@ class TestSlateCoverageGate:
         row = _mapentry_row(p_map=0.75)
         assert "src_hypothesis_id" not in row
         assert eng.handle(row, limits.ArmingState(dry_run=False)) == "placed"
+
+
+class TestShortWireConvention:
+    """Venue price convention, pinned 2026-09-03 from venue records.
+
+    data/executor/settle_truth-20260827.json, order C4KWZ5EV8GNE: we sent
+    ORDER_INTENT_BUY_SHORT price 0.51; the venue stored it as
+    ORDER_SIDE_SELL @ 0.51, the position cost 2.45 = 5 x (1 - 0.51), and the
+    resolution realized -2.45. The venue's ``price`` is ALWAYS the Yes/long
+    price; a short costs (1 - price). Our intent price is OUR side's cost —
+    the number the entry rule (side_ask <= p_map - 0.04) and the stake cap
+    approved — so the wire must send 1 - cost for shorts. Sending the cost
+    verbatim posted every short at the wrong level: 15/24 shorts (every one
+    with cost < 0.50, i.e. Yes bid >= 0.50) crossed the book and were
+    REJECTED by post-only while the ledger recorded them as placed.
+    """
+
+    def _wire(self, monkeypatch, price: float, side: str, response=None):
+        from dataclasses import replace
+
+        from gridbot.executor import pmus
+
+        ack = response if response is not None else {"orderId": "W1"}
+        captured: dict = {}
+
+        class _Orders:
+            def create(self, body: dict) -> dict:
+                captured.update(body)
+                return ack
+
+        class _Client:
+            orders = _Orders()
+
+        monkeypatch.setattr(pmus, "_get_client", lambda: _Client())
+        intent = build_intent(_instance(), 25.0)
+        assert intent is not None
+        wired = replace(intent, market_slug="cs2-a-vs-b", us_side=side,
+                        price=price, shares=5.0)
+        return pmus.place(wired), captured
+
+    def test_short_sends_one_minus_cost(self, monkeypatch) -> None:
+        result, body = self._wire(monkeypatch, 0.22, "short")
+        assert result == ("placed", "W1")
+        assert body["intent"] == "ORDER_INTENT_BUY_SHORT"
+        assert body["price"]["value"] == "0.780"
+
+    def test_long_sends_cost_unchanged(self, monkeypatch) -> None:
+        result, body = self._wire(monkeypatch, 0.22, "long")
+        assert result == ("placed", "W1")
+        assert body["intent"] == "ORDER_INTENT_BUY_LONG"
+        assert body["price"]["value"] == "0.220"
+
+    def test_rounding_never_raises_our_cost(self, monkeypatch) -> None:
+        # long: floor to the venue's 0.001 grid (cost 0.333 <= 0.3333)
+        _, body = self._wire(monkeypatch, 0.3333, "long")
+        assert body["price"]["value"] == "0.333"
+        # short: the Yes price rounds UP so 1 - yes = 0.333 <= 0.3333
+        _, body = self._wire(monkeypatch, 0.3333, "short")
+        assert body["price"]["value"] == "0.667"
+
+    def test_synchronous_venue_rejection_is_not_placed(self, monkeypatch) -> None:
+        # CreateOrderResponse carries ``executions``; a REJECTED execution
+        # (post-only would cross) means nothing rests — the ledger must not
+        # record it as placed, and the id is kept for forensics.
+        resp = {"id": "R1", "executions": [{
+            "type": "EXECUTION_TYPE_REJECTED",
+            "orderRejectReason": "ORD_REJECT_REASON_POST_ONLY",
+        }]}
+        result, _ = self._wire(monkeypatch, 0.52, "long", response=resp)
+        assert result == ("rejected:venue:ORD_REJECT_REASON_POST_ONLY", "R1")
+
+    def test_fill_execution_in_response_is_still_placed(self, monkeypatch) -> None:
+        resp = {"id": "F1", "executions": [{"type": "EXECUTION_TYPE_NEW"}]}
+        result, _ = self._wire(monkeypatch, 0.52, "long", response=resp)
+        assert result == ("placed", "F1")
+
+    def test_mixed_executions_are_placed_not_rejected(self, monkeypatch) -> None:
+        # Reasoner review F4a: a REJECTED execution next to a NEW or a
+        # PARTIAL_FILL may leave contracts live on venue. Calling that
+        # "rejected" would drop the order from the TTL sweep, the fills
+        # sync and the caps — so anything not purely rejected is placed
+        # and the venue-truth pass sorts it out.
+        for execs in (
+            [{"type": "EXECUTION_TYPE_NEW"}, {"type": "EXECUTION_TYPE_REJECTED"}],
+            [{"type": "EXECUTION_TYPE_PARTIAL_FILL"},
+             {"type": "EXECUTION_TYPE_REJECTED", "orderRejectReason": "X"}],
+        ):
+            result, _ = self._wire(monkeypatch, 0.52, "long",
+                                   response={"id": "M1", "executions": execs})
+            assert result == ("placed", "M1"), execs
+
+
+class TestRejectedReleasesDedup:
+    """A venue rejection never rested, so it is not an entry: the dedup key
+    must be free for the next qualifying row (fresh book, fresh price). The
+    ledger-derived cap already treats rejected as non-placed across restarts;
+    in-process ``seen`` used to disagree and locked the book for the
+    process lifetime (days)."""
+
+    def test_rejected_then_next_row_retries(self, tmp_path, monkeypatch) -> None:
+        from gridbot import config
+        from gridbot.executor import engine as engine_mod
+        from gridbot.executor import pmus
+
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        (tmp_path / "shadow").mkdir()
+        _seed_drift(tmp_path)
+        outcomes = iter([("rejected:venue:ORD_REJECT_REASON_POST_ONLY", "R1"),
+                         ("placed", "P2")])
+        calls: list = []
+        monkeypatch.setattr(pmus, "place",
+                            lambda i: (calls.append(i) or next(outcomes)))
+        eng = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(_mapentry_row(p_map=0.75), armed).startswith("rejected:")
+        assert eng.handle(_mapentry_row(round_number=9, p_map=0.74), armed) == "placed"
+        assert len(calls) == 2
+        # an ambiguous/error ack (may be live on venue) still consumes the key
+        monkeypatch.setattr(pmus, "place", lambda i: ("error:ambiguous_ack", None))
+        eng2 = engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path / "b"))
+        assert eng2.handle(_mapentry_row(p_map=0.75), armed) == "error:ambiguous_ack"
+        assert eng2.handle(_mapentry_row(round_number=9, p_map=0.74), armed) is None
+
+
+class TestLedgerReadFailClosed:
+    """Audit 1e-M3: a failed ledger read left open_count=0 / daily_loss=0 /
+    no re-entry state — every cap fail-OPEN. A cycle whose ledger read
+    failed must block placements (in both modes) until a read succeeds."""
+
+    def _engine(self, tmp_path, monkeypatch):
+        from gridbot import config
+        from gridbot.executor import engine as engine_mod
+
+        monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+        (tmp_path / "shadow").mkdir()
+        _seed_drift(tmp_path)
+        return engine_mod.Engine(ledger=engine_mod.IntentLedger(tmp_path))
+
+    def test_failed_read_blocks_until_recovery(self, tmp_path, monkeypatch) -> None:
+        from gridbot.executor import ledger as ledger_mod
+        from gridbot.executor import pmus
+
+        eng = self._engine(tmp_path, monkeypatch)
+        calls: list = []
+        monkeypatch.setattr(pmus, "place", lambda i: (calls.append(i) or ("placed", "O1")))
+
+        def _boom(_root):
+            raise OSError("ledger unreadable")
+
+        monkeypatch.setattr(ledger_mod, "load_records", _boom)
+        eng.cycle()
+        armed = limits.ArmingState(dry_run=False)
+        assert eng.handle(_mapentry_row(p_map=0.75), armed) == "skipped:ledger_unreadable"
+        assert calls == []
+        # dry_run takes the identical path
+        assert eng.handle(_mapentry_row(round_number=9, p_map=0.75),
+                          limits.ArmingState(dry_run=True)) == "skipped:ledger_unreadable"
+        # recovery: a successful read re-opens placement; the key was not consumed
+        monkeypatch.setattr(ledger_mod, "load_records", lambda root: [])
+        eng.cycle()
+        assert eng.handle(_mapentry_row(round_number=10, p_map=0.75), armed) == "placed"
+        assert len(calls) == 1

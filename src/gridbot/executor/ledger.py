@@ -19,6 +19,18 @@ Ledger row types understood here:
 ``fill``/``settle``/``cancel`` rows come from the engine's TTL sweep and
 from executor/fills.py's venue sync.
 
+PRICE CONVENTION (pinned 2026-09-03): every ``price`` in this ledger —
+intent, fill, and the formulas below — is OUR side's cost per contract,
+for longs and shorts alike (a short at 0.51 pays 0.51 and wins 0.49). The
+venue quotes the Yes/long price for both sides; ``executor/pmus.wire_price``
+converts on the way out and ``executor/fills.fill_row`` on the way in
+(``venue_px`` keeps the raw venue number). Nothing else in the tree may
+convert. EXCEPTION, disclosed (registry H-MAPENTRY1-NOTE7): the three
+pre-fix short fill rows (orders C3SGA4ENPFSQ, C4JVCF1J4GNK, C4KWZ5EV8GNE,
+08-26/27; no ``venue_px`` field) carry the venue's Yes price — true costs
+0.48/0.48/0.49. Their settles carry ``venue_pnl``, so PnL is unaffected;
+any analysis reading historical short fill prices must convert them.
+
 Everything is pure over ``list[dict]``; :func:`load_records` does the
 only I/O. Unknown row types and rows with missing fields are skipped —
 this module never raises on ledger contents.
@@ -269,10 +281,12 @@ def open_exposure(records: list[dict]) -> int:
 def realized_pnl(records: list[dict]) -> list[tuple[str, float, int]]:
     """Per-position realized PnL for every settled position.
 
-    Maker BUY accounting: s shares bought at price p settles won for
-    +(1-p)*s, lost for -p*s. Fill price/shares override the intent's
+    Our-side cost accounting (module docstring convention): s contracts at
+    cost p settle won for +(1-p)*s, lost for -p*s — side-agnostic, because
+    p is always what WE paid. Fill price/shares override the intent's
     when a fill row exists (partial fills and re-fills at a different
-    price are the fill's business).
+    price are the fill's business). The venue's own signed ``venue_pnl``
+    outranks the formula whenever a settle row carries it.
 
     Args:
         records: Ledger rows (see module docstring).

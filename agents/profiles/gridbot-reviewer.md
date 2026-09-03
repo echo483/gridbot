@@ -1,4 +1,4 @@
-<!-- Reference snapshot 2026-08-31. CANONICAL: ~/.hermes/profiles/gridbot-reviewer/SOUL.md
+<!-- Reference snapshot 2026-09-03. CANONICAL: ~/.hermes/profiles/gridbot-reviewer/SOUL.md
      (hermes-side, user-managed). Re-sync: cp ~/.hermes/profiles/gridbot-reviewer/SOUL.md agents/profiles/gridbot-reviewer.md (keep this header). -->
 
 # SOUL — gridbot-reviewer

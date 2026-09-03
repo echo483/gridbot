@@ -4,6 +4,12 @@ Frozen 2026-08-26 ~00:15 PT, the night of the first live-small fire.
 **Updated 2026-08-28** with the first calibration of the traded quantity and
 the fill-selection measurement — see PROVEN below; both change how the
 running PnL should be read.
+**Updated 2026-09-03** — integrity pass (docs/analysis/2026-09-03-integrity-pass.md):
+the short side was posted at the WRONG venue price for every armed night
+(registry H-MAPENTRY1-NOTE7 — 20 of 48 venue-verified orders never rested;
+see gotchas), the fail-open ledger-read window (1e-M3) is closed, nightly
+analysis notes no longer truncate silently, the hermes builder profile runs
+the doctrine model, and the timing-chain instrument is specced/in build.
 **Fresh agent? Read in this order:** `CLAUDE.md` (iron rails — merge-blocking),
 this file, `docs/experiments/registry.jsonl` (every frozen hypothesis),
 `docs/LIVE_FIRE.md` (arming + runbook). The memory directory
@@ -92,6 +98,7 @@ in-sample CIs exclude zero) — do NOT re-cut on same-night data.
 | gridbot-mapentry.service | H-MAPENTRY1 recorder: joins instances to PMUS map books, frozen race fair value, qualification — data/shadow/mapentry-*.jsonl |
 | gridbot-executor.service | dry-run engine: instances+mapentry → capped intents ledger (NEVER arms itself) |
 | gridbot-postquote.service | adverse-selection diagnostic: samples book mid +30/+60/+120s after every QUALIFYING mapentry row, ORIENTED to taken side — data/shadow/postquote-*.jsonl (analysis rule: never pool unoriented across sides) |
+| gridbot-pmus-books.service | PMUS BBO tape (timing-chain Part A, 2026-09-03): polls the live map + match books of every live mapped series on the public gateway every 2s, change-only rows + 30s heartbeat — data/pmus/books-*.jsonl; read-only, no keys. Joined by scripts/timing_chain.py |
 | gridbot-pmus-map.timer (15m) | GRID↔PMUS mapping snapshots |
 | gridbot-ingest (1h) / gridbot-backup (05:10) | corpus → Supabase; raw offsite |
 | gridbot-analysis (22:30) / gridbot-morning (08:00) | slow-loop Claude analyst; morning digest (hermes→Telegram) |
@@ -108,8 +115,10 @@ in-sample CIs exclude zero) — do NOT re-cut on same-night data.
    tick inside, clamped (frozen cap ∧ ceiling 0.90), integer contracts,
    dedup one-entry-per-map-book → ledger row (`data/executor/intents-*.jsonl`).
 5. dry_run (default): row says dry_run. ARMED (user's act only): pmus.place
-   → order_id persisted → 150s TTL auto-cancel if unfilled → reconcile pass
-   (ledger vs venue orders.list) every ~60s.
+   (our-side cost → venue Yes price via `wire_price`; an all-REJECTED create
+   ack ledgers `rejected:venue:*`, never placed) → order_id persisted → 150s
+   TTL auto-cancel if unfilled → reconcile pass (ledger vs venue
+   orders.list) every ~60s; a failed ledger read blocks placement.
 
 ## Arming (rail 3 — the user's own act, never an agent's)
 
@@ -163,16 +172,44 @@ doesn't bind on realized PnL; risk is bounded by stake×max_open instead.
   row. Second capture loss in six days from workstation session lifecycle
   (08-30: powered off 6h31m), ZERO from code. The always-on-host question is
   the top open ops decision. `docs/analysis/2026-08-31-keyring-capture-outage.md`
+- **Wedged keyring read, third occurrence (2026-09-03, 09:00–14:50 PDT,
+  ~5h50m GRID-dark; PM books unaffected)**: the capture daemon's in-process
+  keyring worker thread never returned, every later `_secret()` short-
+  circuited to "read still blocked", the 600s cache expired, and the unit
+  stayed ACTIVE (heartbeats every minute) — so the health check only
+  alerted "GRID data stale" and never restarted it, while a fresh process
+  could read the key in 0.1s. Fixed both ends: `config._secret` abandons a
+  read blocked >120s and issues a fresh one (≤8 abandoned threads, then
+  fail closed), and `health_check` restarts an ACTIVE capture unit whose
+  GRID tape is stale >25min (once/hour, graphical session only; a truly
+  locked keyring then fails the unit fast and the DOWN branch escalates).
+  The running capture daemon keeps the old code until its next natural
+  restart (rail 4); the health check picks up the new rule on its next
+  5-min run. No mapentry rows exist for that window.
 - **Venue reports cancel success on already-FILLED orders** (confirmed in
   production: all 3 first-night fills were FULL fills whose TTL cancels
   returned clean "cancelled"). Never read cancel status as fill truth —
   fills.sync / settle_truth.py are the truth path.
-- **Short-price convention unpinned**: venue resolution PnL for the
-  AUR-G2 short was +$2.60 (= 0.52×5) not (1−0.52)×5=+2.40 — shorts fill
-  at 1−price cost. ledger.realized_pnl's maker formula overstates short
-  losses/understates wins by that gap (conservative direction). Settle
-  rows carry venue_pnl; use IT for truth reporting. Pin the convention
-  in ledger.py before scaling stakes.
+- **Venue price convention (PINNED 2026-09-03, registry NOTE7)**: the
+  Polymarket US `price` field is ALWAYS the Yes/long price; `BUY_SHORT` at
+  P is stored as `SELL @ P` and costs 1−P per contract (venue records:
+  order C4KWZ5EV8GNE, cost 2.45 = 5×0.49). gridbot prices are OUR side's
+  cost (short `side_ask = 1 − long_bid`); the wire converts ONLY in
+  `pmus.wire_price` and fills convert back in `fills.fill_row` (`venue_px`
+  keeps the raw number). Before the fix every short was sent at Yes price =
+  cost: shorts with cost < 0.50 crossed the bid and were post-only REJECTED
+  (15/24 armed-night shorts), the rest rested too far from the touch. The
+  old "shorts fill at 1−price cost, pin the ledger formula" reading was
+  this wire bug — `realized_pnl` was already right; `venue_pnl` still
+  outranks it. The three pre-fix short fill rows carry Yes prices (true
+  costs 0.48/0.48/0.49).
+- **The venue hands back an order id for orders it then REJECTS** (post-only
+  would-cross, stale book between the BBO read and the wire): 20 of the 48
+  venue-verified armed-night orders (15 shorts, 5 longs) never rested but
+  were ledgered `placed`. Real-order fill rate among orders that rested is
+  13/28 = .46, not .27 — re-cut any placed/filled statistic on rested orders
+  (fill_check / corrective-cancel rows now carry `venue_state`; synchronous
+  rejections ledger as `rejected:venue:<reason>` and free the dedup key).
 
 ## Where verdicts come from
 
@@ -336,7 +373,8 @@ Only the quintile figure is the bar.
    released_this_pass suppression is dead code (real suppression = the
    fetched_list guard; delete branch + comment). (4) M3 first-cycle
    ledger-read exception leaves caps open_count=0/_daily_loss=0 —
-   fail-OPEN direction (treat first-cycle failure as gate-blocking).
+   fail-OPEN direction — DONE 2026-09-03: a failed read blocks placement
+   (`skipped:ledger_unreadable`, identical in dry_run) until a read succeeds.
    (5) M4 disarmed RESTART stops truth ingestion (no pmus client → no
    reconcile/fills/adoption until re-arm; mid-run disarm is covered).
    (6) M5 _fill_totals marks an oid seen before validating the row
@@ -386,3 +424,32 @@ Only the quintile figure is the bar.
    (hypotheses/verdicts = natural nodes+edges), the capture corpus
    relations (series↔maps↔markets↔orders↔fills↔settles), the gotchas
    section, and Claude memory. Slow-loop only (iron rail 1).
+   UPDATE 2026-09-03 (user): the KG moves to the NEXT repo (gridbot-lab) on a
+   proper server — DuckDB for analytics/SQL learning + Kuzu (Vela-Engineering
+   fork) for the graph; gridbot gets cleaned first, no KG build here.
+13. TIMING CHAIN (user goal 2026-09-03: "a genuine timing comparison to show
+   our latency and data edge over the books and find a way to beat it"):
+   spec docs/superpowers/specs/2026-09-03-timing-chain.md — keyless PMUS BBO
+   recorder (new unit gridbot-pmus-books) + scripts/timing_chain.py joining
+   GRID round ends to the first book move, with our own pipe legs. Every
+   lead number quoted above was measured against the INTL venue; this is
+   the first measurement on the venue we trade and the number a rail-B
+   instrument gets pre-registered against. LANDED 2026-09-03 (control build
+   won the bake-off; hermes Part A/B builds kept as record). FIRST READ on
+   the first six-hour tape (docs/analysis/2026-09-03-timing-chain-first-read.md):
+   682 round ends, 293 with a book move; lead_vs_obs_s p50 +13.1s (lower
+   bound; upper bound +27.5s), book moved FIRST in 29% (40% in late-map
+   rounds); first-move direction agrees with the winner only 55% — the
+   first move is mostly noise, a size/horizon read is the next amendment;
+   our pipe ≈ 4.4s (GRID rtt 0.28 + detect 0.16 + recorder 1.19 + engine
+   2.77) plus the 12s poll wait. Levers: 10s polls, one in-process
+   pipeline, act on the GRID observation itself (rail B).
+14. POST-SHOCK FADE reconciliation: the design brief's anchors (108/70, 32)
+   were computed on a pool missing two of its own gates
+   (docs/analysis/2026-09-01-postshock-anchor-trace.md); brief amended
+   2026-09-03 to the spec-literal funnel (67/53 candidate, 37/34 control,
+   pinned corpus). scripts/postshock_fade.py (WIP, banner'd) must reproduce
+   that funnel before any of its numbers are read; dispatch staged.
+15. Real-order fill statistics re-cut on RESTED orders only (NOTE7):
+   timing_profile quote lifetimes, entry_quality fills tagging, nightly
+   placed/filled counts. The NOTE6 proxy fill-conditional edge is unaffected.

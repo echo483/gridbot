@@ -8,11 +8,11 @@ docs/analysis — read them, rerun them, never rewrite them), and **OPS**
 (keeping the machine alive). Orientation order stays: CLAUDE.md → STATE.md →
 registry → LIVE_FIRE.md; this file is the floor plan.
 
-## src/gridbot — the system (47 files)
+## src/gridbot — the system (49 files)
 
 | package | tier | what it is |
 |---|---|---|
-| capture/ | WIRING | GRID poller + PM books/discovery + day-file supervisor. The corpus moat — never break continuity (rail 4). |
+| capture/ | WIRING | GRID poller + PM books/discovery + day-file supervisor (the corpus moat — never break continuity, rail 4); pmus_books.py = the PMUS BBO tape recorder (own unit, read-only). |
 | corpus/ | WIRING | day files → Supabase ingest + row builders. |
 | executor/ | WIRING+STRATEGY | engine.py (cycle loop, gates, dedup), intents.py (price/size + band + drift gates), pmus.py (wire), ledger/limits/fills/reconcile (accounting + caps + venue truth), us_mapping.py. The gate CONSTANTS and qualification rule are strategy; the order lifecycle is wiring. |
 | instruments/ | STRATEGY | detectors, mapentry recorder + verdicts, postquote sampler, shadow lanes. Each armable lane pairs with a frozen registry row. |
@@ -21,7 +21,7 @@ registry → LIVE_FIRE.md; this file is the floor plan.
 | analysis/ | OPS | slow-loop Claude analyst (daily, managed) — LLM territory, never trade path (rail 1). |
 | config.py / redaction.py / ratelimit.py / graphql.py | WIRING | keyring-only secrets (5s-timeout reads + last-good cache), log redaction, GRID rate budget, GQL client. |
 
-## scripts/ (61 files) — by tier
+## scripts/ (47 files) — by tier
 
 **WIRING (fork these with the system):** dispatch.py + _anthropic_lane.py
 (agent-team routing; bot-mode profile lanes), _jsonl.py (tolerant reads),
@@ -43,11 +43,15 @@ timing_profile → pmap_calibration → fill_conditional_edge → priced_in_test
 entry_quality → flow_features_study → postshock_lag → wave_detect +
 wave_edge_join → quote_backtest → mapentry2_score → queue16_bandskip_crossin +
 queue16_phase2_outcomes → roundwin2_poolb → crossin_backtest → pcal_fit →
-postshock_fade (WIP quarantine — see its banner). corpus_pull.py pulls
+postshock_fade (WIP quarantine — see its banner) → timing_chain (GRID round
+end → first PMUS book move + our pipe legs; reads the pmus_books tape). corpus_pull.py pulls
 training tables for model work. promote_model.py gates any retrain.
 intl_reference.py samples the intl venue read-only.
 
-**SCRATCH:** scripts/_tmp_* — gitignored by policy, on-disk only.
+**SCRATCH:** scripts/_tmp_* — gitignored by policy, on-disk only; when an
+evidence doc cites one, it moves next to the data it produced (Q15 set:
+data/analysis/q15_scratch/). docs/archive/ holds superseded plans (AWS
+migration, routing-layer analysis) — history, not guidance.
 
 ## Everything else
 
@@ -60,7 +64,7 @@ intl_reference.py samples the intl venue read-only.
   append-only; nothing trades without a row.
 - **docs/analysis/**: dated evidence reports. docs/learnings/: nightly ops
   notes. docs/superpowers/specs/: design briefs.
-- **tests/** (740): hermetic — no network, no keyring, no live D-Bus.
+- **tests/** (827): hermetic — no network, no keyring, no live D-Bus.
 
 ## Forking for a new strategy (the intended seam)
 

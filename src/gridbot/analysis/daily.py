@@ -24,6 +24,10 @@ from gridbot import config
 
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 DEFAULT_MODEL = "claude-sonnet-5"
+# Appended to a note whose SECOND attempt still hit max_tokens: a visibly
+# truncated note beats one that reads as complete (four nightly notes,
+# 08-29..09-02, were cut mid-sentence with no marker).
+TRUNCATION_MARKER = "[TRUNCATED: analysis stopped at max_tokens twice — read as partial]"
 REPO = Path(__file__).resolve().parents[3]
 
 SYSTEM = """You are gridbot's slow-loop quant research analyst. gridbot trades esports
@@ -52,7 +56,7 @@ def _run(cmd: list[str]) -> str:
 
 
 def gather_evidence() -> str:
-    registry = Path(REPO / "docs/experiments/registry.jsonl")
+    registry = REPO / "docs/experiments/registry.jsonl"
     tail = registry.read_text().splitlines()[-8:] if registry.exists() else []
     metrics_path = REPO / "data/models/roundwin-v1/metrics.json"
     metrics = metrics_path.read_text() if metrics_path.exists() else "(no model)"
@@ -101,13 +105,19 @@ def ask_claude(evidence: str, max_tokens: int) -> str:
         return text, data.get("stop_reason")
 
     text, stop = call(max_tokens)
-    if not text and stop == "max_tokens":
+    if stop == "max_tokens":
         # Claude 5 models think by default and thinking counts against
         # max_tokens: long evidence can consume the whole budget before any
-        # text block appears (observed 2026-08-25: 200 OK, 0 text chars).
+        # text block appears (observed 2026-08-25: 200 OK, 0 text chars) —
+        # or, worse, after a PARTIAL text block, which 805ec73's empty-only
+        # retry wrote out as a complete-looking note (docs/analysis
+        # 2026-08-29..09-02 all end mid-sentence). Retry on the stop reason,
+        # not on emptiness.
         text, stop = call(max_tokens * 3)
     if not text:
         raise RuntimeError(f"empty analysis output (stop_reason={stop})")
+    if stop == "max_tokens":
+        text = f"{text}\n{TRUNCATION_MARKER}"
     return text
 
 

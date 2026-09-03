@@ -59,7 +59,7 @@ import sys
 from pathlib import Path
 
 ROUTES: dict[str, tuple[str, str | None, str | None]] = {
-    # kind -> (model, provider-override or None)
+    # kind -> (model, provider-override or None, --reasoning level)
     #
     # provider "openrouter" = tell hermes which GATEWAY to use (its native
     # resolution mis-routed glm/opus early on). provider None = NO --provider
@@ -104,9 +104,11 @@ ROUTES: dict[str, tuple[str, str | None, str | None]] = {
     "search": ("deepseek/deepseek-v4-flash-0731", None, "medium"),      # retrieval/digest/extract over pasted material — its #1 category per user
     "analysis": ("deepseek/deepseek-v4-flash-0731", None, "medium"),    # slow-loop data reads, log digestion, report drafts
     # MODEL DIVERSIFICATION (user 08-28: "use qwen, use nemotron, don't stick
-    # to defaults"). Slugs verified live against OpenRouter's model list on
-    # 2026-08-28 — do NOT invent slugs: hermes' own fallback is pinned to
-    # "qwen/qwen3.8-max", which does not appear in that list.
+    # to defaults"). Slugs re-verified against OpenRouter's live model list on
+    # 2026-09-03: every ROUTES slug AND the hermes fallback chain
+    # (qwen/qwen3.8-max, z-ai/glm-5.3, qwen/qwen3.8-flash,
+    # deepseek/deepseek-v4-flash-0731) resolve. Do NOT invent slugs; check
+    # `curl -s https://openrouter.ai/api/v1/models` before adding one.
     # CAVEAT: a model's self-reported identity is NOT proof of routing —
     # nemotron answered "OK Hermes" in a smoke test, so hermes injects a
     # persona. The OpenRouter dashboard is the only ground truth for which
@@ -126,9 +128,13 @@ ROUTES: dict[str, tuple[str, str | None, str | None]] = {
 
 PROFILES: dict[str, tuple[str, str, bool]] = {
     # kind -> (hermes profile, --reasoning, safe_mode). Models are pinned in
-    # each profile's config.yaml (hermes-side); reasoning is forced here
-    # because the profile default is "medium" — the exact thin-output trap
-    # ROUTES already corrects for the -z lanes.
+    # each profile's config.yaml (hermes-side; aligned with the SOULs and
+    # mirrored in agents/profiles/ on 2026-09-03): builder =
+    # z-ai/glm-5.3-flash:floor (the doctrine's default builder; its SOUL had
+    # claimed deepseek), reasoner = qwen/qwen3.8-max, reviewer =
+    # z-ai/glm-5.3:floor, critical = anthropic/claude-opus-5. Reasoning is
+    # forced here because the profile default is "medium" — the exact
+    # thin-output trap ROUTES already corrects for the -z lanes.
     "builder": ("gridbot-builder", "high", False),
     "reasoner": ("gridbot-reasoner", "high", False),
     "reviewer": ("gridbot-reviewer", "high", True),
@@ -159,38 +165,34 @@ def _run(kind: str, prompt: str, timeout: int) -> tuple[int, str]:
         cmd = ["hermes", "-p", profile, "--reasoning", reasoning, "-z", prompt]
         if safe:
             cmd.append("--safe-mode")
-        print(f"dispatch[{kind}] -> profile {profile}"
-              f"{' (safe-mode)' if safe else ' (REPO-WRITING)'}", file=sys.stderr)
-        try:
-            res = subprocess.run(cmd, capture_output=True, text=True,
-                                 timeout=timeout, check=False)
-        except subprocess.TimeoutExpired:
-            return 124, ""
-        return res.returncode, res.stdout
-    model, provider, reasoning = ROUTES[kind]
-    prompt = _preamble(kind) + prompt
-    if provider == "anthropic":
-        # Direct Claude API call: key read from the OS keyring inside the
-        # process, never argv (visible in /proc/<pid>/cmdline), never env.
-        from _anthropic_lane import run as _anthropic_run
-        print(f"dispatch[{kind}] -> {model} (anthropic API)", file=sys.stderr)
-        try:
-            return 0, _anthropic_run(prompt, model=model, effort=reasoning or "high",
-                                     label=kind)
-        except Exception as exc:  # noqa: BLE001 — budget/API failures report, never crash a relay
-            print(f"dispatch[{kind}] FAILED: {type(exc).__name__}: {exc}",
-                  file=sys.stderr)
-            return 1, ""
-    cmd = ["hermes", "-m", model]
-    if provider:
-        cmd += ["--provider", provider]
-    if reasoning:
-        cmd += ["--reasoning", reasoning]
-    cmd += ["-z", prompt, "--safe-mode"]
-    print(f"dispatch[{kind}] -> {model}", file=sys.stderr)
+        mode = "safe-mode" if safe else "REPO-WRITING"
+        print(f"dispatch[{kind}] -> profile {profile} ({mode})", file=sys.stderr)
+    else:
+        model, provider, reasoning = ROUTES[kind]
+        prompt = _preamble(kind) + prompt
+        if provider == "anthropic":
+            # Direct Claude API call: key read from the OS keyring inside the
+            # process, never argv (visible in /proc/<pid>/cmdline), never env.
+            from _anthropic_lane import run as _anthropic_run
+            print(f"dispatch[{kind}] -> {model} (anthropic API)", file=sys.stderr)
+            try:
+                return 0, _anthropic_run(prompt, model=model, effort=reasoning or "high",
+                                         label=kind)
+            except Exception as exc:  # noqa: BLE001 — budget/API failures report, never crash a relay
+                print(f"dispatch[{kind}] FAILED: {type(exc).__name__}: {exc}",
+                      file=sys.stderr)
+                return 1, ""
+        cmd = ["hermes", "-m", model]
+        if provider:
+            cmd += ["--provider", provider]
+        if reasoning:
+            cmd += ["--reasoning", reasoning]
+        cmd += ["-z", prompt, "--safe-mode"]
+        print(f"dispatch[{kind}] -> {model}", file=sys.stderr)
+
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                             check=False)
+        res = subprocess.run(cmd, capture_output=True, text=True,
+                             timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
         return 124, ""
     return res.returncode, res.stdout

@@ -1,5 +1,20 @@
 # H-POSTSHOCKFADE1 — post-shock fade instrument design brief
 
+> **AMENDMENT 2026-09-03 (ops session, from docs/analysis/2026-09-01-postshock-anchor-trace.md).**
+> The design-mode anchors quoted below as "108 → 70 deduped entries / 55 series"
+> and "32 UP control" are VOID: the run that produced them skipped two of the
+> population gates §1.1/§1.2 name (`prev_p_map ≥ 0.40`, `not ended_by_restart`)
+> and never pinned its corpus state. The spec-literal funnel is the reference:
+> on the pinned anchor corpus (seven day files 08-26→09-01, 09-01 truncated to
+> rows with ts_ns ≤ 1788258303057068175; 28,471 rows) it yields **67 deduped
+> candidate entries / 53 series** and **37 / 34 UP control**; on the full corpus
+> as of 2026-09-01 (31,127 rows) **72 / 58** and **38 / 35**. Clause 1 is
+> pinned to the shock row ITSELF, clause 3 to the NEXT live quote, and the UP
+> population mirrors the `prev_p_map ≥ 0.40` gate (stated below). Nothing else
+> in this brief changes; the instrument (scripts/postshock_fade.py, WIP) must be
+> reconciled to these numbers before any of its output is read.
+
+
 Author: gridbot-reasoner (hard-reasoning lane), 2026-09-01. Status: DESIGN ONLY.
 No registry edit (the JSON in §3 is a draft pending user sign-off), no src/,
 no code beyond read-only verification runs cited below, no secrets.
@@ -101,19 +116,22 @@ docs/analysis/2026-08-31-crossin-design.md §Method).
 
 - Candidate entry condition (all frozen):
   1. DOWN shock, prev_p_map ≥ 0.40, not ended_by_restart, market_slug present,
-     shock-row book alive (bid and ask numeric, > 0, ask > bid; zero prices
-     are dead-book placeholders per mapentry.py parse_bbo).
+     shock-row book alive (bid and ask numeric, > 0, ask > bid on the shock
+     row ITSELF — row t's own fields, never a later quote; zero prices are
+     dead-book placeholders per mapentry.py parse_bbo). [pinned 2026-09-03]
   2. STALENESS GATE: shock-row gap bid − p_map ≥ 0.10 (10 book points).
      Rationale: 08-27 corpus DOWN median gap was +15.1c (STATE.md 11d);
      0.10 is below the median (admits the typical episode) but above the
      noise band around the 0.05 converge constant. This is a SIZE threshold
      on the stale top, pinned at 10pt.
-  3. PERSISTENCE/VALIDITY: the next same-sequence live quote within 45s of
-     the entry row must show bid − p_map ≥ 0.05 (still stale, half the entry
-     gate). Failed persistence ⇒ no entry. This kills single-evaluation
+  3. PERSISTENCE/VALIDITY: the NEXT same-sequence live quote (strictly after
+     the shock row, within 45s of the shock ts_ns; live = bid and ask numeric,
+     > 0, ask > bid) must show bid − p_map ≥ 0.05 (still stale, half the
+     entry gate). Failed persistence ⇒ no entry. This kills single-evaluation
      phantom tops and is the crossin-style persistence filter scaled to the
-     29s convergence window. Measured cost: 108 → 70 deduped design entries
-     (verified run, full corpus 08-26→09-01).
+     29s convergence window. Measured cost (spec-literal, pinned anchor
+     corpus): 162 gate-passing → 83 persisted → 67 deduped / 53 series
+     (the earlier "108 → 70" figure is VOID — see the 2026-09-03 amendment).
   4. TIMING OFFSETS (pinned to the ~29s convergence and the 8.5s pipe):
      - Decision anchor = shock row ts_ns (grid_ts_ns-carried detection).
      - Wire latency budget: place within +8.5s of detection (median
@@ -151,10 +169,13 @@ docs/analysis/2026-08-31-crossin-design.md §Method).
 UP shocks, same plumbing mirrored: LONG the riser, executable price = ask
 (the favorite's ask after p_map rose), gate ask-gap p_map − ask ≥ 0.10,
 persistence p_map − ask ≥ 0.05 within 45s, same dedup/settlement/offsets.
+UP POPULATION (pinned 2026-09-03): the §1.2 clause-1 gates mirror verbatim —
+prev_p_map ≥ 0.40 (the riser started as a plausible favorite), not
+ended_by_restart, market_slug present, shock-row book alive on the row itself.
 Expected ≈ no edge (08-27 UP gap was only +3.2c, STATE.md 11d — the book
-nearly caught up). Verified design-corpus supply: 32 deduped UP control
-entries with persistence (48 without) vs 70 candidate — adequate, not
-generous. The two arm CIs are emitted and NOTHING ELSE (CROSSIN1 F7: no
+nearly caught up). Spec-literal design-corpus supply: 37 deduped UP control
+entries / 34 series (anchor corpus; 38 / 35 on the 09-01 full corpus) vs
+67 candidate — adequate, not generous (the earlier "32 / 48" is VOID). The two arm CIs are emitted and NOTHING ELSE (CROSSIN1 F7: no
 day/distance splits as verdict inputs).
 
 ### 1.4 Resolution and statistics
@@ -236,8 +257,14 @@ Pinned exactly so an analysis lane runs it verbatim:
 ```
 
 Bar-clause notes (why these numbers):
-- (i) n-floor 40/15: design mode produced 70 deduped candidate entries / 55
-  series over 7 days (verified run 2026-09-01, full corpus with persistence);
+- (i) n-floor 40/15: design mode produced **67 deduped candidate entries /
+  53 series** over the pinned design corpus (seven day files 08-26→09-01,
+  09-01 truncated to its state at 2026-09-01T10:25:03Z — rows with ts_ns ≤
+  1788258303057068175; 28,471 rows; spec-literal gates) and 37 / 34 UP
+  control entries; 72 / 58 and 38 / 35 on the 09-01 full corpus. The earlier
+  108/70 anchor was computed on a pool MISSING the prev_p_map ≥ 0.40 and
+  ended_by_restart gates (verification bug,
+  docs/analysis/2026-09-01-postshock-anchor-trace.md) and is voided;
   holdout accrual runs ~40 new series/day
   (docs/analysis/2026-08-31-bookpin1-holdout-accrual.md) so the floor is
   reachable in days, not months, but is not a formality.

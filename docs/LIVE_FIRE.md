@@ -59,6 +59,15 @@ frozen bars the shadow engine reports against.
 - Run `GRIDBOT_LIVE=1 uv run python scripts/live_fire_test.py` — one $1
   far-from-touch post-only order: place → list → cancel → gone, with
   latency per leg and a MANUAL ACTION block if cancel ever fails.
+- **Then run it again with `--side short`** (added 2026-09-03, registry
+  H-MAPENTRY1-NOTE7). The venue's `price` is always the Yes price and a
+  BUY_SHORT at P costs 1−P; the engine converts our cost in
+  `pmus.wire_price`. The 08-25 first fire was long-only, so that path was
+  never wire-verified and every armed-night short was posted at the wrong
+  level (15/24 rejected). The short run reads the order back and prints
+  `CONVENTION VERIFIED` only when the venue stored `ORDER_SIDE_SELL` at
+  exactly the computed Yes price. Do not arm a session that can short
+  until it does.
 
 ## Adversarial review 2026-08-25 (glm-5.3-flash (then stealth 'ox-alpha'), card t_6fd66ca8) — all fixed
 
