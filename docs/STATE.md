@@ -472,6 +472,13 @@ Only the quintile figure is the bar.
    dead, momentum dead; H-MODELMOMENTUM1 draft carries a close
    recommendation; THE USER DECIDES. Timing chain agrees: the book does
    not move toward p_map within a round (Addendum 3). No tests yet.
-15. Real-order fill statistics re-cut on RESTED orders only (NOTE7):
-   timing_profile quote lifetimes, entry_quality fills tagging, nightly
-   placed/filled counts. The NOTE6 proxy fill-conditional edge is unaffected.
+15. Real-order fill statistics re-cut on RESTED orders only (NOTE7).
+   DONE 2026-09-03 eve for timing_profile (deepseek builder, 10 tests):
+   `scripts/timing_profile.py YYYYMMDD` prints a rested re-cut with venue
+   state precedence settle_truth > ledger venue_state > fill > UNKNOWN.
+   08-27: placed 33 | rested 22 | rejected 11 | filled 10 -> fill@rested
+   45.5% (long 15 rested / 53%; short 7 rested / 29%); 08-26: 15 | 6 | 9 |
+   3 -> 50%. Quote lifetime among rested: median 150s (most sat the full
+   TTL), fills at 40-124s. Reconciles exactly with the 48 venue-verified
+   orders. entry_quality --fills tagging still uses the caller-supplied
+   fills list (unchanged). The NOTE6 proxy fill-conditional edge is unaffected.
