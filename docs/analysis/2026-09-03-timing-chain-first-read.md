@@ -80,3 +80,47 @@ Our own pipe, median over the same events (never imputed):
 
 Repro: `uv run python scripts/timing_chain.py 20260903` (exit 1 on a day
 without book rows). Per-event rows: `data/analysis/timing_chain-20260903.json`.
+
+## Addendum (16:05 PDT) — size-and-horizon read
+
+The first read's "first ≥1-tick move" is mostly noise (55% direction
+agreement). The amendment adds, per joined event, the ORIENTED mid move at
++30/+60/+120s after our observation (+ = toward the round winner's side) and
+the first ≥3-tick (0.03) move, with series-clustered bootstrap CIs (resample
+series_id, 1000 reps, seed 17). Same tape, same 12 series.
+
+| horizon | rows | mean oriented [95% CI] | median |
+|---|---|---|---|
+| +30s | 343/389 | +0.007 [0, +0.014] | 0 |
+| +60s | 340/389 | +0.006 [0, +0.012] | 0 |
+| +120s | 330/389 | +0.004 [−0.002, +0.013] | 0 |
+
+- Share of round ends whose oriented move reaches +3 ticks by +120s: **31%** (n=330).
+- First ≥3-tick move (n=268): lead_vs_obs p10/p50/p90 = −2.7 / **+34.7** / +170s,
+  book first 16%, direction agreement **54.5%** — no better than the 1-tick read.
+
+**What it says.** A round end is worth about half a tick of oriented drift
+on this tape: the map book barely reprices on the round we detect, and the
+median event does not move at all. The ≥3-tick filter does not rescue
+direction, and its p50 lead of 35s with a p90 of 170s means most 3-tick moves
+inside the 300s window are driven by LATER rounds (a round lasts ~90–120s),
+not the one we observed — the window is longer than the round cadence, so
+"direction agreement" is diluted toward a coin flip by construction. The
+timing lead is real; the payload per round is small. A single-round
+front-run has ~0.5pt to collect before fees and spread; the mechanism that
+survives this read is still rail B — act on the model's MAP fair value after
+the round, aggregating rounds, rather than trading the round's own reprice.
+
+**Next amendment (queued):** bound each event's horizon at the NEXT round
+end in the same map (`move_next_round`), so every move is attributed to
+exactly one round; report the same clustered CI and a direction agreement on
+that bounded move. Until that lands, the 54.5% figure is not a statement
+about the market — it is a statement about the window.
+
+**Measurement notes.** Horizon observations are coverage-aware: the tape is
+change-only with a 30s per-slug heartbeat, so a covered slug always has a row
+within 35s before any instant; a silent book is a real 0.0 move, and a last
+row older than 35s is a coverage gap (None). Requiring a row strictly inside
+the window would drop exactly the quiet books and bias every horizon toward
+movers (the lane's first cut did; +30s rows 320 → 343 after the fix). A
+single-series CI is reported as "no interval", never as a zero-width one.

@@ -21,7 +21,22 @@ so the expected reprice is mid UP; ``short`` = mid DOWN). On the
 ``pmus_bbo`` tape (heartbeats included — they are valid observations) the
 pre-event mid is the last row at or before ``t_prev``; the first row after
 ``t_prev`` whose mid differs by >= one tick (0.01), searched up to
-``t_obs + 300s``, is the move.
+``t_obs + 300s``, is the move. The first read
+(docs/analysis/2026-09-03-timing-chain-first-read.md) found that first
+move agrees with the round winner only ~55% of the time, so every joined
+event also carries the size-and-horizon read of Step 2b.
+
+Step 2b — size and horizon reading. ``move_30s`` / ``move_60s`` /
+``move_120s``: mid of the last ``pmus_bbo`` row with ``req_ns <= t_obs +
+h`` minus the pre-event mid, ORIENTED toward the round winner's side
+(us_side long -> +delta, short -> -delta); None at a horizon whose window
+(t_obs, t_obs + h] holds no row — the pre-event row alone is not an
+observation at that horizon.
+``t_move3_ns`` / ``lead3_vs_obs_s`` / ``direction3_agrees``: the first
+>=3-tick (0.03) move, same semantics as the 1-tick fields. Summary
+intervals are series-clustered bootstraps (resample series_id with
+replacement, 1000 reps, random.Random(17)); n and n_series ride with
+every CI — never pooled without an interval.
 
 Step 3 — our own pipeline legs on the same events (instances, mapentry
 rows, order intents): reported where joinable, never imputed.
@@ -42,6 +57,7 @@ must never print a green summary.
 from __future__ import annotations
 
 import json
+import random
 import sys
 from bisect import bisect_right
 from collections import Counter, defaultdict
@@ -59,7 +75,12 @@ except ImportError:  # imported as scripts.timing_chain (tests)
 
 TICK = 0.01
 TICK_EPS = 1e-9
+MOVE3_TICKS = 3                # "real" move = >= 3 ticks = 0.03 in mid
 MOVE_WINDOW_S = 300.0
+HORIZONS_S = (30, 60, 120)     # oriented mid-move horizons after t_obs
+COVERAGE_SLACK_S = 35.0        # recorder heartbeat (30s) + cycle jitter: a covered slug always has a row this recent
+BOOTSTRAP_SEED = 17            # series-clustered CI resampling
+BOOTSTRAP_REPS = 1000
 INTENT_JOIN_WINDOW_S = 120.0  # an intent this long after its mapentry row is a different event
 PHASES = (("early (round <= 6)", 1, 6), ("mid (7-18)", 7, 18), ("late (>= 19)", 19, 10**9))
 LEGS = (
@@ -218,24 +239,63 @@ def book_series(bbo_rows: list[dict]) -> dict[str, tuple[list[int], list[float]]
 
 def first_move(times: list[int], mids: list[float], t_prev_ns: int, t_obs_ns: int,
                tick: float = TICK, window_s: float = MOVE_WINDOW_S) -> dict:
-    """Pre-event mid, mid at observation, and the first >= one-tick move after t_prev."""
+    """Pre-event mid, mid at observation, the first >= one-tick move after
+    t_prev, and the first >=3-tick move (``*_3`` fields, same semantics).
+
+    The 3-tick scan keys (``t_move3_ns``, ``mid_after_3``, ``move_size_3``)
+    are always present and are None when no such move exists in the window —
+    a 1- or 2-tick jitter never registers as a 3-tick move.
+    """
     i = bisect_right(times, t_prev_ns)  # rows with req_ns <= t_prev are [0, i)
     if i == 0:
         return {"mid_before": None, "mid_at_obs": None, "t_move_ns": None,
-                "mid_after": None, "move_size": None}
+                "mid_after": None, "move_size": None,
+                "t_move3_ns": None, "mid_after_3": None, "move_size_3": None}
     mid_before = mids[i - 1]
     j = bisect_right(times, t_obs_ns)
     mid_at_obs = mids[j - 1]
     limit = t_obs_ns + int(window_s * 1e9)
+    out = {"mid_before": round(mid_before, 4), "mid_at_obs": round(mid_at_obs, 4),
+           "t_move_ns": None, "mid_after": None, "move_size": None,
+           "t_move3_ns": None, "mid_after_3": None, "move_size_3": None}
+    tick3 = MOVE3_TICKS * tick
     for k in range(i, len(times)):
         if times[k] > limit:
             break
-        if abs(mids[k] - mid_before) >= tick - TICK_EPS:
-            return {"mid_before": round(mid_before, 4), "mid_at_obs": round(mid_at_obs, 4),
-                    "t_move_ns": times[k], "mid_after": round(mids[k], 4),
-                    "move_size": round(mids[k] - mid_before, 4)}
-    return {"mid_before": round(mid_before, 4), "mid_at_obs": round(mid_at_obs, 4),
-            "t_move_ns": None, "mid_after": None, "move_size": None}
+        delta = abs(mids[k] - mid_before)
+        if out["t_move_ns"] is None and delta >= tick - TICK_EPS:
+            out.update(t_move_ns=times[k], mid_after=round(mids[k], 4),
+                       move_size=round(mids[k] - mid_before, 4))
+        if out["t_move3_ns"] is None and delta >= tick3 - TICK_EPS:
+            out.update(t_move3_ns=times[k], mid_after_3=round(mids[k], 4),
+                       move_size_3=round(mids[k] - mid_before, 4))
+        if out["t_move_ns"] is not None and out["t_move3_ns"] is not None:
+            break
+    return out
+
+
+def horizon_moves(times: list[int], mids: list[float], t_obs_ns: int, mid_before: float,
+                  horizons_s: tuple[int, ...] = HORIZONS_S,
+                  slack_s: float = COVERAGE_SLACK_S) -> dict[str, float | None]:
+    """Mid move at each horizon: mid(last row with req_ns <= t_obs + h) minus
+    mid_before; None when the recorder was not covering the slug at the horizon.
+
+    Positive = book moved toward the round winner's side once ``us_side`` is
+    long; callers flip the sign for short. The tape is change-only with a
+    heartbeat every HEARTBEAT_S per slug, so a COVERED slug always has a row
+    within ``slack_s`` before any instant — a silent book is a real 0.0 move,
+    not a missing observation. Requiring a row strictly inside (t_obs, t_obs+h]
+    instead would drop exactly the quiet books and bias every horizon toward
+    movers. A last row older than ``slack_s`` means a coverage gap: None.
+    """
+    out: dict[str, float | None] = {}
+    slack_ns = int(slack_s * 1e9)
+    for h in horizons_s:
+        t_h = t_obs_ns + int(h * 1e9)
+        hi = bisect_right(times, t_h)           # rows at or before the horizon are [0, hi)
+        covered = hi > 0 and t_h - times[hi - 1] <= slack_ns
+        out[f"move_{h}s"] = round(mids[hi - 1] - mid_before, 4) if covered else None
+    return out
 
 
 def join_books(events: list[dict], mappings: dict[str, dict],
@@ -256,10 +316,15 @@ def join_books(events: list[dict], mappings: dict[str, dict],
         ev["slug"], ev["us_side"] = slug, us_side
         series = books.get(slug)
         res = first_move(*series, ev["t_prev_ns"], ev["t_obs_ns"]) if series else None
-        if res is None or res["mid_before"] is None:
+        if series is None or res is None or res["mid_before"] is None:
             ev["outcome"] = "skipped:no_pre_book"
             continue
         ev.update(res)
+        # Oriented horizon read (moved AND no_move_300s events): +delta toward
+        # the winner's side (long -> up is good, short -> down is good).
+        sign = 1.0 if us_side == "long" else -1.0
+        for key, v in horizon_moves(*series, ev["t_obs_ns"], res["mid_before"]).items():
+            ev[key] = None if v is None else round(sign * v, 4)
         if res["t_move_ns"] is None:
             ev["outcome"] = "no_move_300s"
             continue
@@ -268,6 +333,10 @@ def join_books(events: list[dict], mappings: dict[str, dict],
         ev["lead_vs_prev_s"] = round((res["t_move_ns"] - ev["t_prev_ns"]) / 1e9, 3)
         up = res["move_size"] > 0
         ev["direction_agrees"] = (up and us_side == "long") or (not up and us_side == "short")
+        if res["t_move3_ns"] is not None:  # a >=3-tick move implies the 1-tick one
+            ev["lead3_vs_obs_s"] = round((res["t_move3_ns"] - ev["t_obs_ns"]) / 1e9, 3)
+            up3 = res["move_size_3"] > 0
+            ev["direction3_agrees"] = (up3 and us_side == "long") or (not up3 and us_side == "short")
 
 
 # --- step 3: our own pipeline legs -------------------------------------------
@@ -343,6 +412,50 @@ def pct(vals: list[float], q: float) -> float | None:
     return round(s[lo] + (s[hi] - s[lo]) * (pos - lo), 3)
 
 
+def _rep_stat(vals: list[float], statistic: str) -> float:
+    if statistic == "median":
+        s = sorted(vals)
+        m = len(s) // 2
+        return s[m] if len(s) % 2 else (s[m - 1] + s[m]) / 2.0
+    return sum(vals) / len(vals)
+
+
+def bootstrap_ci(pairs: list[tuple[str, float]], statistic: str = "mean",
+                 seed: int = BOOTSTRAP_SEED, reps: int = BOOTSTRAP_REPS) -> dict | None:
+    """Point estimate and series-clustered 95% CI of a mean or median.
+
+    Resamples SERIES with replacement (anti-overfitting rail: events of one
+    series share a book and a winner; the cluster, not the row, is the
+    observation unit), takes the statistic of the resampled events each rep,
+    and reports the 2.5/97.5 percentile of the rep statistics. Deterministic
+    for a fixed seed (17). None when there is nothing to estimate; ``ci95`` is
+    None with a single series — one cluster carries no between-series
+    information, and a zero-width interval would read as certainty.
+    """
+    if not pairs:
+        return None
+    by_series: dict[str, list[float]] = defaultdict(list)
+    for sid, v in pairs:
+        by_series[sid].append(v)
+    sids = sorted(by_series)
+    if len(sids) == 1:
+        point = round(_rep_stat(by_series[sids[0]], statistic), 4)
+        return {"point": point, "ci95": None, "n": len(pairs), "n_series": 1}
+    rng = random.Random(seed)
+    stats: list[float] = []
+    for _ in range(reps):
+        resampled: list[float] = []
+        for _ in sids:
+            resampled.extend(by_series[rng.choice(sids)])
+        stats.append(_rep_stat(resampled, statistic))
+    stats.sort()
+    point = round(_rep_stat([v for _, v in pairs], statistic), 4)
+    return {"point": point,
+            "ci95": [round(stats[int(0.025 * (len(stats) - 1))], 4),
+                     round(stats[int(0.975 * (len(stats) - 1))], 4)],
+            "n": len(pairs), "n_series": len(sids)}
+
+
 def _moved_block(evs: list[dict]) -> dict:
     leads = [ev["lead_vs_obs_s"] for ev in evs]
     n = len(evs)
@@ -356,9 +469,40 @@ def _moved_block(evs: list[dict]) -> dict:
     }
 
 
+def _moved3_block(evs: list[dict]) -> dict:
+    """Same shape as the 1-tick moved block, restricted to events whose first
+    >=3-tick move landed within 300s (a subset of outcome == moved)."""
+    evs3 = [ev for ev in evs if "lead3_vs_obs_s" in ev]
+    leads = [ev["lead3_vs_obs_s"] for ev in evs3]
+    n = len(evs3)
+    return {
+        "n": n,
+        "lead3_vs_obs_s": {"p10": pct(leads, 0.1), "p50": pct(leads, 0.5),
+                           "p90": pct(leads, 0.9)},
+        "book_first_share": None if not n else round(sum(1 for x in leads if x < 0) / n, 3),
+        "direction_agreement_rate": (
+            None if not n else round(sum(1 for ev in evs3 if ev["direction3_agrees"]) / n, 3)),
+    }
+
+
+def _horizon_block(evs: list[dict], h: int) -> dict:
+    """Oriented move at horizon h across joined events (moved + no_move_300s)."""
+    pairs = [(ev["series_id"], ev[f"move_{h}s"]) for ev in evs
+             if ev.get(f"move_{h}s") is not None]
+    return {
+        "horizon_s": h,
+        "n": len(evs),
+        "n_with_row": len(pairs),
+        "mean_oriented": bootstrap_ci(pairs, "mean"),
+        "median_oriented": bootstrap_ci(pairs, "median"),
+    }
+
+
 def summarize(day: str, events: list[dict]) -> dict:
     outcomes = Counter(ev["outcome"] for ev in events)
     moved = [ev for ev in events if ev["outcome"] == "moved"]
+    oriented = [ev for ev in events if ev["outcome"] in ("moved", "no_move_300s")]
+    m120 = [ev["move_120s"] for ev in oriented if ev.get("move_120s") is not None]
     legs = {}
     for key, label in LEGS:
         vals = [ev["legs"][key] for ev in events if ev.get("legs", {}).get(key) is not None]
@@ -370,6 +514,15 @@ def summarize(day: str, events: list[dict]) -> dict:
         "n_joined": sum(1 for ev in events if ev.get("slug")),
         "outcomes": dict(sorted(outcomes.items())),
         "moved": _moved_block(moved),
+        "moved3": _moved3_block(moved),
+        "horizons": {
+            "n": len(oriented),
+            "by_horizon": {f"{h}s": _horizon_block(oriented, h) for h in HORIZONS_S},
+            "share_oriented_120s_ge_3t": (None if not m120
+                                          else round(sum(1 for x in m120 if x >= 3 * TICK - TICK_EPS)
+                                                     / len(m120), 3)),
+            "n_oriented_120s": len(m120),
+        },
         "by_phase": {
             label: _moved_block([ev for ev in moved if lo <= ev["round_number"] <= hi])
             for label, lo, hi in PHASES
@@ -382,8 +535,20 @@ def _fmt(v: object) -> str:
     if v is None:
         return "—"
     if isinstance(v, float):
-        return f"{v:.3f}".rstrip("0").rstrip(".") if abs(v) < 1e6 else f"{v:.0f}"
+        s = f"{v:.3f}".rstrip("0").rstrip(".") if abs(v) < 1e6 else f"{v:.0f}"
+        return "0" if s == "-0" else s
     return str(v)
+
+
+def _fmt_ci(blk: dict | None) -> str:
+    """point [lo, hi] with n and n_series beside the interval — never pooled without it."""
+    if blk is None:
+        return "—"
+    if blk["ci95"] is None:
+        return f"{_fmt(blk['point'])} [no interval: 1 series] (n={blk['n']}, series=1)"
+    lo, hi = blk["ci95"]
+    return (f"{_fmt(blk['point'])} [{_fmt(lo)}, {_fmt(hi)}] "
+            f"(n={blk['n']}, series={blk['n_series']})")
 
 
 def render(summary: dict) -> str:
@@ -414,6 +579,35 @@ def render(summary: dict) -> str:
         f"| lead_vs_prev_s p50 (upper bound) | {_fmt(m['lead_vs_prev_s_p50'])} |",
         f"| book first (lead_vs_obs_s < 0) | {_fmt(m['book_first_share'])} |",
         f"| direction agreement | {_fmt(m['direction_agreement_rate'])} |",
+        "",
+        f"## size and horizon reading (moved + no_move_300s, n={summary['horizons']['n']})",
+        "",
+        "Oriented mid move vs the pre-event mid (+ toward the round winner's side);",
+        "series-clustered bootstrap 95% CI (resample series_id, 1000 reps, seed 17).",
+        "",
+        "| horizon | rows | mean oriented [95% CI] | median oriented [95% CI] |",
+        "|---|---|---|---|",
+    ]
+    for h in HORIZONS_S:
+        blk = summary["horizons"]["by_horizon"][f"{h}s"]
+        lines.append(f"| +{h}s | {blk['n_with_row']}/{blk['n']} | "
+                     f"{_fmt_ci(blk['mean_oriented'])} | {_fmt_ci(blk['median_oriented'])} |")
+    m3 = summary["moved3"]
+    hz = summary["horizons"]
+    lines += [
+        "",
+        (f"- share of events with oriented +120s move >= +0.03: "
+         f"**{_fmt(hz['share_oriented_120s_ge_3t'])}** (n={hz['n_oriented_120s']})"),
+        "",
+        f"## first >=3-tick move (n={m3['n']})",
+        "",
+        "| stat | value |",
+        "|---|---|",
+        f"| lead3_vs_obs_s p10 | {_fmt(m3['lead3_vs_obs_s']['p10'])} |",
+        f"| lead3_vs_obs_s p50 | {_fmt(m3['lead3_vs_obs_s']['p50'])} |",
+        f"| lead3_vs_obs_s p90 | {_fmt(m3['lead3_vs_obs_s']['p90'])} |",
+        f"| book first (lead3_vs_obs_s < 0) | {_fmt(m3['book_first_share'])} |",
+        f"| direction agreement | {_fmt(m3['direction_agreement_rate'])} |",
         "",
         "## by map phase (moved only)",
         "",

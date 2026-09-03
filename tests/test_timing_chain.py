@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 # Ensure the project root is on sys.path so `scripts` is importable (pytest
 # only adds tests/ to sys.path; mirror the existing test_wave_detect.py).
 _project_root = Path(__file__).resolve().parent.parent
@@ -432,3 +434,173 @@ def test_unresolvable_segment_hole_names_the_right_winner():
     assert ev["round_number"] == 2          # positional (join key)
     assert ev["round_seq"] == 3             # the segment that actually resolved
     assert (ev["winner_team"], ev["loser_team"]) == ("Falcons", "Vexar")
+
+
+# --- step 2b: oriented horizon moves + >=3-tick moves -------------------------
+
+
+class TestOrientedHorizonMoves:
+    def test_short_event_orients_moves_toward_the_winner_positive(self):
+        # Falcons named -> us_side short; mid falling = book moving toward Vexar.
+        rows = [_bbo(T0 - 2 * NS, 0.59, 0.61),   # mid_before = 0.60
+                _bbo(T0 + 5 * NS, 0.57, 0.59),   # mid 0.58 (the 1-tick move, pre-t_obs)
+                _bbo(T0 + 40 * NS, 0.55, 0.57),  # t_obs + 28s
+                _bbo(T0 + 70 * NS, 0.53, 0.55),  # t_obs + 58s
+                _bbo(T0 + 125 * NS, 0.53, 0.55, heartbeat=True)]  # t_obs + 113s: covered
+        ev = _event(winner="Vexar", loser="Falcons")
+        tc.join_books([ev], {SID: _mapping(named="Falcons")}, tc.book_series(rows))
+        assert ev["us_side"] == "short" and ev["outcome"] == "moved"
+        assert ev["move_30s"] == 0.04    # raw 0.56 - 0.60 = -0.04, oriented -> +0.04
+        assert ev["move_60s"] == 0.06    # raw 0.54 - 0.60 = -0.06 -> +0.06
+        assert ev["move_120s"] == 0.06   # heartbeat proves the book sat at 0.54 through +120s
+
+    def test_long_event_keeps_the_raw_sign(self):
+        rows = [_bbo(T0 - 2 * NS, 0.49, 0.51), _bbo(T0 + 5 * NS, 0.51, 0.53),
+                _bbo(T0 + 40 * NS, 0.55, 0.57),
+                _bbo(T0 + 120 * NS, 0.55, 0.57, heartbeat=True)]
+        ev = _event()
+        tc.join_books([ev], {SID: _mapping()}, tc.book_series(rows))
+        assert ev["us_side"] == "long"
+        assert ev["move_30s"] == 0.06 and ev["move_60s"] == 0.06 and ev["move_120s"] == 0.06
+
+    def test_horizon_rows_picked_by_req_ns_le_t_obs_plus_h(self):
+        t_obs = T0 + 12 * NS
+        res = tc.horizon_moves([t_obs - NS, t_obs + 30 * NS], [0.50, 0.55], t_obs, 0.50)
+        assert res["move_30s"] == 0.05  # row exactly AT the cutoff is in
+        res = tc.horizon_moves([t_obs - NS, t_obs + 30 * NS + 1], [0.50, 0.55], t_obs, 0.50)
+        assert res["move_30s"] == 0.0   # 1ns past the cutoff is out; the 31s-old pre-row is
+        #                                 recent enough to prove coverage -> unchanged, not None
+        # the LAST row inside the window wins
+        res = tc.horizon_moves([t_obs + 5 * NS, t_obs + 29 * NS], [0.52, 0.55], t_obs, 0.50)
+        assert res["move_30s"] == 0.05
+
+    def test_coverage_gap_is_none_but_a_quiet_covered_book_is_zero(self):
+        t_obs = T0 + 12 * NS
+        # Last row before the +30s/+60s horizons is 70s old: the recorder was not
+        # covering the slug (heartbeat is 30s) -> None. The +120s horizon has a
+        # 20s-old row -> a real observation.
+        res = tc.horizon_moves([t_obs - 40 * NS, t_obs + 100 * NS], [0.50, 0.55], t_obs, 0.50)
+        assert res["move_30s"] is None and res["move_60s"] is None and res["move_120s"] == 0.05
+        # Pre-event row plus one row at t_obs+200s: nothing proves coverage at any horizon.
+        rows = [_bbo(T0 - 2 * NS, 0.49, 0.51),
+                _bbo(T0 + 12 * NS + 200 * NS, 0.49, 0.51)]
+        ev = _event()
+        tc.join_books([ev], {SID: _mapping()}, tc.book_series(rows))
+        assert ev["outcome"] == "no_move_300s"
+        assert ev["move_30s"] is None and ev["move_60s"] is None and ev["move_120s"] is None
+        # A single row at t_obs+40s: too old for +30s (44s-old pre-row), fresh for +60s,
+        # 80s old at +120s -> only the +60s horizon is an observation.
+        rows = [_bbo(T0 - 2 * NS, 0.49, 0.51), _bbo(T0 + 12 * NS + 40 * NS, 0.51, 0.53)]
+        ev = _event()
+        tc.join_books([ev], {SID: _mapping()}, tc.book_series(rows))
+        assert ev["outcome"] == "moved"
+        assert ev["move_30s"] is None and ev["move_60s"] == 0.02 and ev["move_120s"] is None
+        # A quiet book under heartbeat coverage is a 0.0 move at every horizon — the
+        # case a "row strictly inside the window" rule would have dropped, biasing
+        # every horizon toward movers.
+        rows = [_bbo(T0 - 2 * NS, 0.49, 0.51)] + [
+            _bbo(T0 + 12 * NS + k * NS, 0.49, 0.51, heartbeat=True) for k in (14, 44, 74, 104)]
+        ev = _event()
+        tc.join_books([ev], {SID: _mapping()}, tc.book_series(rows))
+        assert ev["outcome"] == "no_move_300s"
+        assert ev["move_30s"] == 0.0 and ev["move_60s"] == 0.0 and ev["move_120s"] == 0.0
+
+
+class TestThreeTickMove:
+    def test_threshold_ignores_one_tick_jitter_and_catches_the_three_tick_move(self):
+        t_prev, t_obs = T0, T0 + 12 * NS
+        times = [t_prev - NS, t_prev + 4 * NS, t_prev + 9 * NS, t_prev + 20 * NS]
+        mids = [0.50, 0.51, 0.52, 0.53]  # 1-tick, then cumulative 2-tick, then 3-tick
+        res = tc.first_move(times, mids, t_prev, t_obs)
+        assert res["t_move_ns"] == t_prev + 4 * NS and res["move_size"] == 0.01
+        assert res["t_move3_ns"] == t_prev + 20 * NS
+        assert res["move_size_3"] == 0.03 and res["mid_after_3"] == 0.53
+
+    def test_jitter_only_window_reports_no_three_tick_move(self):
+        t_prev, t_obs = T0, T0 + 12 * NS
+        times = [t_prev - NS, t_prev + 4 * NS, t_prev + 9 * NS]
+        mids = [0.50, 0.51, 0.49]  # 1-tick wobble both ways, never 3 ticks
+        res = tc.first_move(times, mids, t_prev, t_obs)
+        assert res["t_move_ns"] == t_prev + 4 * NS
+        assert res["t_move3_ns"] is None and res["move_size_3"] is None
+        assert res["mid_after_3"] is None
+
+    def test_join_books_sets_lead3_fields_only_when_a_three_tick_move_lands(self):
+        rows = [_bbo(T0 - 2 * NS, 0.49, 0.51),   # mid 0.50
+                _bbo(T0 + 3 * NS, 0.50, 0.52),   # mid 0.51: 1-tick up
+                _bbo(T0 + 25 * NS, 0.52, 0.54)]  # mid 0.53: >=3 ticks up
+        ev = _event()
+        tc.join_books([ev], {SID: _mapping()}, tc.book_series(rows))
+        assert ev["outcome"] == "moved"
+        assert ev["t_move_ns"] == T0 + 3 * NS and ev["t_move3_ns"] == T0 + 25 * NS
+        assert ev["lead_vs_obs_s"] == -9.0 and ev["lead3_vs_obs_s"] == 13.0
+        assert ev["direction_agrees"] is True and ev["direction3_agrees"] is True
+        # short event: a >=3-tick DOWN move agrees with the winner
+        rows = [_bbo(T0 - 2 * NS, 0.59, 0.61), _bbo(T0 + 25 * NS, 0.55, 0.57)]
+        ev = _event(winner="Vexar", loser="Falcons")
+        tc.join_books([ev], {SID: _mapping(named="Falcons")}, tc.book_series(rows))
+        assert ev["move_size_3"] == -0.04 and ev["direction3_agrees"] is True
+        assert ev["lead3_vs_obs_s"] == 13.0
+        # a moved event with only a 1-tick move carries no lead3 keys
+        rows = [_bbo(T0 - 2 * NS, 0.49, 0.51), _bbo(T0 + 3 * NS, 0.50, 0.52)]
+        ev = _event()
+        tc.join_books([ev], {SID: _mapping()}, tc.book_series(rows))
+        assert ev["outcome"] == "moved" and "lead3_vs_obs_s" not in ev
+        assert "direction3_agrees" not in ev and ev["t_move3_ns"] is None
+
+
+class TestBootstrapCI:
+    def test_deterministic_with_seed_17_and_brackets_the_point(self):
+        pairs = [("s1", 0.01), ("s1", 0.02), ("s2", -0.03), ("s3", 0.05), ("s3", 0.00)]
+        a = tc.bootstrap_ci(pairs)
+        assert a == tc.bootstrap_ci(pairs)  # seed 17 -> identical across calls
+        assert a["n"] == 5 and a["n_series"] == 3
+        assert a["point"] == pytest.approx(0.01)
+        lo, hi = a["ci95"]
+        assert lo <= hi and lo <= a["point"] + 1e-9
+
+    def test_single_series_has_no_interval_and_says_so(self):
+        blk = tc.bootstrap_ci([("s1", 0.01), ("s1", 0.03)])
+        assert blk["point"] == 0.02 and blk["ci95"] is None and blk["n_series"] == 1
+        assert tc._fmt_ci(blk) == "0.02 [no interval: 1 series] (n=2, series=1)"
+        assert tc._fmt(-0.0) == "0" and tc._fmt(-0.0004) == "0" and tc._fmt(-0.004) == "-0.004"
+
+    def test_ci_shrinks_to_the_point_when_every_series_agrees(self):
+        pairs = [(f"s{i}", 0.04) for i in range(12)]
+        for stat in ("mean", "median"):
+            blk = tc.bootstrap_ci(pairs, stat)
+            assert blk["point"] == 0.04 and blk["ci95"] == [0.04, 0.04]
+            assert blk["n"] == 12 and blk["n_series"] == 12
+        assert tc.bootstrap_ci([]) is None
+
+
+class TestSummaryAdditions:
+    def test_horizon_block_and_moved3_block_in_summary(self):
+        evs = []
+        for i, (mv120, lead3) in enumerate([(0.04, 5.0), (0.02, None), (-0.01, 20.0), (0.03, -3.0)]):
+            ev = {**_event(n=[4, 8, 12, 16][i], t_obs=T0 + i * NS),
+                  "series_id": f"s{i % 2}", "outcome": "moved", "us_side": "long",
+                  "move_30s": mv120 / 2, "move_60s": mv120, "move_120s": mv120,
+                  "lead_vs_obs_s": lead3 if lead3 is not None else 1.0,
+                  "lead_vs_prev_s": 2.0, "direction_agrees": True}
+            if lead3 is not None:
+                ev["lead3_vs_obs_s"] = lead3
+                ev["direction3_agrees"] = i != 3
+            evs.append(ev)
+        s = tc.summarize(DAY, evs)
+        hz = s["horizons"]
+        assert hz["n"] == 4 and hz["by_horizon"]["120s"]["n_with_row"] == 4
+        blk = hz["by_horizon"]["120s"]["mean_oriented"]
+        assert blk["n"] == 4 and blk["n_series"] == 2
+        assert blk["point"] == pytest.approx(0.02)
+        # oriented 120s moves >= +0.03: events with 0.04 and 0.03 -> 2/4
+        assert hz["share_oriented_120s_ge_3t"] == 0.5 and hz["n_oriented_120s"] == 4
+        m3 = s["moved3"]
+        assert m3["n"] == 3 and m3["lead3_vs_obs_s"]["p10"] == -1.4
+        assert m3["book_first_share"] == 0.333
+        assert m3["direction_agreement_rate"] == 0.667
+        text = tc.render(s)
+        assert "size and horizon reading" in text and "series-clustered bootstrap" in text
+        assert "n=4, series=2" in text  # n and n_series beside the CI
+        assert "first >=3-tick move" in text
+        assert "share of events with oriented +120s move >= +0.03" in text
