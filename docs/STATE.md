@@ -444,12 +444,29 @@ Only the quintile figure is the bar.
    our pipe ≈ 4.4s (GRID rtt 0.28 + detect 0.16 + recorder 1.19 + engine
    2.77) plus the 12s poll wait. Levers: 10s polls, one in-process
    pipeline, act on the GRID observation itself (rail B).
+   AMENDED 2026-09-03 eve (two lane builds, Claude review): oriented
+   30/60/120s moves, >=3-tick first move, next-round-bounded move, all
+   with series-clustered bootstrap CIs and coverage-aware horizons
+   (addenda in the first-read doc). Result: a round end is worth ~half a
+   tick; bounded at the next round, direction agreement is 50.2%; the
+   RAW move is +0.016 after EITHER side's round win — the book is not
+   pricing rounds, it drifts toward the map STATE (rail-B mechanism from
+   the venue side). Next: orient on the model (p_map - mid), in flight.
 14. POST-SHOCK FADE reconciliation: the design brief's anchors (108/70, 32)
    were computed on a pool missing two of its own gates
    (docs/analysis/2026-09-01-postshock-anchor-trace.md); brief amended
    2026-09-03 to the spec-literal funnel (67/53 candidate, 37/34 control,
-   pinned corpus). scripts/postshock_fade.py (WIP, banner'd) must reproduce
-   that funnel before any of its numbers are read; dispatch staged.
+   pinned corpus). RECONCILED 2026-09-03 eve (reasoner lane, Claude review;
+   commit b6a8c4d): the script reproduces the reference funnel to the
+   digit (72/58 DOWN, 38/35 UP on the design pool) and prints it per
+   gate. Read: BOTH arms positive in-sample (DOWN->short edge +0.19
+   [+0.08, +0.30], UP->long +0.15 [-0.03, +0.33], series-clustered) — the
+   fade's own control expectation fails; the book UNDER-reacts to the
+   model after shocks. Momentum, not fade, and the same mechanism the
+   timing chain found. Holdout starved (14/12 vs 40/15). Open caveats:
+   staleness gate may select dead books; taker price has no size check;
+   NOTE6 fill selection. H-MODELMOMENTUM1 brief + adversarial review
+   dispatched; REGISTRATION IS THE USER'S CALL. No tests yet (queued).
 15. Real-order fill statistics re-cut on RESTED orders only (NOTE7):
    timing_profile quote lifetimes, entry_quality fills tagging, nightly
    placed/filled counts. The NOTE6 proxy fill-conditional edge is unaffected.
