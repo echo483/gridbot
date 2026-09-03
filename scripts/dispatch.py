@@ -12,8 +12,11 @@ Roster set with the user 2026-08-26 (afternoon session):
                                                      lowest latency, widest provider range
   classification   deepseek/deepseek-v4-flash-0731   bulk labeling/extraction/transforms
   review           anthropic/claude-opus-5           adversarial review, hard reasoning
-  review2          z-ai/glm-5.3                      the ONLY full-size 5.3 use (review bench
-                                                     record earns it; everywhere else = flash)
+  review2          deepseek/deepseek-v4-pro-0813     opus fallback + method review (user 09-03:
+                                                     "deepseek pro"); glm-5.3 stays the reviewer
+                                                     PROFILE, judged by its review-bench record
+  reasoning2/3     openai/gpt-5.6-luna / deepseek-v4-pro-0813  hard-reasoning rotation with
+                                                     qwen3-max-thinking ("not purely 3.8 max")
 
 Rules encoded here, not re-decided per call:
 - --safe-mode always; prompts must be self-contained (paste data in;
@@ -90,17 +93,25 @@ ROUTES: dict[str, tuple[str, str | None, str | None]] = {
     # think HIGH, the opus review thinks XHIGH (user: "review with hard
     # reasoning"), the speed lane stays LOW — reasoning tokens are
     # latency there, not quality.
-    "programming": ("z-ai/glm-5.3-flash:floor", "openrouter", "high"),
+    # ROUTING DOCTRINE 2026-09-03 eve (user): deepseek-v4-flash-0731 is "currently
+    # best in a lot of categories including finance — I want a lot of token thru
+    # him": it is the DEFAULT builder/analysis lane; glm-5.3-flash is the
+    # alternate. Rotate hard reasoning across qwen3-max-thinking, gpt-5.6-luna
+    # and deepseek-v4-pro-0813 — "not purely 3.8 max". Slugs and prices
+    # re-verified on OpenRouter's live list 2026-09-03 16:40 PDT: flash-0731
+    # $0.07/$0.18 per M, pro-0813 $0.66/$1.98, luna $0.20/$1.20, glm-flash
+    # $0.07/$0.25, qwen3-max-thinking $0.78/$3.90.
+    "programming": ("deepseek/deepseek-v4-flash-0731", None, "high"),   # DEFAULT builder (user 09-03)
     "draft": ("z-ai/glm-5.3-flash:floor", "openrouter", "medium"),
     "fast": ("deepseek/deepseek-v4-flash-0731", None, "low"),
     "classification": ("deepseek/deepseek-v4-flash-0731", None, "low"),
     "review": ("anthropic/claude-opus-5", "openrouter", "xhigh"),
-    "review2": ("z-ai/glm-5.3:floor", "openrouter", "high"),
+    "review2": ("deepseek/deepseek-v4-pro-0813", "openrouter", "high"),  # opus fallback + method review at 1/3 of qwen-max cost (user 09-03: "deepseek pro")
     # deepseek-0731 expansion (user 08-27: top of many categories, avoid
     # one-sidedness; its observed weakness is the hermes AGENT/tool
     # harness, not intelligence — so it gets hands-on-keyboard lanes,
     # never tool-driving cron jobs):
-    "programming2": ("deepseek/deepseek-v4-flash-0731", None, "high"),  # full alternate builder — rotate real builds here, judge by artifacts
+    "programming2": ("z-ai/glm-5.3-flash:floor", "openrouter", "high"),  # alternate builder — rotate real builds here, judge by artifacts
     "search": ("deepseek/deepseek-v4-flash-0731", None, "medium"),      # retrieval/digest/extract over pasted material — its #1 category per user
     "analysis": ("deepseek/deepseek-v4-flash-0731", None, "medium"),    # slow-loop data reads, log digestion, report drafts
     # MODEL DIVERSIFICATION (user 08-28: "use qwen, use nemotron, don't stick
@@ -114,6 +125,8 @@ ROUTES: dict[str, tuple[str, str | None, str | None]] = {
     # persona. The OpenRouter dashboard is the only ground truth for which
     # model actually served a call.
     "reasoning": ("qwen/qwen3-max-thinking", "openrouter", "high"),   # hard design/analysis: model specs, leakage hunts, method arguments
+    "reasoning2": ("openai/gpt-5.6-luna", "openrouter", "high"),      # rotate with the above (user 09-03: "other good performers like 5.6 luna")
+    "reasoning3": ("deepseek/deepseek-v4-pro-0813", "openrouter", "high"),  # third rotation slot; also the review2 model
     "bulk": ("nvidia/nemotron-3-super-120b-a12b", "openrouter", "medium"),  # cheap high-volume passes (1M ctx, $0.4/Mtok out) — alternative to deepseek
     # VERIFICATION lane (user 08-28): the Claude console credits buy exactly
     # one thing — adversarial verification of what OpenRouter built, plus
@@ -147,7 +160,8 @@ AGENTS_DIR = Path(__file__).resolve().parents[1] / "agents"
 # data-work contract); every other kind maps to agents/<kind>.md.
 _SHARED_PREAMBLE = {"fast": "analysis", "search": "analysis",
                     "classification": "analysis", "bulk": "analysis",
-                    "reasoning": "programming"}
+                    "reasoning": "programming", "reasoning2": "programming",
+                    "reasoning3": "programming"}
 
 
 def _preamble(kind: str) -> str:
@@ -232,7 +246,7 @@ def pair(spec_file: str, artifacts: list[str], timeout: int,
     the whole spec + artifacts):
     - reviewer="review" (opus xhigh): engine/config/trade-path code and
       anything that decides a registration. Worth it.
-    - reviewer="review2" (glm-5.3:floor high): routine analysis scripts,
+    - reviewer="review2" (deepseek-v4-pro-0813 high): routine analysis scripts,
       connectivity checks, second passes. Also the automatic fallback
       when opus stalls (observed >25min hang via hermes once).
     Anything deferrable to Claude-account usage (Claude's own review or
@@ -324,11 +338,12 @@ def main() -> int:
                     help="pair mode: expected artifact path (repeatable)")
     ap.add_argument("--builder",
                     choices=["programming", "programming2", "reasoning",
-                             "builder", "reasoner"],
+                             "reasoning2", "reasoning3", "builder", "reasoner"],
                     default="programming",
-                    help="pair mode builder lane: programming=glm-flash, "
-                         "programming2=deepseek-0731 (alternate-builder "
-                         "rotation), builder/reasoner=repo-writing profiles")
+                    help="pair mode builder lane: programming=deepseek-0731 "
+                         "(default, user 09-03), programming2=glm-flash "
+                         "(alternate rotation), reasoning/2/3=qwen-max-thinking/"
+                         "luna/deepseek-pro, builder/reasoner=repo-writing profiles")
     ap.add_argument("--reviewer",
                     choices=["review", "review2", "verify", "reviewer",
                              "critical"],
