@@ -124,3 +124,26 @@ is yours.
 | gridbot-timing-chain.timer (17:30 local) | one timing-chain read per UTC day toward the 5-night threshold |
 | gridbot-health (5 min) | self-heal, including the keyring-wedge restart rule |
 | BOOKPIN1 holdout | verdicts as its 40 series resolve |
+
+## D8 — Keyring durability for the capture key (added 2026-09-04 11:40 PDT)
+
+- Third wedge of the desktop keyring in five days (08-31, 09-03, 09-04). Today's:
+  two `gnome-keyring-daemon` processes alive, secret reads hang even from a
+  fresh process, the 600s in-process cache expired, capture failed closed at
+  ~11:18 PDT and every downstream instrument stalled. Recovery is your act
+  (`gnome-keyring-daemon --replace --unlock`, runbook in
+  `docs/analysis/2026-08-31-keyring-capture-outage.md`).
+- Rail 6 says secrets live in the OS keyring only. The desktop (login) keyring
+  is the wrong OS keyring for an always-on daemon: it locks with the session
+  and wedges under D-Bus contention.
+- Options: (a) keep the desktop keyring and rely on the 9d0543f self-heal plus
+  the health check's stale-restart (already committed; capture still runs the
+  pre-fix code until its next restart); (b) move the CAPTURE key (read-only
+  GRID key, not the trading keys) to a systemd encrypted credential
+  (`systemd-creds encrypt` + `LoadCredentialEncrypted=` on the capture unit),
+  machine-bound, never on disk in clear, no D-Bus in the read path; (c) both,
+  with the trading keys staying in the desktop keyring so arming still needs
+  an unlocked session.
+- Recommendation: (c). It keeps rail 6's intent (OS-managed secret store, no
+  secrets in files) and removes the single point of failure from the capture
+  path. Setting it up needs the key value, so it is your hands, not mine.

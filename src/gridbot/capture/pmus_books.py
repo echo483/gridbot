@@ -174,8 +174,13 @@ class BookTape:
         self._last: dict[str, tuple[tuple[float | None, float | None], float]] = {}
 
     def observe(self, spec: dict, bid: float | None, ask: float | None,
-                req_ns: int, latency_ms: int) -> bool:
-        """Write when (bid, ask) changed, else at most one heartbeat per window. True if written."""
+                req_ns: int, latency_ms: int,
+                bid_size: float | None = None, ask_size: float | None = None) -> bool:
+        """Write when (bid, ask) changed, else at most one heartbeat per window. True if written.
+
+        Sizes ride along on every written row (they are not a change trigger: top
+        sizes churn every poll and would turn the change-only tape into a firehose).
+        """
         now = self.clock()
         prev = self._last.get(spec["slug"])
         changed = prev is None or prev[0] != (bid, ask)
@@ -192,6 +197,8 @@ class BookTape:
             "req_ns": req_ns,
             "latency_ms": latency_ms,
             "heartbeat": not changed,
+            "bid_size": bid_size,
+            "ask_size": ask_size,
         })
         self._last[spec["slug"]] = ((bid, ask), now)
         return True
@@ -282,15 +289,23 @@ class Recorder:
         self.mappings = mapentry.load_latest_mappings(self.pmus_dir)
         self._mappings_loaded = now
 
-    def fetch(self, slug: str) -> tuple[float | None, float | None, int, int]:
-        """(bid, ask, req_ns, latency_ms) — req_ns is taken right before the call."""
+    def fetch(self, slug: str) -> tuple[float | None, float | None, int, int,
+                                       float | None, float | None]:
+        """(bid, ask, req_ns, latency_ms, bid_size, ask_size) — req_ns is taken right before the call.
+
+        Since 2026-09-04 the recorder reads the full book (``markets.book``), not the
+        BBO endpoint: the maker fill bracket (analysis.exec_fills) needs the displayed
+        size at the touch, and a sizeless tape cannot compute its lower bound
+        (deepseek-pro review of the EXEC1 brief, findings #1/#2/#8).
+        """
         client = self._get_client()
         req_ns = time.time_ns()
         t0 = time.perf_counter()
-        payload = client.markets.bbo(slug)
+        payload = client.markets.book(slug)
         latency_ms = round((time.perf_counter() - t0) * 1000)
-        bid, ask = mapentry.parse_bbo(payload)
-        return bid, ask, req_ns, latency_ms
+        book = mapentry.parse_book(payload)
+        return (book["bid"], book["ask"], req_ns, latency_ms,
+                book.get("bid_size"), book.get("ask_size"))
 
     def cycle(self, now: float | None = None) -> dict:
         """One poll cycle: ingest ss rows, derive the poll set, fetch, write. Never raises."""
@@ -315,13 +330,13 @@ class Recorder:
             if i:
                 self.sleep(REQUEST_SPACING_S)
             try:
-                bid, ask, req_ns, latency_ms = self.fetch(spec["slug"])
+                bid, ask, req_ns, latency_ms, bid_size, ask_size = self.fetch(spec["slug"])
             except Exception as exc:
-                log.warning("bbo fetch failed for %s: %s", spec["slug"], type(exc).__name__)
+                log.warning("book fetch failed for %s: %s", spec["slug"], type(exc).__name__)
                 self.tape.error(spec, exc)
                 errors += 1
                 continue
-            if self.tape.observe(spec, bid, ask, req_ns, latency_ms):
+            if self.tape.observe(spec, bid, ask, req_ns, latency_ms, bid_size, ask_size):
                 written += 1
         self._stats["polls"] += len(picked)
         self._stats["written"] += written

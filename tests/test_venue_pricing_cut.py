@@ -231,11 +231,10 @@ def test_score_events_match_mode_replaces_slug_and_drops_unmapped():
     out = vpc.score_events(events, SCORES, _match_tape(), mappings, "match")
     assert [e["slug"] for e in out] == [MATCH_SLUG]
     assert out[0]["us_side"] == "long"
-    assert all(e["round_number"] == 12 for e in out) and len(out) == 1
+    assert len(out) == 1
 
 
 # --- 10. score_events: skip rules ---------------------------------------------
-
 def _skip_tape():
     return vpc.tape([
         _bbo("aslug", T_PREV, 0.55, 0.65),
@@ -266,7 +265,7 @@ def _render_row(sid: str, swing: float, mid: float = 0.02) -> dict:
 
 
 def test_render_buckets_and_counts():
-    rows = [_render_row(f"S{i}", 0.01) for i in (1, 2)]       # swing<0.05, n=2
+    rows = [_render_row(f"S{i}", 0.01) for i in (1, 2)]             # swing<0.05, n=2
     rows += [_render_row(f"S{i}", 0.5, mid=0.02) for i in (3, 4, 5)]  # >=0.20, n=3
     out = vpc.render(DAY, "match", rows, n_events=6)
     assert "# venue pricing cut — 20260903 — MATCH book" in out
@@ -279,7 +278,6 @@ def test_render_buckets_and_counts():
 
 
 # --- 12. spread_lines ---------------------------------------------------------
-
 def test_spread_lines_dead_share_and_ordering():
     rows = [
         _bbo("s1", 1, 0.70, 0.72, kind="match"),

@@ -237,7 +237,7 @@ class TestBookTape:
         assert w.rows[-1] == {
             "type": "pmus_bbo", "slug": _map_slug(2), "series_id": SID, "map_number": 2,
             "kind": "map", "bid": 0.47, "ask": 0.55, "req_ns": REQ_NS, "latency_ms": 83,
-            "heartbeat": False, "ts_ns": w.rows[-1]["ts_ns"],
+            "heartbeat": False, "bid_size": None, "ask_size": None, "ts_ns": w.rows[-1]["ts_ns"],
         }
         clock.t = 10.0
         assert tape.observe(SPEC, 0.47, 0.55, REQ_NS + 1, 80) is False  # unchanged, inside window
@@ -286,8 +286,17 @@ class TestBookTape:
 # --- recorder cycle with a fake gateway client -------------------------------
 
 
-def _payload(bid: str = "0.47", ask: str = "0.55") -> dict:
-    return {"marketData": {"bestBid": {"value": bid}, "bestAsk": {"value": ask}}}
+def _payload(bid: str = "0.47", ask: str = "0.55", bid_qty: str = "12.0000",
+             ask_qty: str = "30.0000") -> dict:
+    """A markets.book payload shaped like the live gateway output (px/qty strings).
+
+    Since 2026-09-04 the recorder reads the full book so each tape row carries the
+    top sizes; a "0" price is the venue's dead-level placeholder and yields no level.
+    """
+    def level(px: str, qty: str) -> list[dict]:
+        return [] if float(px) <= 0 else [{"px": {"value": px, "currency": "USD"}, "qty": qty}]
+    return {"marketData": {"marketSlug": "m", "bids": level(bid, bid_qty),
+                           "offers": level(ask, ask_qty)}}
 
 
 class FakeMarkets:
@@ -302,6 +311,10 @@ class FakeMarkets:
         if exc is not None:
             raise exc
         return self.payloads.get(slug, _payload())
+
+    def book(self, slug: str) -> dict:
+        """The recorder reads the full book since 2026-09-04 (top sizes for the fill bracket)."""
+        return self.bbo(slug)
 
 
 class FakeClient:
