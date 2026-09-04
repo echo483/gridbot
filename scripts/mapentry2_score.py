@@ -303,8 +303,8 @@ def _quintile_bins(
     bins: list[tuple[float, float, float, int]] = []
 
     for i in range(n_bins):
-        start = int(round(i * bin_size))
-        end = int(round((i + 1) * bin_size))
+        start = round(i * bin_size)
+        end = round((i + 1) * bin_size)
         if end <= start:
             bin_probs = []
             bin_outs = []
@@ -537,7 +537,7 @@ def _resolve_rows(
     blocked_keys: set[str] = set()
     n_verdict_maps = 0
 
-    for (sid, mn), map_rows in by_map.items():
+    for (sid, mn) in by_map:
         key = f"{sid}:{mn}"
         winners_entry = winners.get(key)
         if not winners_entry:

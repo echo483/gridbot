@@ -43,8 +43,12 @@ timing_profile → pmap_calibration → fill_conditional_edge → priced_in_test
 entry_quality → flow_features_study → postshock_lag → wave_detect +
 wave_edge_join → quote_backtest → mapentry2_score → queue16_bandskip_crossin +
 queue16_phase2_outcomes → roundwin2_poolb → crossin_backtest → pcal_fit →
-postshock_fade (WIP quarantine — see its banner) → timing_chain (GRID round
-end → first PMUS book move + our pipe legs; reads the pmus_books tape). corpus_pull.py pulls
+postshock_fade (reconciled 2026-09-03 to its spec-literal funnel; its
+review diagnostics showed the in-sample edge is a dead-book artifact —
+registry NOTE8) → timing_chain (GRID round end → PMUS book: first move,
+oriented 30/60/120s and next-round-bounded moves, model-oriented read,
+series-clustered CIs, our pipe legs; reads the pmus_books tape; nightly via
+gridbot-timing-chain.timer). corpus_pull.py pulls
 training tables for model work. promote_model.py gates any retrain.
 intl_reference.py samples the intl venue read-only.
 
@@ -64,7 +68,9 @@ migration, routing-layer analysis) — history, not guidance.
   append-only; nothing trades without a row.
 - **docs/analysis/**: dated evidence reports. docs/learnings/: nightly ops
   notes. docs/superpowers/specs/: design briefs.
-- **tests/** (827): hermetic — no network, no keyring, no live D-Bus.
+- **tests/** (872): hermetic — no network, no keyring, no live D-Bus; nothing
+  writes outside tmp_path. `uv run ruff check .` is green repo-wide (the
+  deliberate idioms are encoded in pyproject, not suppressed inline).
 
 ## Forking for a new strategy (the intended seam)
 

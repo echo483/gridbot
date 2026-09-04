@@ -70,7 +70,7 @@ class TestCalibrate:
     def test_overconfident_forecaster_shows_a_negative_gap(self) -> None:
         # predicts 0.95, realizes 0.50 — the shape of the real finding
         out = pc.calibrate([(0.95, 1.0)] * 5 + [(0.95, 0.0)] * 5)
-        top = [b for b in out["reliability"] if b["lo"] == 0.9][0]
+        top = next(b for b in out["reliability"] if b["lo"] == 0.9)
         assert top["gap"] < 0
         assert out["ece_10bin"] > 0.4
 

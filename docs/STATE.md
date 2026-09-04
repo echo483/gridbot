@@ -27,6 +27,31 @@ an LLM, rail 1), pre-registered hypotheses with frozen falsification bars
 (rail 3), capture continuity as the moat (rail 4). LLMs live in the slow
 loop only: analysis, reviews, reports, hypothesis drafts.
 
+## Baseline 2026-09-04 (start here)
+
+Clean baseline, cut the morning after the 09-03 overnight loop: main is
+pushed and the tree is empty; 872 hermetic tests pass; `uv run ruff check .`
+is green repo-wide with the deliberate idioms encoded in pyproject; every
+merged branch is deleted; all six live units are active and the nightly
+timing-chain timer is enabled; the registry parses (31 rows, NOTE8 is the
+newest). The decisions this baseline hands the user are in
+`docs/DECISIONS.md` — read that next.
+
+Where the strategy stands, in one breath: no lane has a pre-registered PASS;
+H-MAPENTRY1's paper edge lives in orders that never fill; the map book prices
+neither the round nor the model within a round; the post-shock edge was a
+dead-book artifact. Two things accrue on their own toward a verdict — the
+BOOKPIN1 holdout and the nightly timing chain — and nothing goes live without
+the user's own hand (rail 3).
+
+The road from here, in the order the user set: (1) this baseline; (2) the
+knowledge graph in gridbot-lab (DuckDB + Kuzu) with STATE.md, the registry,
+corpus relations and the gotchas as carry-ins; (3) qualify a strategy under
+the rails with an execution-realistic instrument (depth-limited fills,
+rested-only lifetimes, series-clustered bars) — the only kind of number that
+counts after NOTE8; (4) the gridbot-lab research layer (options memo, design
+gate open); (5) NautilusTrader integration after the KG — lessons, not code.
+
 ## What is PROVEN (as of this baseline)
 
 | claim | evidence |
@@ -100,6 +125,7 @@ in-sample CIs exclude zero) — do NOT re-cut on same-night data.
 | gridbot-postquote.service | adverse-selection diagnostic: samples book mid +30/+60/+120s after every QUALIFYING mapentry row, ORIENTED to taken side — data/shadow/postquote-*.jsonl (analysis rule: never pool unoriented across sides) |
 | gridbot-pmus-books.service | PMUS BBO tape (timing-chain Part A, 2026-09-03): polls the live map + match books of every live mapped series on the public gateway every 2s, change-only rows + 30s heartbeat — data/pmus/books-*.jsonl; read-only, no keys. Joined by scripts/timing_chain.py |
 | gridbot-pmus-map.timer (15m) | GRID↔PMUS mapping snapshots |
+| gridbot-timing-chain.timer (17:30 local = 00:30 UTC) | nightly scripts/timing_chain.py on the UTC day just closed → data/analysis/timing_chain-YYYYMMDD.{json,md}; citable at ≥5 nights / ≥1,000 moved events |
 | gridbot-ingest (1h) / gridbot-backup (05:10) | corpus → Supabase; raw offsite |
 | gridbot-analysis (22:30) / gridbot-morning (08:00) | slow-loop Claude analyst; morning digest (hermes→Telegram) |
 | gridbot-health (5m) + hermes crons | self-heal + escalation webhook + capture QA + spend guard |

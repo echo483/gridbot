@@ -351,7 +351,7 @@ class TestBootstrap:
     def test_paired_bootstrap_runs(self):
         data_a = {"S1": [(0.6, 1.0)], "S2": [(0.4, 0.0)]}
         data_b = {"S1": [(0.55, 1.0)], "S2": [(0.45, 0.0)]}
-        delta, ci, dist = paired_bootstrap_delta(
+        delta, _ci, _dist = paired_bootstrap_delta(
             data_a, data_b, brier_score, n_iter=200, seed=26,
         )
         # Brier(A) = 0.16, Brier(B) = 0.2025, delta > 0
@@ -360,7 +360,7 @@ class TestBootstrap:
         assert delta > 0
 
     def test_empty_data(self):
-        val, ci, dist = series_clustered_bootstrap({}, brier_score)
+        val, ci, _dist = series_clustered_bootstrap({}, brier_score)
         assert math.isnan(val)
         assert math.isnan(ci[0])
 
@@ -499,7 +499,7 @@ class TestEdgeCases:
     def test_bootstrap_single_series(self):
         """Single series bootstrap should still run."""
         data = {"S1": [(0.6, 1.0)] * 5}
-        val, ci, dist = series_clustered_bootstrap(data, brier_score, n_iter=100, seed=26)
+        val, _ci, _dist = series_clustered_bootstrap(data, brier_score, n_iter=100, seed=26)
         assert not math.isnan(val)
 
     def test_p_map_out_of_range(self):

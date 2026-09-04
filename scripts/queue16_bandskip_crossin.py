@@ -129,7 +129,7 @@ def load_rows() -> tuple[list[dict], dict[str, list[tuple[int, float, float]]]]:
                 prev = skips.get(key)
                 if prev is None or ts < prev["t0"]:
                     skips[key] = row
-    for _slug, _rows in timeline.items():
+    for _rows in timeline.values():
         _rows.sort()
     return sorted(skips.values(), key=lambda r: r["t0"]), timeline
 

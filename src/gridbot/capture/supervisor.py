@@ -45,7 +45,7 @@ async def run(once: bool = False) -> None:
                 try:
                     assets = catalog.update(await fetch_esports_catalog(client))
                     await recorder.set_assets(assets)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     log.warning("pm discovery failed: %s", exc)
                 await _sleep(config.PM_DISCOVERY_CADENCE_S, stop)
 
@@ -53,7 +53,7 @@ async def run(once: bool = False) -> None:
             while not stop.is_set():
                 try:
                     await grid.discover_once(client)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     log.warning("grid discovery failed: %s", exc)
                 await _sleep(config.DISCOVERY_CADENCE_S, stop)
 
@@ -61,7 +61,7 @@ async def run(once: bool = False) -> None:
             while not stop.is_set():
                 try:
                     await grid.poll_due(client)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     log.warning("grid poll failed: %s", exc)
                 await _sleep(2, stop)
 

@@ -165,7 +165,7 @@ def main() -> None:
         ok = v_side == want_side and v_px is not None and abs(float(v_px) - quote) < 1e-6
         print(f"[2b] venue stored side={v_side} price={v_px} state={got.get('state')} -> "
               f"{'CONVENTION VERIFIED' if ok else 'CONVENTION MISMATCH — do not arm shorts'}")
-    except Exception as exc:  # noqa: BLE001 — the cancel below must still run
+    except Exception as exc:
         print(f"[2b] order retrieve failed: {type(exc).__name__} (cancel proceeds)")
 
     t2 = time.monotonic()
@@ -184,7 +184,7 @@ def main() -> None:
             c.orders.cancel(order_id, {"marketSlug": slug})
             canceled = True
             break
-        except Exception as exc:  # noqa: BLE001 — retrying is the whole point here
+        except Exception as exc:
             print(f"[4] cancel attempt {attempt + 1} failed: {type(exc).__name__}")
             time.sleep(1.5 * (attempt + 1))
     if canceled:

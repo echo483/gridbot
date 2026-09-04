@@ -1501,7 +1501,7 @@ class TestDriftLoaderAgainstRealRowShape:
     copied from data/shadow/postquote-20260828.jsonl instead.
     """
 
-    REAL_ROW = {
+    REAL_ROW = {  # noqa: RUF012 — fixture constant copied from a real day file
         "type": "postquote", "slug": "astatc-cs2-reda-bsta-2026-08-27-map2",
         "us_side": "long", "mid0": 0.58, "src_ts_ns": 1787875129993339669,
         "series_id": "2998072", "map_number": 2, "dedup_extra": "",

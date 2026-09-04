@@ -74,7 +74,7 @@ class BookRecorder:
                             last_ping = time.monotonic()
             except asyncio.CancelledError:
                 return
-            except Exception as exc:  # noqa: BLE001 — recorder must survive anything
+            except Exception as exc:
                 log.warning("ws reconnect in %.0fs: %s", backoff, exc)
                 self.writer.append({"type": "ws_error", "error": str(exc)[:300]})
                 await asyncio.sleep(backoff + random.uniform(0, 1))
@@ -87,7 +87,7 @@ class BookRecorder:
                     await self._snapshot_once(client)
                 except asyncio.CancelledError:
                     return
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     log.warning("snapshot failed: %s", exc)
                 await asyncio.sleep(config.PM_SNAPSHOT_CADENCE_S)
 
@@ -105,7 +105,7 @@ class BookRecorder:
                 if not isinstance(books, list):
                     raise ValueError("unexpected /books shape")  # engage per-token fallback
                 self.writer.append({"type": "rest_books", "books": books})
-            except Exception:  # noqa: BLE001 — batch shape unverified; fall back to per-token GET
+            except Exception:
                 # Fallback: one-by-one GET; slower but shape-proof.
                 for t in chunk[:20]:
                     r = await client.get(

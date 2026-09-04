@@ -141,7 +141,7 @@ def probe_locked(
     def _run() -> None:
         try:
             box["locked"] = _probe_locked_once(collection_label)
-        except Exception as exc:  # noqa: BLE001 — any failure is a probe error
+        except Exception as exc:
             box["exc"] = exc
 
     worker = threading.Thread(
@@ -178,7 +178,7 @@ def _send(msg: str) -> bool:
             timeout=30,
         )
         return r.returncode == 0
-    except Exception:  # noqa: BLE001 — best-effort by design
+    except Exception:
         return False
 
 

@@ -330,14 +330,14 @@ def evaluate(n_trades: int = 500, n_paths: int = 4000) -> dict:
         },
         "cells": cell_reports,
         "notes": [
-            "Entry prices are ASSUMED (fair-0.04 capped at the frozen ceiling); zero live "
+            ("Entry prices are ASSUMED (fair-0.04 capped at the frozen ceiling); zero live "
             "book evidence backs fill probability at those prices yet — quoted=0 on the "
             "captured intl books and PMUS book attach is still being wired. Treat EV as "
-            "the calibration-implied edge IF fills happen at the disciplined price.",
-            "MC paths draw the true win rate from Beta(wins+1, losses+1): parameter "
-            "uncertainty from small cells honestly widens the outcome distribution.",
-            "The registry bars (docs/experiments/registry.jsonl) remain the only "
-            "PASS/FAIL rule; this harness is the H-MAPENTRY1 reporting layer.",
+            "the calibration-implied edge IF fills happen at the disciplined price."),
+            ("MC paths draw the true win rate from Beta(wins+1, losses+1): parameter "
+            "uncertainty from small cells honestly widens the outcome distribution."),
+            ("The registry bars (docs/experiments/registry.jsonl) remain the only "
+            "PASS/FAIL rule; this harness is the H-MAPENTRY1 reporting layer."),
         ],
     }
 

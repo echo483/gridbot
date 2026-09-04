@@ -82,7 +82,7 @@ def main() -> None:
         oid = str(r.get("order_id"))
         try:
             resp = client.orders.retrieve(oid)
-        except Exception as exc:  # noqa: BLE001 — report the gap, keep pulling
+        except Exception as exc:
             orders_out.append({"order_id": oid, "error": type(exc).__name__})
             continue
         o = (resp or {}).get("order") or resp or {}
@@ -101,7 +101,7 @@ def main() -> None:
     def _pull(name, fn):
         try:
             return fn() or {}
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"{name} pull failed: {type(exc).__name__}")
             return {"error": type(exc).__name__}
 

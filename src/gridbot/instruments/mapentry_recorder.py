@@ -63,7 +63,7 @@ class BboCache:
             return hit[1]
         try:
             top = mapentry.parse_bbo(self._get_client().markets.bbo(slug))
-        except Exception as exc:  # noqa: BLE001 — a book fetch must never kill the tail
+        except Exception as exc:
             log.warning("bbo fetch failed for %s: %s", slug, type(exc).__name__)
             top = (None, None)
         self._cache[slug] = (now, top)
@@ -82,7 +82,7 @@ class BboCache:
             return hit[1]
         try:
             summary = mapentry.parse_book(self._get_client().markets.book(slug))
-        except Exception as exc:  # noqa: BLE001 — a book fetch must never kill the tail
+        except Exception as exc:
             log.warning("book fetch failed for %s: %s", slug, type(exc).__name__)
             summary = mapentry.parse_book({})
         self._deep[slug] = (now, summary)
@@ -120,7 +120,7 @@ class Recorder:
                 game = r.current_game(state)
                 if game is not None:
                     q_ct = float(self.slate.predict(r.build_features(game)))
-            except Exception as exc:  # noqa: BLE001 — a bad model fetch must not kill the tail
+            except Exception as exc:
                 log.warning("slate q fetch failed for %s: %s", sid, type(exc).__name__)
         instance = mapentry.slate_instance(
             state, q_ct=q_ct, grid_ts_ns=record.get("ts_ns") or record.get("req_ns")
@@ -152,7 +152,7 @@ class Recorder:
             return None
         try:
             summary = book(slug)
-        except Exception as exc:  # noqa: BLE001 — a book fetch must never kill the tail
+        except Exception as exc:
             log.warning("book fetch failed for %s: %s", slug, type(exc).__name__)
             return None
         return summary if summary else None
@@ -220,7 +220,7 @@ def main() -> None:
         from gridbot.instruments.crossing import load_served
 
         rec.slate = load_served()
-    except Exception as exc:  # noqa: BLE001 — slate rows without q still count coverage
+    except Exception as exc:
         log.warning("slate predictor unavailable: %s", exc)
     if rec.slate:
         log.info("full-slate coverage armed (roundwin-v1)")

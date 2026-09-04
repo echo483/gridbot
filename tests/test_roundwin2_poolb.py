@@ -572,7 +572,12 @@ def _write_inputs(tmp_path):
 
 
 def _run_cli(tmp_path, *extra, _env_extra=None):
-    env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(_project_root)}
+    # Default reports land under tmp_path/data/analysis, never in the repo's
+    # real data/analysis/ (72 stray reports accumulated before this pin).
+    out_dir = tmp_path / "data" / "analysis"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(_project_root),
+           "GRIDBOT_POOLEB_OUT_DIR": str(out_dir)}
     if _env_extra:
         env.update(_env_extra)
     return subprocess.run(
@@ -668,7 +673,7 @@ def test_cli_write_doc_flag_targets_docs_path(tmp_path, monkeypatch):
     assert not doc_path.startswith(str(_project_root / "docs"))
 
 def test_cli_days_filter_selects_files(tmp_path):
-    me, pq, winners = _write_inputs(tmp_path)
+    _me, _pq, winners = _write_inputs(tmp_path)
     proc = _run_cli(tmp_path, "--winners", winners, "--days", "20990101",
                     "--out-doc", str(tmp_path / "empty.md"),
                     "--bootstrap", "10")
@@ -702,16 +707,17 @@ def test_cli_bootstrap_zero_accepted(tmp_path):
 def test_postquote_overflow_move_is_not_evidence(tmp_path):
     """Review D: a 10**400 oriented_move must fail _finite_num (routed), not
     crash or leak into the drift evidence histogram."""
-    me, pq, winners = _write_inputs(tmp_path)
+    _me, pq, _winners = _write_inputs(tmp_path)
     slug = None
     pre_count = 0
-    for line in open(pq):
-        r = json.loads(line)
-        if r.get("type") == "postquote":
-            if slug is None:
-                slug, side, _, ts = r["slug"], r["us_side"], r["oriented_move"], r["ts_ns"]
-            if r["slug"] == slug and r["us_side"] == side:
-                pre_count += 1
+    with open(pq, encoding="utf-8") as fh:
+        for line in fh:
+            r = json.loads(line)
+            if r.get("type") == "postquote":
+                if slug is None:
+                    slug, side, _, ts = r["slug"], r["us_side"], r["oriented_move"], r["ts_ns"]
+                if r["slug"] == slug and r["us_side"] == side:
+                    pre_count += 1
     if slug is None:
         raise AssertionError("no postquote row in fixture")
     with open(pq, "a") as f:
@@ -719,7 +725,8 @@ def test_postquote_overflow_move_is_not_evidence(tmp_path):
             "type": "postquote", "ts_ns": ts + 1, "slug": slug,
             "us_side": side, "dt_s": 120, "oriented_move": 10**400,
         }) + "\n")
-    rows = [json.loads(l) for l in open(pq)]
+    with open(pq, encoding="utf-8") as fh:
+        rows = [json.loads(line) for line in fh]
     hist = pb.book_history(rows, horizon=120)
     entry = hist.get((slug, side), [])
     assert len(entry) == pre_count      # overflow row excluded, originals kept

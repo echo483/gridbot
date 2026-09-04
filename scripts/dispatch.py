@@ -192,7 +192,7 @@ def _run(kind: str, prompt: str, timeout: int) -> tuple[int, str]:
             try:
                 return 0, _anthropic_run(prompt, model=model, effort=reasoning or "high",
                                          label=kind)
-            except Exception as exc:  # noqa: BLE001 — budget/API failures report, never crash a relay
+            except Exception as exc:
                 print(f"dispatch[{kind}] FAILED: {type(exc).__name__}: {exc}",
                       file=sys.stderr)
                 return 1, ""

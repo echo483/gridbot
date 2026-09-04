@@ -25,11 +25,16 @@ def wilson(w, n, z=1.96):
 def load(path):
     out = []
     try:
-        for line in open(path):
-            if line.strip():
-                try: out.append(json.loads(line))
-                except: pass
-    except FileNotFoundError: pass
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue  # torn line: skip, never crash an evidence read
+    except FileNotFoundError:
+        pass
     return out
 
 def bucket(disc):

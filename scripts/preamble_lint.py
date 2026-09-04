@@ -124,7 +124,7 @@ def main():
     all_passed = True
     for path in paths:
         print(f"\nLinting: {path}")
-        passed, errors = lint_preamble(path, token_limit=token_limit)
+        _passed, errors = lint_preamble(path, token_limit=token_limit)
         if errors:
             all_passed = False
             for err in errors:

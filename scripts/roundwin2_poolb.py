@@ -103,7 +103,7 @@ def load_jsonl(paths: list[str]) -> tuple[list[dict], int]:
     bad = 0
     for path in paths:
         try:
-            fh = open(path, encoding="utf-8")
+            fh = open(path, encoding="utf-8")  # noqa: SIM115 — opened outside `with` so FileNotFoundError is the only skip; closed by the with-block below
         except FileNotFoundError:
             continue
         with fh:
@@ -501,7 +501,7 @@ def load_intents_rows(paths: list[str]) -> tuple[list[dict], int]:
     rows, bad = [], 0
     for path in paths:
         try:
-            fh = open(path, encoding="utf-8")
+            fh = open(path, encoding="utf-8")  # noqa: SIM115 — opened outside `with` so FileNotFoundError is the only skip; closed by the with-block below
         except FileNotFoundError:
             continue
         with fh:
@@ -622,18 +622,18 @@ def build_reconciliation_section(doc: dict) -> list[str]:
     lines = [
         "## RECONCILIATION — live evidence path vs replay",
         "",
-        f"Replayed **{doc['replayed_rows']}** live `skipped:no_drift_confirm` "
+        (f"Replayed **{doc['replayed_rows']}** live `skipped:no_drift_confirm` "
         f"decisions (intents files: {', '.join(doc['intents_files'])}) against "
         f"the postquote corpus ({doc['postquote_rows']} rows) under the "
-        "engine's EXACT evidence path and one-leg-at-a-time relaxants.",
+        "engine's EXACT evidence path and one-leg-at-a-time relaxants."),
         "",
-        "Live evidence path being tested: `recent_postquote_moves` — same "
+        ("Live evidence path being tested: `recent_postquote_moves` — same "
         "slug+us_side book, 120s horizon ±1s, rows ordered by WRITE-time "
         "ts_ns and visible strictly before the decision, last "
         f"{DRIFT_WINDOW} within the today+yesterday file window — then "
         f"`drift_confirmed`: mean of the visible samples >= "
         f"+{DRIFT_MIN_CONFIRM:.3f} ({100 * DRIFT_MIN_CONFIRM:.1f}pt), full "
-        f"window of {DRIFT_WINDOW} required, fail-closed.",
+        f"window of {DRIFT_WINDOW} required, fail-closed."),
         "",
         "| variant (one leg relaxed) | confirmed | n | empty evidence | <window | >=window | mean move of non-empty (pts) |",
         "|---|---|---|---|---|---|---|",
@@ -660,13 +660,13 @@ def build_reconciliation_section(doc: dict) -> list[str]:
                   if exact["n"] else "—")
     lines += [
         "",
-        f"Under the EXACT live rule the replay confirms "
+        (f"Under the EXACT live rule the replay confirms "
         f"**{exact['confirmed']} of {exact['n']}** ({exact_rate} of replayed "
         "decisions) — see the closing paragraph for the verdict on "
-        "strict-vs-unreachable.",
+        "strict-vs-unreachable."),
         "",
-        "Known asymmetry (relaxes the replay, if anything): the engine tails "
-        "only the last 1MB of each day-file; the replay reads the whole file.",
+        ("Known asymmetry (relaxes the replay, if anything): the engine tails "
+        "only the last 1MB of each day-file; the replay reads the whole file."),
         "",
     ]
     return lines
@@ -684,8 +684,7 @@ def derive_winners() -> dict[str, dict]:
     def _lines():
         for p in paths:
             with open(p, encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    yield line
+                yield from fh
     result = process_lines(_lines())
     doc = result.get("winners", result) if isinstance(result, dict) else {}
     out = {}
@@ -713,13 +712,13 @@ def build_report(doc: dict) -> str:
     lines = [
         "# roundwin-v2 Pool B — drift-first accumulation (describe-only)",
         "",
-        f"Run: {doc['generated_utc']} · days: {', '.join(doc['params']['days']) or 'all'} · "
-        f"design: docs/superpowers/specs/2026-08-28-roundwin-v2-design.md (§2.2 Pool B, §2.3 protocol)",
+        (f"Run: {doc['generated_utc']} · days: {', '.join(doc['params']['days']) or 'all'} · "
+        f"design: docs/superpowers/specs/2026-08-28-roundwin-v2-design.md (§2.2 Pool B, §2.3 protocol)"),
         "",
         "ANALYSIS LANE ONLY — describe-only metrics, no registry edit, no",
         "arming, no trade path. Drift-first rule = the engine's own gate",
-        f"(DRIFT_WINDOW={doc['params']['drift_window']}, "
-        f"DRIFT_MIN_CONFIRM={doc['params']['drift_min_confirm']}, fail-closed),",
+        (f"(DRIFT_WINDOW={doc['params']['drift_window']}, "
+        f"DRIFT_MIN_CONFIRM={doc['params']['drift_min_confirm']}, fail-closed),"),
         "fed same-book oriented 120s moves strictly earlier than eval time.",
         "",
         "**Engine-faithful dedup order** (review fix 2026-08-31): the drift",
@@ -735,44 +734,44 @@ def build_report(doc: dict) -> str:
         f"- not qualifying: {f['not_qualifying']}",
         f"- no matched book (slug/side/bid): {f['no_book']}",
         f"- entry price out of range: {f['entry_price_out_of_range']}",
-        f"- **slate rows excluded** (recording-only, engine slate gate): "
-        f"{f['slate_row']}",
-        f"- **F1 leak filtered** (rounds_played+1 != round_number): "
-        f"{f['f1_leak_filtered']}",
+        (f"- **slate rows excluded** (recording-only, engine slate gate): "
+        f"{f['slate_row']}"),
+        (f"- **F1 leak filtered** (rounds_played+1 != round_number): "
+        f"{f['f1_leak_filtered']}"),
         f"- **candidates (Pool B base rows): {f['candidates']}**",
-        f"- visible same-book evidence per candidate (engine window "
+        (f"- visible same-book evidence per candidate (engine window "
         f"{doc['params']['drift_window']}): "
-        f"{json.dumps(doc['evidence_histogram'])}",
+        f"{json.dumps(doc['evidence_histogram'])}"),
         "",
         "## Placement pass (dedup consumed on gate-pass only)",
         "",
         f"- band-gated (p_map outside {US_BAND_GATE}): {p['band_gated']}",
         f"- drift unconfirmed (fail-closed): {p['no_drift_confirm']}",
-        f"- gate-passed duplicates (slot already consumed): "
-        f"{p['duplicate_key_after_gate']}",
-        f"- **placed (fills-equivalent): {p['placed']}** "
-        f"({rate(p['placed'], f['candidates'])} of candidates)",
-        f"- settled vs resolved map winners: {doc['gated']['metrics']['n']} "
-        f"(excluded: {json.dumps(doc['gated']['excluded'])})",
+        (f"- gate-passed duplicates (slot already consumed): "
+        f"{p['duplicate_key_after_gate']}"),
+        (f"- **placed (fills-equivalent): {p['placed']}** "
+        f"({rate(p['placed'], f['candidates'])} of candidates)"),
+        (f"- settled vs resolved map winners: {doc['gated']['metrics']['n']} "
+        f"(excluded: {json.dumps(doc['gated']['excluded'])})"),
         "",
         "## Headline metrics (fills-equivalent, placed)",
         "",
-        f"- win rate: {_fmt(doc['gated']['metrics']['win_rate'])} "
+        (f"- win rate: {_fmt(doc['gated']['metrics']['win_rate'])} "
         f"(95% series-clustered bootstrap CI "
-        f"{_fmt_ci(doc['gated']['bootstrap']['win_rate_ci'])})",
-        f"- mean edge: {_fmt(doc['gated']['metrics']['mean_edge'])} "
+        f"{_fmt_ci(doc['gated']['bootstrap']['win_rate_ci'])})"),
+        (f"- mean edge: {_fmt(doc['gated']['metrics']['mean_edge'])} "
         f"(= {_fmt(doc['gated']['metrics'].get('mean_edge_pts'))} pts) "
-        f"(95% CI {_fmt_ci(doc['gated']['bootstrap']['mean_edge_ci'])})",
-        f"- n={doc['gated']['metrics']['n']} across "
+        f"(95% CI {_fmt_ci(doc['gated']['bootstrap']['mean_edge_ci'])})"),
+        (f"- n={doc['gated']['metrics']['n']} across "
         f"{doc['gated']['metrics'].get('series', 0)} series, days "
-        f"{doc['gated']['metrics'].get('days', [])}",
+        f"{doc['gated']['metrics'].get('days', [])}"),
         "",
         "## Contrast — ungated (all candidates, no drift gate, no dedup)",
         "",
-        f"- win rate: {_fmt(doc['ungated']['metrics']['win_rate'])} "
-        f"(95% CI {_fmt_ci(doc['ungated']['bootstrap']['win_rate_ci'])})",
-        f"- mean edge: {_fmt(doc['ungated']['metrics']['mean_edge'])} "
-        f"(95% CI {_fmt_ci(doc['ungated']['bootstrap']['mean_edge_ci'])})",
+        (f"- win rate: {_fmt(doc['ungated']['metrics']['win_rate'])} "
+        f"(95% CI {_fmt_ci(doc['ungated']['bootstrap']['win_rate_ci'])})"),
+        (f"- mean edge: {_fmt(doc['ungated']['metrics']['mean_edge'])} "
+        f"(95% CI {_fmt_ci(doc['ungated']['bootstrap']['mean_edge_ci'])})"),
         f"- n={doc['ungated']['metrics']['n']}",
         "",
         "## By day (placed)",
@@ -853,11 +852,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--winners", default="",
                     help="grid_winners --out JSON (default: derive from data/grid)")
     ap.add_argument("--out-doc",
-                    default=os.path.join(_PROJECT_ROOT, "data", "analysis",
-                                         "roundwin2-poolb-%s.md"
-                                         % datetime.datetime.now(
-                                             datetime.UTC).strftime(
-                                             "%Y%m%dT%H%M%SZ")),
+                    default=os.path.join(
+                        # Env-overridable so the test suite writes under tmp_path
+                        # instead of spraying a report into the real data/analysis/.
+                        os.environ.get("GRIDBOT_POOLEB_OUT_DIR",
+                                       os.path.join(_PROJECT_ROOT, "data", "analysis")),
+                        "roundwin2-poolb-{}.md".format(datetime.datetime.now(
+                            datetime.UTC).strftime("%Y%m%dT%H%M%SZ"))),
                     help="markdown report path (default: timestamped file "
                          "under data/analysis/, which is gitignored)")
     ap.add_argument("--write-doc", action="store_true",

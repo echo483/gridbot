@@ -91,7 +91,7 @@ def _escalate(service: str, detail: str) -> None:
             },
             timeout=10,
         )
-    except Exception:  # noqa: BLE001, S110 — best-effort by design: never break the watchdog
+    except Exception:
         pass
 
 
@@ -125,7 +125,7 @@ def _watch_keyring() -> int | None:
         return r.returncode
     except subprocess.TimeoutExpired:
         return None
-    except Exception:  # noqa: BLE001 — best-effort by design
+    except Exception:
         return None
 
 

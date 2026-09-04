@@ -246,7 +246,7 @@ def fetch_pmus_esports_events(client, team_queries: tuple[str, ...] = ()) -> lis
     for q in ("cs2", "esports", "valorant", "league of legends"):
         try:
             resp = client.search.query({"query": q, "limit_per_type": 50})
-        except Exception as exc:  # noqa: BLE001 — one lane failing must not kill the rest
+        except Exception as exc:
             log.warning("pmus search lane %r failed: %s", q, type(exc).__name__)
             continue
         for e in resp.get("events") or []:
@@ -267,14 +267,14 @@ def fetch_pmus_esports_events(client, team_queries: tuple[str, ...] = ()) -> lis
         for e in resp.get("events") or []:
             if str(e.get("seriesSlug") or "") in ESPORTS_SERIES_SLUGS and e.get("slug"):
                 events.setdefault(str(e["slug"]), e)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning("pmus events.list lane failed: %s", type(exc).__name__)
     for q in dict.fromkeys(t.strip() for t in team_queries):
         if len(q) < 3 or q.upper().startswith("TBD"):
             continue
         try:
             resp = client.search.query({"query": q, "limit_per_type": 10})
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("pmus team-search lane %r failed: %s", q, type(exc).__name__)
             continue
         for e in resp.get("events") or []:

@@ -61,7 +61,7 @@ def snapshot(client: PolymarketUS) -> dict:
                 continue
             try:
                 bbo = client.markets.bbo(slug)
-            except Exception as exc:  # noqa: BLE001 — record the miss, keep going
+            except Exception as exc:
                 bbo = {"error": type(exc).__name__}
             _append({"type": "pmus_bbo", "ts_ns": time.time_ns(), "slug": slug, "bbo": bbo})
             n_markets += 1

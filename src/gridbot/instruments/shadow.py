@@ -161,7 +161,7 @@ class ShadowEngine:
         self.counters = {"ss": 0, "book_msgs": 0, "instances": 0, "matched": 0}
         try:
             self.crossing = load_served()
-        except Exception as exc:  # noqa: BLE001 — shadow must outlive a bad artifact
+        except Exception as exc:
             log.warning("crossing detector disabled: %s", exc)
             self.crossing = None
         if self.crossing:
@@ -179,26 +179,26 @@ class ShadowEngine:
             try:
                 if record.get("type") == "catalog" and record.get("condition_id"):
                     self.catalog[record["condition_id"]] = record
-            except Exception:  # noqa: BLE001 — skip poison records, keep the daemon
+            except Exception:
                 self._bad_record("catalog")
         for record in self.book_stream.lines(5000):
             got = True
             self.counters["book_msgs"] += 1
             try:
                 self.tops.update(record)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 self._bad_record("books")
         for record in self.grid.lines():
             got = True
             try:
                 self._grid_record(record)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 self._bad_record("grid")
         return got
 
     def _bad_record(self, stream: str) -> None:
         self.counters["bad_records"] = self.counters.get("bad_records", 0) + 1
-        log.warning("malformed %s record skipped", stream, exc_info=True)
+        log.warning("malformed %s record skipped", stream)
 
     def _grid_record(self, record: dict) -> None:
         if record.get("type") != "ss" or record.get("title") != "cs2":

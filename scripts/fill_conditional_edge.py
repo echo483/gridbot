@@ -175,18 +175,18 @@ def main() -> int:
             if len(filled) > 1 and summarize(filled)["ev_per_contract"] else None
         ),
         "notes": [
-            "Fill proxy: any postquote snapshot within MAKER_TTL_S showing "
+            ("Fill proxy: any postquote snapshot within MAKER_TTL_S showing "
             "our side's effective ask at or below the posted price. It "
             "under-counts (3 snapshots miss touches between them) and "
             "over-counts (the ask reaching our price is not proof of a "
             "trade through our queue position). Read the SIGN, not the "
-            "magnitude.",
-            "Deduped to one entry per (series, map, side), matching the "
-            "engine's dedup key.",
-            "selection_cost_per_contract is filled EV minus unconditional "
+            "magnitude."),
+            ("Deduped to one entry per (series, map, side), matching the "
+            "engine's dedup key."),
+            ("selection_cost_per_contract is filled EV minus unconditional "
             "EV: how much of the paper edge the fill condition destroys. "
             "Negative means the orders that fill are worse than the "
-            "average order we would like to place.",
+            "average order we would like to place."),
         ],
     }
     out = json.dumps(report, indent=2)

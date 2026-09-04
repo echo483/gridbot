@@ -777,8 +777,8 @@ def main(argv: list[str] | None = None) -> int:
         f"settled={len(evals)}",
         excl_txt,
         " ".join(f"{b}:n={disc[b]['n']}" for b in DISCOUNT_BUCKETS),
-        f"shock true={strata['shock_pre']['true']['n']}/"
-        f"false={strata['shock_pre']['false']['n']}",
+        (f"shock true={strata['shock_pre']['true']['n']}/"
+        f"false={strata['shock_pre']['false']['n']}"),
     ]
     if fill_pairs is not None and fills_subset is not None:
         parts.append(f"fills_tagged={fills_subset['n']}")

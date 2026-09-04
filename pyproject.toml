@@ -35,3 +35,19 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
+# Repo-wide `ruff check .` is green by construction; these are the DELIBERATE
+# idioms (docs/MAP.md, .claude/skills/verify-and-land), not suppressions:
+# BLE001/S110/S112 — fail-soft catches in ops and analysis code (a bad row or a
+# dead venue call skips, never crashes a recorder); TRY004 — instruments raise
+# ValueError for wrong-shaped inputs and callers/tests depend on that type.
+ignore = ["BLE001", "S110", "S112", "TRY004"]
+
+[tool.ruff.lint.per-file-ignores]
+# subprocess.run without check=: tests assert returncode explicitly; the three
+# operator tools read it themselves (a non-zero child is a status, not a crash).
+"tests/*" = ["PLW1510"]
+"scripts/night_alerts.py" = ["PLW1510"]
+"scripts/pmap_calibration.py" = ["PLW1510"]
+"scripts/watch_night.py" = ["PLW1510"]

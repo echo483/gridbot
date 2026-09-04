@@ -134,7 +134,7 @@ def place(intent: OrderIntent) -> tuple[str, str | None]:
     # stale client is rebuilt for the NEXT intent via reset_client().
     try:
         resp = _get_client().orders.create(body)
-    except Exception as exc:  # noqa: BLE001 — engine must survive any wire failure
+    except Exception as exc:
         name = type(exc).__name__
         if "Auth" in name:
             reset_client()
@@ -171,7 +171,7 @@ def cancel(order_id: str, market_slug: str) -> str:
         try:
             _get_client().orders.cancel(order_id, {"marketSlug": market_slug})
             return "cancelled"
-        except Exception as exc:  # noqa: BLE001 — engine must survive any wire failure
+        except Exception as exc:
             name = type(exc).__name__
             if "NotFound" in name or "404" in str(exc)[:120]:
                 return "gone"

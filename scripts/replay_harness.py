@@ -88,7 +88,7 @@ def main() -> int:
     for i, r in enumerate(rows):
         try:
             eng.handle(r, armed)
-        except Exception as exc:  # noqa: BLE001 — replay must report, not die
+        except Exception as exc:
             errors += 1
             print(f"  handle() raised on real row {i}: {type(exc).__name__}: {exc}")
         # Expire everything every 40 rows so TTL cancels + re-entries churn.

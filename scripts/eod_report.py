@@ -122,7 +122,7 @@ def _shadow_stats() -> list[str]:
         from gridbot.instruments.verdict import compact_summary
 
         lines.extend(compact_summary())
-    except Exception as exc:  # noqa: BLE001 — report must never crash on a probe
+    except Exception as exc:
         lines.append(f"  verdict probe failed ({str(exc)[:60]})")
     return lines
 
@@ -144,7 +144,7 @@ def _corpus_counts() -> str:
             total = (r.headers.get("content-range") or "/?").split("/")[-1]
             out.append(f"{t}={total}")
         return "corpus: " + " ".join(out)
-    except Exception as exc:  # noqa: BLE001 — report must never crash on a probe
+    except Exception as exc:
         return f"corpus: probe failed ({str(exc)[:60]})"
 
 

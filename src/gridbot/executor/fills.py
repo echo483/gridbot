@@ -277,7 +277,7 @@ def fetch_resolutions(client, slug: str) -> list[dict] | None:
             "types": ["ACTIVITY_TYPE_POSITION_RESOLUTION"],
             "sortOrder": "SORT_ORDER_DESCENDING",
         })
-    except Exception as exc:  # noqa: BLE001 — fills sync must never kill the engine
+    except Exception as exc:
         log.warning("activities fetch failed for %s: %s", slug, type(exc).__name__)
         return None
     out = []
@@ -398,7 +398,7 @@ def _positions_index(
     """
     try:
         resp = client.portfolio.positions()
-    except Exception as exc:  # noqa: BLE001 — fills sync must never kill the engine
+    except Exception as exc:
         log.warning("portfolio.positions failed: %s", type(exc).__name__)
         return None
     resp = resp or {}
@@ -795,7 +795,7 @@ def _sync_fills(
         retrieves += 1
         try:
             resp = client.orders.retrieve(oid)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning("order retrieve %s failed: %s", oid, type(exc).__name__)
             continue
         order = (resp or {}).get("order") or {}

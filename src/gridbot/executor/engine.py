@@ -80,7 +80,7 @@ def recent_postquote_moves(
     # "today" must pair with ITS prior day, whatever wall-clock now is.
     try:
         yday = (
-            datetime.strptime(day0, "%Y%m%d").date() - timedelta(days=1)
+            datetime.strptime(day0, "%Y%m%d").date() - timedelta(days=1)  # noqa: DTZ007 — a UTC day LABEL, naive by design
         ).strftime("%Y%m%d")
     except ValueError:
         return []

@@ -281,7 +281,7 @@ def mapentry_summary_lines(reading: str = "mid") -> list[str]:
 
     try:
         result = mv.run(reading=reading)
-    except Exception as exc:  # noqa: BLE001 — a reporting layer never crashes the report
+    except Exception as exc:
         return [f"  H-MAPENTRY1: unavailable ({type(exc).__name__}: {exc})"]
     if result is None:
         return ["  H-MAPENTRY1: no mapentry rows or no resolved maps yet"]
@@ -323,7 +323,7 @@ def main() -> None:
     if not args.replay:
         try:
             mapentry_result = mv.run(reading=args.book_reading)
-        except Exception as exc:  # noqa: BLE001 — reporting layer, never crash
+        except Exception as exc:
             print(f"H-MAPENTRY1: unavailable ({type(exc).__name__}: {exc})")
 
     instances = load_instances(args.replay, args.include_test)

@@ -131,26 +131,26 @@ RULE_FORMULAS = {
 }
 
 CAVEATS = (
-    "Would-fill model is OPTIMISTIC: a later row whose side_ask touches our "
+    ("Would-fill model is OPTIMISTIC: a later row whose side_ask touches our "
     "level is not a guaranteed maker fill (queue ahead, post-only repricing, "
-    "partial fills); fill rates are upper bounds.",
-    "The same touch model is applied to both rules, so the A/B comparison of "
-    "fill rates is fair; absolute levels are upper bounds either way.",
-    "Rules may quote DIFFERENT row subsets because skip conditions differ "
+    "partial fills); fill rates are upper bounds."),
+    ("The same touch model is applied to both rules, so the A/B comparison of "
+    "fill rates is fair; absolute levels are upper bounds either way."),
+    ("Rules may quote DIFFERENT row subsets because skip conditions differ "
     "(rule b needs our-side bid too); per-rule denominators are each rule's "
     "own n_quoted, so cross-rule comparisons should use n_common (rows where "
-    "BOTH rules quote) rather than raw headlines.",
-    "Settled edge uses the rule's quote as the fill price; real execution "
-    "(fees, slippage, partial size) is not modelled.",
-    "Verdicts come only from the winners file; a winner is never inferred "
-    "from scores or team order.",
-    "The cap arm of rule a rarely binds: qualifying rows already satisfy "
+    "BOTH rules quote) rather than raw headlines."),
+    ("Settled edge uses the rule's quote as the fill price; real execution "
+    "(fees, slippage, partial size) is not modelled."),
+    ("Verdicts come only from the winners file; a winner is never inferred "
+    "from scores or team order."),
+    ("The cap arm of rule a rarely binds: qualifying rows already satisfy "
     "side_ask <= entry_price_max (mapentry.attach_book), so quote_a degenerates "
     "to side_ask - 0.01 on most of the population — the INSIDE-SPREAD contrast "
-    "is the informative axis, not the cap.",
-    "Metrics cover the recording population, not the live gate: n_gated rows "
+    "is the informative axis, not the cap."),
+    ("Metrics cover the recording population, not the live gate: n_gated rows "
     "sit outside the live (0.40, 0.90) US_BAND_GATE and the engine would not "
-    "place them today.",
+    "place them today."),
 )
 
 # Maximum bytes scanned per mapentry line before it is treated as corrupt
@@ -441,7 +441,7 @@ def build_evaluations(rows: list[Any]) -> tuple[list[dict], dict[str, int]]:
         rtype = rw.get("type")  # untyped legacy rows still count as mapentry
         if rtype is not None and rtype != "mapentry":
             continue
-        ok, ts_f = usable(rw)
+        ok, _ts_f = usable(rw)
         if not ok:
             if rw.get("qualifies") is True:
                 # It claimed to qualify but failed a gate: count it so the

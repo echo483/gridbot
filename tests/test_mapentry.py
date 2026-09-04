@@ -271,7 +271,7 @@ class TestSlateCoverage:
         rec.slate = SimpleNamespace(predict=lambda _f: 0.6)  # arm a q provider
         rec.mappings = {"777": {"match": {"s": 1}, "us_markets": {"map1": {"market_slug": "m", "sides": {"Alpha": "long"}}}}}
         assert rec.handle_slate(self._ss_record()) is not None
-        day_file = list(tmp_path.glob("mapentry-*.jsonl"))[0]
+        day_file = next(iter(tmp_path.glob("mapentry-*.jsonl")))
         row = json.loads(day_file.read_text().splitlines()[0])
         assert row["book"] == summary
         # entry semantics unchanged against the top-only baseline
@@ -298,7 +298,7 @@ class TestSlateCoverage:
         rec.mappings = {"777": {"match": {"s": 1}, "us_markets": {"map1": {"market_slug": "m", "sides": {"Alpha": "long"}}}}}
         disposition = rec.handle_slate(self._ss_record())
         assert disposition is not None  # row still recorded
-        day_file = list(tmp_path.glob("mapentry-*.jsonl"))[0]
+        day_file = next(iter(tmp_path.glob("mapentry-*.jsonl")))
         row = json.loads(day_file.read_text().splitlines()[0])
         # depth fetch failed -> no book evidence, but the row survived
         assert row["book"] is None

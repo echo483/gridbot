@@ -164,7 +164,7 @@ def _secret(name: str) -> str | None:
                 import keyring  # lazy so tests without a keyring backend still import config
 
                 box["val"] = keyring.get_password(KEYRING_SERVICE, name)
-            except Exception as exc:  # noqa: BLE001 — backend outage, not "secret absent"
+            except Exception as exc:
                 box["exc"] = exc
 
         worker = threading.Thread(target=_read, daemon=True, name=f"keyring:{name}")

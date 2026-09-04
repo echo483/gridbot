@@ -549,7 +549,7 @@ class TestMalformedHandling:
         assert counts["unusable_population_rows"] == 3
 
     def test_empty_population_null_metrics(self):
-        evals, counts = qb.build_evaluations([])
+        evals, _counts = qb.build_evaluations([])
         assert evals == []
         per_rule = qb.compute_per_rule(evals)
         for rule in ("a", "b"):

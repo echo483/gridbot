@@ -144,7 +144,7 @@ def has_two_sided_book(row: dict) -> bool:
 
 def iso_to_ns(iso: str) -> int:
     """Epoch nanoseconds for an ISO-8601 timestamp (Z suffix accepted)."""
-    dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    dt = datetime.fromisoformat(iso)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return int(dt.timestamp() * 1_000_000_000)

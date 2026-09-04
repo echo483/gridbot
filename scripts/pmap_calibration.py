@@ -173,16 +173,16 @@ def main() -> int:
         "edge_qualifying_rows": edge(qual_items),
         "edge_deduped_per_book": edge(list(seen.values())),
         "notes": [
-            "Ground truth is scripts/grid_winners.py (MR12-validated, "
+            ("Ground truth is scripts/grid_winners.py (MR12-validated, "
             "ambiguous finals excluded). Rows whose team matches neither "
-            "the winner nor the loser are excluded, never guessed.",
-            "edge_deduped_per_book is the honest n: one entry per map book, "
+            "the winner nor the loser are excluded, never guessed."),
+            ("edge_deduped_per_book is the honest n: one entry per map book, "
             "matching the engine's dedup key. edge_qualifying_rows counts "
-            "the same book once per re-qualifying round and overstates n.",
-            "Paper edge assumes a fill AT the posted price. A resting maker "
+            "the same book once per re-qualifying round and overstates n."),
+            ("Paper edge assumes a fill AT the posted price. A resting maker "
             "order fills only when flow crosses INTO it, so realized edge is "
             "this number minus fill selection — which is why a positive "
-            "number here is consistent with negative realized PnL.",
+            "number here is consistent with negative realized PnL."),
         ],
     }
     out = json.dumps(report, indent=2)

@@ -554,7 +554,7 @@ def test_cli_shock_params_flow_through(tmp_path):
 
 
 def test_cli_missing_winners_file_fails_cleanly(tmp_path):
-    proc, mapentry, _, _ = _run_cli(tmp_path)
+    _proc, mapentry, _, _ = _run_cli(tmp_path)
     proc_bad = subprocess.run(
         [sys.executable, "-X", "utf8",
          str(_project_root / "scripts" / "entry_quality.py"),

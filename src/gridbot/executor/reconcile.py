@@ -143,7 +143,7 @@ def fetch_venue_orders(client) -> list[dict] | None:
     NOT an empty book (treating it as one flags every open order gone)."""
     try:
         return list((client.orders.list() or {}).get("orders") or [])
-    except Exception as exc:  # noqa: BLE001 — reconcile must never kill the engine
+    except Exception as exc:
         log.warning("venue orders.list failed: %s", type(exc).__name__)
         return None
 

@@ -83,7 +83,7 @@ def shadow_lines(since: datetime, now: datetime, data_dir: Path) -> list[str]:
         from gridbot.instruments.verdict import compact_summary
 
         lines.extend(compact_summary())
-    except Exception:  # noqa: BLE001 — report must never crash on a probe
+    except Exception:
         lines.append("  verdict n/a")
     return lines
 
@@ -219,11 +219,11 @@ def build_report(since_hours: float, now: datetime, data_dir: Path) -> str:
         ]
         stats = capture_stats(recs, since, now) if recs else None
         cap = capture_lines(stats)
-    except Exception:  # noqa: BLE001 — every section degrades to n/a
+    except Exception:
         stats, cap = None, ["capture: n/a"]
     try:
         ops = ops_lines(data_dir)
-    except Exception:  # noqa: BLE001
+    except Exception:
         ops = ["ops: n/a"]
     try:
         du = shutil.disk_usage(data_dir)

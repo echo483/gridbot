@@ -287,7 +287,7 @@ class Recorder:
                 self.sleep(REQUEST_SPACING_S)
             try:
                 bid, ask, req_ns, latency_ms = self.fetch(spec["slug"])
-            except Exception as exc:  # noqa: BLE001 — a book fetch must never kill the tape
+            except Exception as exc:
                 log.warning("bbo fetch failed for %s: %s", spec["slug"], type(exc).__name__)
                 self.tape.error(spec, exc)
                 errors += 1
