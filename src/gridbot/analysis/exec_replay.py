@@ -33,6 +33,7 @@ from pathlib import Path
 
 from gridbot.analysis.exec_fills import (
     UPPER_CONSUMPTION,
+    UPPER_CONSUMPTION_MARKET,
     Fill,
     FillRule,
     simulate,
@@ -63,21 +64,27 @@ def _bound_fill(r: Replayed, bound: str) -> Fill:
     return r.lower if bound == "lower" else r.upper
 
 
-def replay_orders(orders, postquote_by_src, tape_by_slug, winners, clip_qty: float = 25.0):
-    """Replay every order through the two fill bounds, one :class:`Replayed` each."""
+def replay_orders(orders, postquote_by_src, tape_by_slug, winners, clip_qty: float = 25.0,
+                  real_orders: bool = False):
+    """Replay every order through the two fill bounds, one :class:`Replayed` each.
+
+    ``real_orders=True`` (the calibration fixture: orders that actually rested) lets
+    BOTH edges use the level-consumption channel referenced to our cost. Hypothetical
+    (dry-run) orders — AMEND1-NOTE1 — keep the lower edge touch-only and give the
+    upper edge the market-referenced consumption signal.
+    """
     out: list[Replayed] = []
     for o in orders:
         obs = observations(o, postquote_by_src, tape_by_slug)
         regime = "sized" if any(ob.opp_size is not None for ob in obs) else "unsized"
-        # EXEC1-AMEND1: both bounds carry the level-consumption channel; the lower
-        # bound keeps its queue rule per regime (behind displayed size when sized).
         lower_rule = FillRule(touch="strict", persist=True,
                               queue="behind_displayed" if regime == "sized" else "unsized",
-                              consumption=True)
+                              consumption=real_orders)
         lower = simulate(
             lower_rule, o.cost, clip_qty, o.t0_ns, obs, queue_ahead=o.top_size
         )
-        upper = simulate(UPPER_CONSUMPTION, o.cost, clip_qty, o.t0_ns, obs,
+        upper_rule = UPPER_CONSUMPTION if real_orders else UPPER_CONSUMPTION_MARKET
+        upper = simulate(upper_rule, o.cost, clip_qty, o.t0_ns, obs,
                          queue_ahead=o.top_size)
         y = y_side(o, winners)
         out.append(Replayed(order=o, lower=lower, upper=upper, regime=regime,

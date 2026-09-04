@@ -47,7 +47,13 @@ class FillRule:
     touch: str  # "strict" -> opp_ask < P ; "at" -> opp_ask <= P
     persist: bool  # True -> the NEXT observation in the window must also touch
     queue: str  # "behind_displayed" -> sized out from behind the queue ; "front" ; "unsized"
-    consumption: bool = False  # EXEC1-AMEND1: credit a fill when OUR level is consumed (own_bid < P)
+    consumption: bool = False  # EXEC1-AMEND1: credit a fill when OUR level is consumed
+    # AMEND1-NOTE1: which level's disappearance signals a sale. "cost" = a REAL resting
+    # order (our level IS the best bid at P). "market" = a HYPOTHETICAL order: we would
+    # sit in front of the market bid seen at the first look, so a sale that takes that
+    # bid out would have hit us first — reference = min(P, first own_bid). Cancels look
+    # the same on a BBO tape, so "market" is an UPPER-bound signal only.
+    consumption_ref: str = "cost"
 
 
 LOWER = FillRule(touch="strict", persist=True, queue="behind_displayed")
@@ -67,6 +73,10 @@ LOWER_UNSIZED = FillRule(touch="strict", persist=True, queue="unsized")
 # (our consumed size is not observable). Touch fills still apply.
 LOWER_CONSUMPTION = FillRule(touch="strict", persist=True, queue="unsized", consumption=True)
 UPPER_CONSUMPTION = FillRule(touch="at", persist=False, queue="front", consumption=True)
+# Hypothetical (dry-run) orders: the lower edge is touch-only; the upper edge adds the
+# market-referenced consumption signal (AMEND1-NOTE1).
+UPPER_CONSUMPTION_MARKET = FillRule(touch="at", persist=False, queue="front",
+                                    consumption=True, consumption_ref="market")
 
 
 @dataclass(frozen=True)
@@ -99,15 +109,21 @@ def _consumption_fill(rule: FillRule, P: float, qty: float, window: list[Obs]) -
     we are still resting. Returns None when the channel cannot decide.
     """
     eps = 1e-9
+    ref = P
+    if rule.consumption_ref == "market":
+        first_bid = next((o.own_bid for o in window if o.own_bid is not None), None)
+        if first_bid is None:
+            return None
+        ref = min(P, first_bid)
     for i, o in enumerate(window):
         if o.own_bid is None:
             continue
         if o.own_bid > P + eps:
             return Fill(False, None, 0.0, None, "undetectable")
-        if o.own_bid < P - eps:
+        if o.own_bid < ref - eps:
             if rule.persist:
                 nxt = window[i + 1] if i + 1 < len(window) else None
-                if nxt is None or nxt.own_bid is None or nxt.own_bid >= P - eps:
+                if nxt is None or nxt.own_bid is None or nxt.own_bid >= ref - eps:
                     return None
                 return Fill(True, nxt.t_ns, float(min(qty, 1.0)), i, "consumed")
             return Fill(True, o.t_ns, float(min(qty, 1.0)), i, "consumed")

@@ -52,7 +52,7 @@ def run_calibrate(data: Path) -> dict:
     postquote = ep.index_postquotes(_rows("shadow/postquote-2026082[67].jsonl", data))
     tape = ep.index_tape(_rows("pmus/books-2026082[67].jsonl", data))  # none exist: unsized
     winners = mv.load_map_winners(str(data / "grid" / "series_state-*.jsonl"))
-    replayed = er.replay_orders(orders, postquote, tape, winners)
+    replayed = er.replay_orders(orders, postquote, tape, winners, real_orders=True)
     summary = er.summarize(replayed)
     calib = er.calibration(replayed, ef.actual_dicts(actual))
     return {"mode": "calibrate", "days": FIXTURE_DAYS, "counts": counts,

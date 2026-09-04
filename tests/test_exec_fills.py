@@ -240,3 +240,28 @@ def test_consumption_channel_credits_one_contract_when_our_level_vanishes():
     # a touch still fills first
     touch = [Obs(t0 + 30 * S, 0.59, None, own_bid=0.60)]
     assert simulate(UPPER_CONSUMPTION, 0.60, 25.0, t0, touch).reason == "filled"
+
+
+def test_market_referenced_consumption_for_hypothetical_orders():
+    """AMEND1-NOTE1: a dry-run order improves the market bid, so 'bid below our cost' is
+    true at the first look by construction and must NOT count. The reference is the
+    market bid we would sit in front of; only its disappearance counts, upper edge only."""
+    from gridbot.analysis.exec_fills import (
+        UPPER_CONSUMPTION,
+        UPPER_CONSUMPTION_MARKET,
+        Obs,
+        simulate,
+    )
+    t0 = 1_000_000_000_000
+    S = 10**9
+    # we would post 0.60 in front of a 0.57 market bid; the bid never moves: no fill
+    steady = [Obs(t0 + 30 * S, 0.62, None, own_bid=0.57), Obs(t0 + 60 * S, 0.62, None, own_bid=0.57)]
+    assert simulate(UPPER_CONSUMPTION, 0.60, 25.0, t0, steady).filled          # cost-referenced would over-credit
+    assert not simulate(UPPER_CONSUMPTION_MARKET, 0.60, 25.0, t0, steady).filled
+    # the 0.57 bid is taken out (0.52 later): a sale went through the level we'd front -> upper fill
+    taken = [Obs(t0 + 30 * S, 0.62, None, own_bid=0.57), Obs(t0 + 60 * S, 0.62, None, own_bid=0.52)]
+    f = simulate(UPPER_CONSUMPTION_MARKET, 0.60, 25.0, t0, taken)
+    assert f.filled and f.reason == "consumed" and f.qty == 1.0
+    # the market bid rises above our cost: someone in front of us -> undetectable
+    above = [Obs(t0 + 30 * S, 0.62, None, own_bid=0.57), Obs(t0 + 60 * S, 0.66, None, own_bid=0.63)]
+    assert simulate(UPPER_CONSUMPTION_MARKET, 0.60, 25.0, t0, above).reason == "undetectable"
