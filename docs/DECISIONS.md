@@ -65,6 +65,18 @@ is yours.
       the maker-side latency question into the gridbot-lab research layer;
   (d) close MAPENTRY1 as a live candidate and move on.
 - Recommendation: (a) + (b) now, (c) as the first gridbot-lab research task.
+- **09-04 20:30Z — EXEC1 is built and its first REFERENCE renders are in**
+  (`docs/analysis/2026-09-04-exec1-first-renders.md`): calibration on the 48 real
+  orders reproduces fills at 0.86 recall / 1.0 precision on the detectable set; the
+  held-out replay (130 entries, 45 series) settles at −0.167 [−0.282, −0.070] per
+  filled contract under the lower edge and −0.142 [−0.203, −0.088] under the upper.
+  Both intervals sit below zero. The live-small question is answered by the
+  instrument it was meant to calibrate: **do not arm H-MAPENTRY1's entry rule.**
+  Options now: (e) confirm the EXEC1 thresholds and let the instrument render its
+  terminal verdict (it will FAIL on the upper edge at ≥60 fills — that closes the
+  lane on its own bar); (f) keep EXEC1 and register the NEXT entry rule against it
+  (discount-conditional entry, or a match-book maker rule once a trades tape exists).
+
   Nothing goes live without a PASS on a fill-modelled instrument. Registry rows
   are drafted for your review, never self-registered.
 

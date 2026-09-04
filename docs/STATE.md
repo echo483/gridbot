@@ -76,6 +76,15 @@ outage 09-04 from ~18:18Z: desktop keyring wedged (third time), capture failing
 closed; recovery is the user's `gnome-keyring-daemon --replace --unlock`; D8
 proposes a systemd credential for the capture key.** Tests 914.
 
+**09-04 20:30Z addendum:** EXEC1 built end-to-end (`gridbot.analysis.exec_fills /
+exec_population / exec_fixture / exec_replay / exec_replay_cli`, 49 tests). AMEND1
+(level-consumption fill channel) and AMEND1-NOTE1 (counterfactual reference) are
+pre-registered. First REFERENCE renders: fixture calibration upper recall 6/7 on
+detectable orders, precision 1.0; **held-out replay −0.167 [−0.282, −0.070] (lower
+edge) / −0.142 [−0.203, −0.088] (upper) per filled contract, 130 entries / 45
+series** — `docs/analysis/2026-09-04-exec1-first-renders.md`. Recommendation:
+do not arm; DECISIONS D2 options (e)/(f). Capture still down (keyring). Tests 927.
+
 ## What is PROVEN (as of this baseline)
 
 | claim | evidence |
