@@ -64,6 +64,18 @@ BBO recorder went blind at every map end; it now covers between maps and 600s
 after a series ends. Decisions D2 rewritten with four options. Doc:
 `docs/analysis/2026-09-04-venue-pricing-and-holdout.md`. Tests 878.
 
+**09-04 19:10Z addendum (the /loop "qualify to live-small"):** registry gained
+H-MAPENTRY1-HOLDOUT2 (clause-iii holdout extension), H-MAPENTRY1-EXEC1 (the
+execution-realistic qualifying instrument; thresholds PENDING USER CONFIRMATION,
+build+calibrate allowed, no verdict) and H-LIVESMALL1 (six-session live-small
+measurement protocol; the user arms). Spec + 10-finding review:
+`docs/superpowers/specs/2026-09-04-mapentry-exec1-livesmall1-brief-DRAFT.md`.
+Code: `gridbot.analysis.exec_fills` (fill bracket, 22 tests); recorder now
+writes top sizes on every tape row (sized regime from 18:36Z). **Capture
+outage 09-04 from ~18:18Z: desktop keyring wedged (third time), capture failing
+closed; recovery is the user's `gnome-keyring-daemon --replace --unlock`; D8
+proposes a systemd credential for the capture key.** Tests 914.
+
 ## What is PROVEN (as of this baseline)
 
 | claim | evidence |
