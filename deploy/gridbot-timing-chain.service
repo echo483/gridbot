@@ -1,0 +1,16 @@
+# gridbot nightly timing chain — oneshot, fired by gridbot-timing-chain.timer
+# at 17:30 local (00:30 UTC), i.e. right after the UTC day files close.
+# Analysis only (iron rail 1): joins yesterday's GRID round ends to the PMUS
+# book tape (scripts/timing_chain.py), writes data/analysis/timing_chain-
+# YYYYMMDD.{json,md}. Exit 1 on a day without book rows is the intended loud
+# failure (never a green empty summary). Citable at >= 5 nights / >= 1,000
+# moved events, series-clustered — see docs/analysis/2026-09-03-timing-chain-
+# first-read.md.
+[Unit]
+Description=gridbot nightly timing chain (GRID round ends vs PMUS book; analysis only)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ops/gridbot
+ExecStart=/bin/sh -c 'day=$(date -u -d yesterday +%%Y%%m%%d); /home/ops/.local/bin/uv run python scripts/timing_chain.py "$day" > "data/analysis/timing_chain-$day.md"'
+NoNewPrivileges=true

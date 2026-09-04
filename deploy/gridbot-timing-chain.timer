@@ -1,0 +1,9 @@
+[Unit]
+Description=Run gridbot nightly timing chain at 17:30 local (00:30 UTC)
+
+[Timer]
+OnCalendar=*-*-* 17:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
