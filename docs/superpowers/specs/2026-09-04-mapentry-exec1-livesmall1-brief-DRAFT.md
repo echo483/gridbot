@@ -264,8 +264,10 @@ bracket; the replay never emits "rejected". Held-out replay assumes the
 corrected convention (NOTE7) and treats every simulated order as accepted;
 the live-small run measures the actual acceptance rate.
 
-**Accounting.** `y_side` = 1 if our side settles a winner (LONG: team wins
-the map; SHORT: team loses). PnL per contract = `y_side − c`. Fees 0 (the
+**Accounting.** `y_side` = 1 if the row's `team` wins the map, on BOTH sides:
+a mapentry SHORT row's `team` is the team we back (the No leg), and its
+`p_map`/posted cost are already in that leg's terms (correction 2026-09-04
+19:20Z — the earlier wording "SHORT: team loses" would double-orient). PnL per contract = `y_side − c`. Fees 0 (the
 venue's position records carry `fees: null` on all 13 real fills — recorded
 assumption). Unresolved maps: exclude-and-count, plus a settle-at-0.5
 sensitivity line (#10). Series-clustered bootstrap, 10,000 resamples, seed
