@@ -80,11 +80,14 @@ def replay_orders(orders, postquote_by_src, tape_by_slug, winners, clip_qty: flo
         lower_rule = FillRule(touch="strict", persist=True,
                               queue="behind_displayed" if regime == "sized" else "unsized",
                               consumption=real_orders)
+        # Registry EXEC1: "exactly 1 contract when unsized" — for BOTH edges (review
+        # finding #4: a 25:1 clip-vs-one-contract blend is not an expected PnL).
+        qty = clip_qty if regime == "sized" else 1.0
         lower = simulate(
-            lower_rule, o.cost, clip_qty, o.t0_ns, obs, queue_ahead=o.top_size
+            lower_rule, o.cost, qty, o.t0_ns, obs, queue_ahead=o.top_size
         )
         upper_rule = UPPER_CONSUMPTION if real_orders else UPPER_CONSUMPTION_MARKET
-        upper = simulate(upper_rule, o.cost, clip_qty, o.t0_ns, obs,
+        upper = simulate(upper_rule, o.cost, qty, o.t0_ns, obs,
                          queue_ahead=o.top_size)
         y = y_side(o, winners)
         out.append(Replayed(order=o, lower=lower, upper=upper, regime=regime,
@@ -130,7 +133,31 @@ def _one_bound_summary(r_list, bound: str, bootstrap) -> dict:
         (0.5 - r.order.cost, _bound_fill(r, bound).qty) for r in unresolved
     ]
     sensitivity = _weighted_mean(half_pairs) if half_pairs else None
+    # Review finding #5: leave-one-series-out means and the loss concentration, so
+    # "the interval is below zero" can be checked against 2-3 dominant clusters.
+    by_series: dict[str, list[float]] = {}
+    for sid, pnl, _q in resolved:
+        by_series.setdefault(sid, []).append(pnl)
+    all_pnl = [pnl for _, pnl, _ in resolved]
+    loo = []
+    for sid in by_series:
+        rest = [pnl for s2, pnl, _ in resolved if s2 != sid]
+        if rest:
+            loo.append(sum(rest) / len(rest))
+    losses = sorted(sum(v) for v in by_series.values())  # most negative first
+    total = sum(all_pnl)
+    top3_share = (sum(losses[:3]) / total) if total < 0 and losses else None
+    jackknife = {
+        "loo_mean_min": min(loo) if loo else None,
+        "loo_mean_max": max(loo) if loo else None,
+        "loo_all_negative": bool(loo) and all(m < 0 for m in loo),
+        "top3_series_loss_share": None if top3_share is None else round(top3_share, 3),
+        "series_with_net_loss": sum(1 for v in by_series.values() if sum(v) < 0),
+        "series_with_fills": len(by_series),
+    }
     return {
+        "unweighted_mean": (sum(all_pnl) / len(all_pnl)) if all_pnl else None,
+        "jackknife": jackknife,
         "n_orders": len(r_list),
         "n_filled": sum(1 for r in r_list if _bound_fill(r, bound).filled),
         "n_filled_resolved": len(resolved),
@@ -276,6 +303,16 @@ def _fmt_ci(b, summary) -> str:
     return f"{point} [{ci[0]:.4f}, {ci[1]:.4f}] (n_series={summary['n_series']})"
 
 
+def _jack_line(b: dict) -> str:
+    j = b.get("jackknife") or {}
+    if not j or j.get("loo_mean_min") is None:
+        return "- jackknife: n/a"
+    return (f"- jackknife (leave one series out): mean in [{j['loo_mean_min']:+.4f}, "
+            f"{j['loo_mean_max']:+.4f}], all negative={j['loo_all_negative']}; "
+            f"top-3 series carry {j['top3_series_loss_share']} of the net loss; "
+            f"{j['series_with_net_loss']}/{j['series_with_fills']} series net negative")
+
+
 def _bound_section(label: str, summary: dict) -> str:
     lines = [
         f"#### {label} bound",
@@ -287,6 +324,7 @@ def _bound_section(label: str, summary: dict) -> str:
         f"- contracts={summary['contracts']:.1f} (n_filled_resolved={summary['n_filled_resolved']})",
         f"- mean pnl={_none(summary['mean_pnl'])}/contract (n_filled_resolved={summary['n_filled_resolved']})",
         f"- bootstrapped mean={_fmt_ci('mean', summary)}",
+        _jack_line(summary),
         f"- sensitivity at unresolved=half: {_none(summary['sensitivity_unresolved_at_half'])}",
     ]
     return "\n".join(lines)

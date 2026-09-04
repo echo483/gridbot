@@ -83,7 +83,7 @@ pre-registered. First REFERENCE renders: fixture calibration upper recall 6/7 on
 detectable orders, precision 1.0; **held-out replay −0.167 [−0.282, −0.070] (lower
 edge) / −0.142 [−0.203, −0.088] (upper) per filled contract, 130 entries / 45
 series** — `docs/analysis/2026-09-04-exec1-first-renders.md`. Recommendation:
-do not arm; DECISIONS D2 options (e)/(f). Capture still down (keyring). Tests 927.
+do not arm; DECISIONS D2 options (e)/(f). Capture still down (keyring). Tests 941.
 
 ## What is PROVEN (as of this baseline)
 
