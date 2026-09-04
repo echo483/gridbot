@@ -216,3 +216,100 @@ Ranked findings. Each: (a) flaw, (b) concrete failure case, (c) fix/measurement,
 ## Verdict
 
 Cannot be frozen as written. Blockers #1–#4 make the produced number uncomputable (lower bound on a no-size tape), cross-regime-invalid (calibrate-on-sized vs apply-on-no-size), circular (rejection gate), and tuned-not-validated (aggregate-rate match only). Fold in first: a per-order confusion-matrix calibration against the 48 ground-truth outcomes, an explicit no-size fallback for both bounds' contract quantity, rejection-as-exogenous-subtraction, and a PASS floor arithmetically reachable under measured entry density and fill rate. Then #5–#8 (touch-proxy recall on one-sided books, peeking control, upper-bound quantity, short-side pinning) and #10 (unresolved-map disposition) as amendments before accrual begins. Until then, any PASS/FAIL the instrument emits is a property of its data gaps and tuning, not of maker edge.
+
+---
+
+# v2 — frozen candidate (Claude ops session, 2026-09-04 19:00Z; folds review findings #1–#10)
+
+Status: candidate for registration. The registry rows below are written as
+REGISTERED_NO_RUN with the thresholds marked PENDING USER CONFIRMATION; the
+instrument may be BUILT and CALIBRATED on the 08-26/27 fixture, and interim
+held-out renders are REFERENCE only, until the user confirms the bars.
+
+## H-MAPENTRY1-EXEC1 v2
+
+**Unit and population.** One deduplicated qualifying entry per (series, map,
+us_side): the earliest DETECTOR-provenance mapentry row with `qualifies=true`
+and a two-sided book at detection, from series whose FIRST GRID↔PMUS mapping
+row is at/after 2026-08-31T19:53:46Z (first-mapping order; no cap at 40 — the
+window is closed by the stop rule below). Rows before that start never enter.
+
+**Order.** Posted our-side cost `c = posted_price(row)` = min(side_ask − 0.01,
+p_map − 0.04, 0.90) in our-side terms (for a SHORT this is the No cost; the
+venue Yes price is 1 − c, per NOTE7). Lifetime (t0, t0 + 150s], t0 = the
+row's `ts_ns`. Quantity: sized regime → min(clip contracts, displayed size per
+`exec_fills`); unsized regime → exactly 1 contract, both bounds (#8).
+
+**Observations.** (a) postquote rows joined on `src_ts_ns == mapentry.ts_ns`
+(+30/+60/+120s; no sizes → unsized); (b) tape rows for the slug inside the
+lifetime (sizes since 2026-09-04 18:36Z → sized; before → unsized). Our-side
+opposing quote: LONG `opp_ask = ask`, `opp_size = ask_size`; SHORT
+`opp_ask = 1 − bid`, `opp_size = bid_size` (#9: a SHORT touch is
+`yes_bid ≥ 1 − c`, never `yes_ask ≤ ·`). Dead/one-sided → opp_ask None.
+
+**Fill bracket** (`gridbot.analysis.exec_fills`, knobs frozen here, before
+the fixture is examined by this instrument): LOWER = strict touch
+(`opp_ask < c`), persistence (next in-window observation still touching),
+queue behind displayed size when sized, `LOWER_UNSIZED` (1 contract) when
+not (#1, #2). UPPER = any touch (`opp_ask ≤ c`), front of queue, sized cap or
+1 contract. No trade print is imputed. Fill-detection recall is reported by
+book one-sidedness at detection (#5); if recall on one-sided books in the
+fixture is below 0.5, every render carries the label FILL-DETECTION-PARTIAL
+and a FAIL cannot be declared (a PASS can, because missed fills are the
+adverse-touch kind that lowers PnL).
+
+**Rejections are exogenous** (#3): on the fixture days, orders whose venue
+state is REJECTED (`timing_profile.venue_states`) are subtracted before the
+bracket; the replay never emits "rejected". Held-out replay assumes the
+corrected convention (NOTE7) and treats every simulated order as accepted;
+the live-small run measures the actual acceptance rate.
+
+**Accounting.** `y_side` = 1 if our side settles a winner (LONG: team wins
+the map; SHORT: team loses). PnL per contract = `y_side − c`. Fees 0 (the
+venue's position records carry `fees: null` on all 13 real fills — recorded
+assumption). Unresolved maps: exclude-and-count, plus a settle-at-0.5
+sensitivity line (#10). Series-clustered bootstrap, 10,000 resamples, seed
+17, contracts weighted by filled quantity.
+
+**Calibration gate** (must pass before the held-out population is read; a
+failure → amendment, never a tuned knob): on the 48 venue-verified orders of
+08-26/27 with their postquote observations, per-order confusion matrix vs the
+actual fill/rest outcome (#4): rested count reconciles exactly with the venue
+states; UPPER recall on the 13 actual fills ≥ 0.6; LOWER precision on
+predicted fills ≥ 0.6; fill-time MAE on detected fills ≤ 45s; recall by
+one-sidedness printed.
+
+**Verdict (single terminal look, #7).** Interim renders are REFERENCE and
+never stop accrual. The terminal evaluation happens once, at the earlier of:
+(a) ≥ 60 LOWER-bound filled entries AND ≥ 60 UPPER-bound filled entries, or
+(b) 45 calendar days after the first held-out row read under this row.
+PASS: under LOWER, ≥ 60 fills and the 95% CI's lower endpoint > +0.02 per
+contract. FAIL: under UPPER, ≥ 60 fills and the CI's upper endpoint < 0.
+Otherwise INCONCLUSIVE — no arming, no relabel. Arithmetic check (#6): ~1
+entry per held-out series, ~77 newly mapped series/day, upper fill ≈ 45%,
+lower fill ≈ 15–25% → 60 lower fills ≈ 240–400 entries ≈ 4–6 days of
+mapping; both floors are reachable inside 45 days.
+
+**Artifacts.** `uv run python -m gridbot.analysis.exec_replay --calibrate`
+(fixture gate, confusion matrix, recall by one-sidedness) and
+`--heldout [--terminal]` (REFERENCE unless --terminal; --terminal refuses to
+run before the stop rule is met and writes the verdict JSON once). Every
+report lists input file names + row counts, the frozen knobs, the regime mix,
+and reconciliations: held-out row count == filtered extract; deduped units ==
+distinct (series, map, us_side); every fill has a source row, a window, a
+settlement or an unresolved flag; lower fills ⊆ upper fills per order.
+
+## H-LIVESMALL1 v2
+
+Purpose: calibrate the fill bracket against real venue behaviour; NOT an edge
+verdict. Prerequisites, all before session 1: EXEC1 calibration gate PASSED;
+`GRIDBOT_LIVE=1 uv run python scripts/live_fire_test.py --side short` prints
+CONVENTION VERIFIED; the user arms per docs/LIVE_FIRE.md (rail 3). Design:
+6 sessions × 3h, one per trading day; $1 clips sessions 1–2, $5 sessions 3–6;
+max 3 open; $50 daily loss; frozen 150s TTL; one order per (map book, side);
+no manual repricing; no added capital. Stop rules and the informative floor
+(≥30 create attempts, ≥12 rested, ≥5 fills, zero unreconciled ledger rows) as
+in Part 2 above, plus: a second REJECTED short at the wrong venue level ends
+the run. Measurements 1–8 as in Part 2, compared to EXEC1's two bounds, plus
+fill-detection recall of the bracket on the live fills (the touch proxy vs
+the venue's actual fills, by one-sidedness). PnL descriptive only.
