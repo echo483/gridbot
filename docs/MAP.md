@@ -79,3 +79,4 @@ ratelimit, dispatch tooling, replay_harness, the registry discipline.
 Replace: instruments/ (your detectors + recorder + verdict), model/, the
 gate constants in intents.py, and the registry contents. The iron rails
 (CLAUDE.md) travel with the fork.
+- `scripts/venue_pricing_cut.py` — round-leverage × spread read of the map/match books (NOTE9): does the venue price the round at all; taker-at-stale-quote marks.

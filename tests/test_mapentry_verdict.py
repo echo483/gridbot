@@ -375,3 +375,91 @@ def test_summary_lines_flag_side_ask_as_a_bookpin_deviation():
     assert "BOOKPIN DEVIATION" in lines[0]
     assert "execution-only" in lines[0]
     assert "[BOOKPIN: book=mid reading]" not in lines[0]
+
+
+# --- H-MAPENTRY1-BOOKPIN1: held-out population = series first-mapped at/after
+# the start, the next 40 extended until >=150 instances; verdict renders on it.
+
+def test_holdout_series_is_the_next_40_by_first_mapping_extended_until_150_instances():
+    start = 1_000
+    first = {f"S{i}": start + i for i in range(60)}
+    first["OLD"] = start - 1  # mapped before the start: never held out
+    # 4 eligible instances per series: the first 40 already carry 160 >= 150
+    assert mv.holdout_series(first, start, {f"S{i}": 4 for i in range(60)}) == [
+        f"S{i}" for i in range(40)]
+    # 3 per series: 40 series = 120 < 150 -> append one at a time until 150 (50 series)
+    assert mv.holdout_series(first, start, {f"S{i}": 3 for i in range(60)}) == [
+        f"S{i}" for i in range(50)]
+    # a series with no eligible instances still counts toward the 40, adds nothing
+    assert len(mv.holdout_series(first, start, {})) == 60  # never reaches 150: all appended
+    assert "OLD" not in mv.holdout_series(first, start, {})
+
+
+def test_holdout_only_scores_the_held_out_population_and_names_the_verdict():
+    """Rows from a series first-mapped BEFORE the start are excluded even when
+    recorded after it; the clauses then score the held-out rows alone and the
+    status is the registry verdict name, not the captured-data one."""
+    start_ns = mv.iso_to_ns(mv.HOLD_START_FALLBACK)
+    n = 150
+    winners = {f"S{i}:1": {"winner": "W", "loser": "L"} for i in range(n)}
+    winners["OLD:1"] = {"winner": "W", "loser": "L"}
+    first = {f"S{i}": start_ns + 10 + i for i in range(n)}
+    first["OLD"] = start_ns - 5
+    rows = [
+        _row(series_id=f"S{i}", map_number=1, team="W", us_side="long",
+             bid=0.50, ask=0.54, p_map=0.95, qualifies=True, ts_ns=start_ns + 1000 + i)
+        for i in range(n)
+    ]
+    # 200 pre-holdout-series rows recorded after the start, perfectly calibrated
+    rows += [
+        _row(series_id="OLD", map_number=1, team="W" if i % 2 else "L", us_side="long",
+             bid=0.49, ask=0.51, p_map=0.50, qualifies=False, round_number=i,
+             ts_ns=start_ns + 2000 + i)
+        for i in range(200)
+    ]
+    res = mv.evaluate_bar(rows, winners, first_mapping=first, holdout_only=True)
+    assert res["population"] == "HOLDOUT"
+    assert res["holdout"]["n"] == 150 and res["holdout"]["series"] == 150
+    assert res["holdout"]["membership"] == "first-mapping"
+    assert res["clause_i"]["n"] == 150  # the OLD rows never entered the clauses
+    # p_map 0.95 on 150 wins: the module's quintile ECE reads 0.10 > 0.08 -> (ii) breaches;
+    # (iii) binds (150 deduped >= 60) and passes; one binding breach falsifies.
+    assert res["clause_ii"]["breached"] is True
+    assert res["status"] == "FALSIFIED_ON_HOLDOUT"
+    assert any("holdout: VERDICT population = 150" in line and "150 series" in line
+               for line in mv.summary_lines(res))
+    # same rows without first_mapping fall back to row-ts membership: OLD rows join
+    res2 = mv.evaluate_bar(rows, winners, holdout_only=True)
+    assert res2["holdout"]["membership"] == "row-ts" and res2["clause_i"]["n"] == 350
+
+
+def test_holdout_only_under_powered_below_150():
+    start_ns = mv.iso_to_ns(mv.HOLD_START_FALLBACK)
+    winners = {f"S{i}:1": {"winner": "W", "loser": "L"} for i in range(10)}
+    rows = [_row(series_id=f"S{i}", map_number=1, team="W", us_side="long",
+                 ts_ns=start_ns + 1 + i) for i in range(10)]
+    first = {f"S{i}": start_ns + i for i in range(10)}
+    res = mv.evaluate_bar(rows, winners, first_mapping=first, holdout_only=True)
+    assert res["status"] == "HOLDOUT_UNDER_POWERED" and res["holdout_declared"] is False
+
+
+def test_holdout_clause_iii_never_breaches_below_its_own_60_entry_threshold():
+    """Bar text: '(iii) at >=60 qualifying entries ...'. With 150 held-out
+    instances but only 10 qualifying (all losers), clauses (i)/(ii) decide and
+    the status says clause (iii) is still under-powered, not FALSIFIED."""
+    start_ns = mv.iso_to_ns(mv.HOLD_START_FALLBACK)
+    n = 150
+    winners = {f"S{i}:1": {"winner": "W", "loser": "L"} for i in range(n)}
+    first = {f"S{i}": start_ns + i for i in range(n)}
+    rows = []
+    for i in range(n):
+        # calibrated under the module's midpoint-bin ECE: p=0.70 (bin 0.6-0.8 midpoint)
+        # on a 70/30 win mix; book mid 0.50 is the worse forecaster; the only
+        # qualifying rows are 4 losers, so clause (iii) reads BREACH on 4 < 60 entries
+        rows.append(_row(series_id=f"S{i}", map_number=1, team="W" if i % 10 < 7 else "L",
+                         us_side="long", bid=0.49, ask=0.51, p_map=0.70,
+                         qualifies=i < 10 and i % 10 >= 7, ts_ns=start_ns + 1000 + i))
+    res = mv.evaluate_bar(rows, winners, first_mapping=first, holdout_only=True)
+    assert res["clause_i"]["breached"] is False and res["clause_ii"]["breached"] is False
+    assert res["clause_iii"]["breached"] is True and res["clause_iii"]["n_deduped"] < 60
+    assert res["status"] == "HOLDOUT_NOT_FALSIFIED_CLAUSE_III_UNDER_POWERED"

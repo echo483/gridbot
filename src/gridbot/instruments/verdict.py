@@ -313,6 +313,9 @@ def main() -> None:
     ap.add_argument("--json", action="store_true", help="emit JSON instead of text")
     ap.add_argument("--book-reading", choices=["mid", "side_ask"], default="mid",
                     help="how to read the bar's 'book price as forecast' (clause i)")
+    ap.add_argument("--holdout", action="store_true",
+                    help="also render H-MAPENTRY1 on BOOKPIN1's held-out population "
+                         "(the registry verdict)")
     args = ap.parse_args()
 
     # H-MAPENTRY1 is scored from mapentry-*.jsonl and must not be gated on the
@@ -320,9 +323,12 @@ def main() -> None:
     from gridbot.instruments import mapentry_verdict as mv
 
     mapentry_result = None
+    holdout_result = None
     if not args.replay:
         try:
             mapentry_result = mv.run(reading=args.book_reading)
+            if args.holdout:
+                holdout_result = mv.run(reading=args.book_reading, holdout_only=True)
         except Exception as exc:
             print(f"H-MAPENTRY1: unavailable ({type(exc).__name__}: {exc})")
 
@@ -330,12 +336,12 @@ def main() -> None:
     if not instances:
         print("no instances recorded yet")
         if args.json:
-            print(json.dumps({"mapentry": mapentry_result}, indent=1))
+            print(json.dumps({"mapentry": mapentry_result,
+                              "mapentry_holdout": holdout_result}, indent=1))
         else:
-            for line in (
-                mv.summary_lines(mapentry_result) if mapentry_result else []
-            ):
-                print(line)
+            for res in (mapentry_result, holdout_result):
+                for line in (mv.summary_lines(res) if res else []):
+                    print(line)
         return
     oracles = build_oracles({i["series_id"] for i in instances})
     rows = resolve_instances(instances, oracles)
@@ -348,6 +354,7 @@ def main() -> None:
                 "cells": summary,
                 "round_lane_status": lane_status,
                 "mapentry": mapentry_result,
+                "mapentry_holdout": holdout_result,
             },
             indent=1,
         ))
@@ -366,10 +373,11 @@ def main() -> None:
         )
     for lane, status in lane_status.items():
         print(f"  {lane}: {status}")
-    if mapentry_result:
-        print()
-        for line in mv.summary_lines(mapentry_result):
-            print(line)
+    for res in (mapentry_result, holdout_result):
+        if res:
+            print()
+            for line in mv.summary_lines(res):
+                print(line)
 
 
 if __name__ == "__main__":

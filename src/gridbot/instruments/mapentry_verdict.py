@@ -80,6 +80,9 @@ BOOKPIN_PINNED_READING = "mid"
 # mapping row recorded at or after <ts>"). Used only if the registry row
 # cannot be parsed — the registry text is the source of truth.
 HOLD_START_FALLBACK = "2026-08-31T19:53:46Z"
+# BOOKPIN1: "the next 40 newly-mapped series ... if 40 series fall short,
+# newly-mapped series are appended until >=150, the instance threshold binding".
+HOLDOUT_SERIES_TARGET = 40
 
 _ROOT = Path(__file__).resolve().parents[3]
 
@@ -177,6 +180,48 @@ def holdout_start_iso(registry_path: str | Path | None = None) -> str:
 
 # --------------------------------------------------------------------------
 # orientation and outcomes
+
+
+def first_mapping_ts(mapping_pattern: str) -> dict[str, int]:
+    """grid_series_id -> ts_ns of its FIRST GRID<->PMUS mapping row (any match state).
+
+    BOOKPIN1 defines the holdout by when a series was first MAPPED, not by when
+    its rows were recorded: a series mapped before the start is excluded even
+    when its maps play after it.
+    """
+    best: dict[str, int] = {}
+    for path in sorted(_glob.glob(mapping_pattern)):
+        for rec in iter_jsonl(path):
+            if rec.get("type") != "grid_pmus_mapping":
+                continue
+            gid, ts = rec.get("grid_series_id"), rec.get("ts_ns")
+            if gid is None or not isinstance(ts, int):
+                continue
+            gid = str(gid)
+            if gid not in best or ts < best[gid]:
+                best[gid] = ts
+    return best
+
+
+def holdout_series(first_ts: dict[str, int], hold_start_ns: int,
+                   eligible_by_series: dict[str, int],
+                   series_target: int = HOLDOUT_SERIES_TARGET,
+                   min_instances: int = BAR_MIN_RESOLVED) -> list[str]:
+    """BOOKPIN1's held-out series, in first-mapping order.
+
+    The first `series_target` newly-mapped series (first mapping at/after the
+    start) always belong; later ones are appended one at a time only while the
+    held-out eligible-instance count is still below `min_instances`.
+    """
+    ordered = sorted((ts, sid) for sid, ts in first_ts.items() if ts >= hold_start_ns)
+    chosen: list[str] = []
+    n = 0
+    for i, (_ts, sid) in enumerate(ordered):
+        if i >= series_target and n >= min_instances:
+            break
+        chosen.append(sid)
+        n += eligible_by_series.get(sid, 0)
+    return chosen
 
 
 def map_outcome(row: dict, winners: dict) -> float | None:
@@ -316,6 +361,8 @@ def evaluate_bar(
     reading: str = "mid",
     include_slate: bool = False,
     holdout_start: str | None = None,
+    first_mapping: dict[str, int] | None = None,
+    holdout_only: bool = False,
 ) -> dict:
     """Score H-MAPENTRY1's recording population against its three frozen clauses.
 
@@ -324,6 +371,12 @@ def evaluate_bar(
     terms). `include_slate` pools Queue-16 coverage rows; default is to split
     them out. `holdout_start` overrides the holdout start declared by
     H-MAPENTRY1-BOOKPIN1 (default: parse it from registry.jsonl).
+
+    `first_mapping` (series -> first mapping ts_ns) makes holdout membership
+    BOOKPIN1-exact: the next 40 newly-mapped series, extended until >=150
+    held-out instances. Without it, membership falls back to row ts_ns >= start.
+    `holdout_only=True` scores the clauses on the held-out population alone —
+    the registry verdict render.
     """
     pop = [r for r in rows if include_slate or provenance(r) == "DETECTOR"]
 
@@ -334,6 +387,29 @@ def evaluate_bar(
         if y is None or not isinstance(p, (int, float)):
             continue
         resolved.append({**row, "_y": float(y), "_p": float(p)})
+
+    # --- holdout membership (H-MAPENTRY1-BOOKPIN1) ---------------------------
+    hold_start_iso = holdout_start or holdout_start_iso()
+    hold_start_ns = iso_to_ns(hold_start_iso)
+
+    def _after_start(r: dict) -> bool:
+        return isinstance(r.get("ts_ns"), (int, float)) and r["ts_ns"] >= hold_start_ns
+
+    eligible_by_series: dict[str, int] = defaultdict(int)
+    for r in resolved:
+        if has_two_sided_book(r) and _after_start(r):
+            eligible_by_series[str(r.get("series_id"))] += 1
+    if first_mapping is not None:
+        chosen = set(holdout_series(first_mapping, hold_start_ns, eligible_by_series))
+
+        def in_holdout(r: dict) -> bool:
+            return str(r.get("series_id")) in chosen and _after_start(r)
+    else:
+        chosen = set(eligible_by_series)
+        in_holdout = _after_start
+    holdout_n = sum(1 for r in resolved if has_two_sided_book(r) and in_holdout(r))
+    if holdout_only:
+        resolved = [r for r in resolved if in_holdout(r)]
 
     qualifying = [r for r in resolved if r.get("qualifies")]
 
@@ -434,23 +510,16 @@ def evaluate_bar(
 
     # --- holdout (H-MAPENTRY1-BOOKPIN1) --------------------------------------
     # Pre-registered temporal holdout: resolved instances carrying a real
-    # two-sided PMUS book, recorded at/after the declared start. The registry
-    # makes the >=150 INSTANCE threshold binding (series are appended until it
-    # is met), so this count is over instances, not series.
-    hold_start_iso = holdout_start or holdout_start_iso()
-    hold_start_ns = iso_to_ns(hold_start_iso)
-    holdout_n = sum(
-        1
-        for r in resolved
-        if has_two_sided_book(r)
-        and isinstance(r.get("ts_ns"), (int, float))
-        and r["ts_ns"] >= hold_start_ns
-    )
+    # two-sided PMUS book, from series first-mapped at/after the declared
+    # start. The registry makes the >=150 INSTANCE threshold binding (series
+    # are appended until it is met), so this count is over instances.
     holdout_ready = holdout_n >= BAR_MIN_RESOLVED
     holdout = {
         "start": hold_start_iso,
         "n": holdout_n,
         "bar": BAR_MIN_RESOLVED,
+        "series": len(chosen),
+        "membership": "first-mapping" if first_mapping is not None else "row-ts",
         "holdout_declared": holdout_ready,
     }
 
@@ -463,16 +532,33 @@ def evaluate_bar(
         for c in (clause_i, clause_ii, clause_iii)
         if c["breached"] is not None
     ]
-    if not powered:
+    if holdout_only:
+        # The registry verdict: clauses (i)/(ii) render on >=150 held-out
+        # instances; (iii) binds only "at >=60 qualifying entries" (bar text),
+        # so below 60 its reading is reference, never a breach.
+        iii_binds = len(deduped) >= BAR_MIN_QUALIFYING
+        binding = [clause_i["breached"], clause_ii["breached"]] + (
+            [clause_iii["breached"]] if iii_binds else [])
+        if not holdout_ready:
+            status = "HOLDOUT_UNDER_POWERED"
+        elif any(b for b in binding if b is not None):
+            status = "FALSIFIED_ON_HOLDOUT"
+        elif not iii_binds:
+            status = "HOLDOUT_NOT_FALSIFIED_CLAUSE_III_UNDER_POWERED"
+        else:
+            status = "NOT_FALSIFIED_ON_HOLDOUT"
+    elif not powered:
         status = "UNDER_POWERED"
     elif any(breaches):
         status = "FALSIFIED_ON_CAPTURED_DATA"
     else:
         status = "NOT_FALSIFIED"
 
+    population = "HOLDOUT" if holdout_only else (
+        "DETECTOR+SLATE" if include_slate else "DETECTOR")
     return {
         "hypothesis_id": "H-MAPENTRY1",
-        "population": "DETECTOR+SLATE" if include_slate else "DETECTOR",
+        "population": population,
         "status": status,
         "clause_i": clause_i,
         "clause_ii": clause_ii,
@@ -559,7 +645,13 @@ def summary_lines(result: dict) -> list[str]:
     # two-sided-book resolved population reaches the frozen >=150; only then
     # is holdout_declared=true and a registry verdict renderable.
     ho = result.get("holdout")
-    if ho is not None:
+    if ho is not None and result.get("population") == "HOLDOUT":
+        lines.append(
+            f"    holdout: VERDICT population = {ho['n']} held-out two-sided-book "
+            f"instances over {ho['series']} series first-mapped at/after {ho['start']} "
+            f"(membership: {ho['membership']}; bar >={ho['bar']})"
+        )
+    elif ho is not None:
         if ho.get("holdout_declared"):
             lines.append(
                 f"    holdout: READY (n={ho['n']} >= {ho['bar']} held-out, "
@@ -578,8 +670,15 @@ def run(
     state_pattern: str | None = None,
     reading: str = "mid",
     include_slate: bool = False,
+    holdout_only: bool = False,
+    mapping_pattern: str | None = None,
 ) -> dict | None:
-    """Load from the corpus and score. None when there is nothing to score."""
+    """Load from the corpus and score. None when there is nothing to score.
+
+    `holdout_only=True` renders the registry verdict on BOOKPIN1's held-out
+    population (membership from the first-mapping timestamps in
+    data/pmus/mappings-*.jsonl).
+    """
     from gridbot import config
 
     mapentry_pattern = mapentry_pattern or str(
@@ -588,10 +687,15 @@ def run(
     state_pattern = state_pattern or str(
         config.DATA_DIR / "grid" / "series_state-*.jsonl"
     )
+    mapping_pattern = mapping_pattern or str(
+        config.DATA_DIR / "pmus" / "mappings-*.jsonl"
+    )
     rows = load_mapentry_rows(mapentry_pattern)
     if not rows:
         return None
     winners = load_map_winners(state_pattern)
     if not winners:
         return None
-    return evaluate_bar(rows, winners, reading=reading, include_slate=include_slate)
+    return evaluate_bar(rows, winners, reading=reading, include_slate=include_slate,
+                        first_mapping=first_mapping_ts(mapping_pattern),
+                        holdout_only=holdout_only)

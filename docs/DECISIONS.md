@@ -32,24 +32,41 @@ is yours.
 
 - Rail 3: `dry_run=True` until a pre-registered PASS on held-out capture, and
   flipping live is your own act. As of this baseline NO lane has a PASS.
-- Where H-MAPENTRY1 (the only lane that has traded) stands: `p_map` skill ≈ 0
-  when series-clustered and 12–21pt overconfident where we trade (NOTE5);
-  paper edge lives in orders that never fill (NOTE6); among orders that
-  actually rested, 45% filled on 08-27 (shorts 29%) and most unfilled orders
-  sat the full TTL (`scripts/timing_profile.py 20260827`); every short was
-  mispriced on the armed nights (NOTE7, fixed). Thirteen settled trades is
-  0.9% of the ~1,500 needed to separate +2pt from zero.
-- What accrues without you: BOOKPIN1 holdout (40/40 series accrued 09-01,
-  verdicts as maps resolve); the nightly timing chain.
-- Options: (a) keep dry-run accrual and let the BOOKPIN1 holdout speak;
-  (b) pre-register an execution-realistic qualifying instrument for MAPENTRY1
-  (rested-only, depth-limited fills, quote-lifetime-aware, series-clustered
-  PASS/FAIL bars) and let it run on the live dry-run stream; (c) close
-  MAPENTRY1 as a live candidate and put the effort into gridbot-lab.
-- Recommendation: (a) + (b). Nothing goes live without a PASS, and the PASS
-  instrument must model fills or its number is not a number (NOTE8). If you
-  choose (b), the registry row is written BEFORE the instrument runs, and I
-  draft it for your review rather than registering it myself.
+- **09-04 update — the holdout verdict is rendered and it is NOT a falsification.**
+  On the BOOKPIN1 holdout (40 series, 1,084 instances) the model beats the book
+  mid (Brier 0.121 vs 0.149) and is calibrated (ECE 0.054 vs the 0.08 bar);
+  clause (iii) does not bind at 39/60 deduped entries and its reference reading
+  is a negative paper edge (−5.9pt, CI −13.2..+0.3). Registry
+  H-MAPENTRY1-HOLDOUT1; doc `docs/analysis/2026-09-04-venue-pricing-and-holdout.md`.
+  The in-sample FALSIFIED reading (15,314 instances, all three clauses) does not
+  transfer to new series.
+- **09-04 update — no taker latency strategy exists on PMUS** (H-MAPENTRY1-NOTE9):
+  map books are dead (8-tick median spread, 22% one-sided), match books are live
+  (1-tick) but reprice ~1/3 tick per round; taking the stale quote after a round
+  loses at every horizon and leverage bucket. "Move to the best strat" has no
+  taker candidate; the maker side is the only latency use the data leaves open,
+  and it needs a trades tape (authenticated WebSocket `subscribe_trades`).
+- Standing facts: paper edge lives in orders that never fill (NOTE6); among
+  rested orders 45% filled on 08-27 (shorts 29%); every short was mispriced on
+  the armed nights (NOTE7, fixed). Thirteen settled trades is 0.9% of the
+  ~1,500 needed to separate +2pt from zero.
+- What accrues without you: the nightly timing chain; from tonight, covered map
+  ends (recorder fix); BOOKPIN1 is frozen at 40 series and will not power
+  clause (iii) further on its own.
+- Options:
+  (a) pre-register a clause-(iii) holdout extension (series first-mapped after
+      the 40th, appended until ≥60 deduped qualifying entries) so MAPENTRY1 can
+      reach PASS or FAIL on its own bar — I draft the row, you approve it;
+  (b) pre-register the execution-realistic qualifying instrument (rested-only,
+      depth-limited fills, quote-lifetime-aware, series-clustered bars) and run
+      it on the live dry-run stream — the only thing that can turn a paper PASS
+      into an arming case (NOTE8);
+  (c) add a trades tape (WebSocket, read-only, keyring-authenticated) and put
+      the maker-side latency question into the gridbot-lab research layer;
+  (d) close MAPENTRY1 as a live candidate and move on.
+- Recommendation: (a) + (b) now, (c) as the first gridbot-lab research task.
+  Nothing goes live without a PASS on a fill-modelled instrument. Registry rows
+  are drafted for your review, never self-registered.
 
 ## D3 — gridbot-lab research layer: approve the design
 

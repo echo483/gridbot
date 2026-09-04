@@ -52,6 +52,18 @@ rested-only lifetimes, series-clustered bars) — the only kind of number that
 counts after NOTE8; (4) the gridbot-lab research layer (options memo, design
 gate open); (5) NautilusTrader integration after the KG — lessons, not code.
 
+**09-04 02:40Z addendum (after the baseline cut):** the user asked whether
+H-MAPENTRY1 is falsified. Answer: in-sample yes (all three clauses), on the
+pre-registered holdout NO — model beats the book mid and is calibrated; clause
+(iii) under-powered at 39/60 with a negative paper edge (registry
+H-MAPENTRY1-HOLDOUT1; `verdict --holdout` now renders the exact BOOKPIN1
+population). "Best strat" search: no taker latency payload exists on PMUS —
+map books dead (8-tick spreads), match books 1-tick but ~1/3 tick per round
+(H-MAPENTRY1-NOTE9, `scripts/venue_pricing_cut.py`). Tape defect fixed: the
+BBO recorder went blind at every map end; it now covers between maps and 600s
+after a series ends. Decisions D2 rewritten with four options. Doc:
+`docs/analysis/2026-09-04-venue-pricing-and-holdout.md`. Tests 878.
+
 ## What is PROVEN (as of this baseline)
 
 | claim | evidence |

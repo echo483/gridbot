@@ -16,9 +16,13 @@ helpers reused (mappings loader, BBO parser) pull in only the pure
 team-name matchers of ``us_mapping``.
 
 Liveness comes from the capture daemon's own ``series_state`` tape (a file
-tail, never a GRID call): a series is live while ``started and not
-finished``, its live map is ``current_game(state)["sequenceNumber"]``, and a
-series is dropped once finished or silent for `STALE_S`.
+tail, never a GRID call): a series is live while ``started``; its live map is
+``current_game(state)["sequenceNumber"]``, or — between maps and after the
+series finishes — the LAST finished map, so the tape keeps covering the match
+book and the just-decided map book through the moment the information lands
+(the 2026-09-03 tape went blind at every map end: the map-deciding round is
+the one event the timing chain most needs). A finished series stays polled for
+`FINISHED_GRACE_S`, then is dropped; a silent series is dropped after `STALE_S`.
 
 Run: uv run python -m gridbot.capture.pmus_books [--once]
 (``--once`` = one poll cycle then exit; prints the slugs polled and rows written.)
@@ -44,6 +48,7 @@ log = logging.getLogger("gridbot.pmus_books")
 CYCLE_S = 2.0
 MAPPING_RELOAD_S = 60.0
 STALE_S = 900.0
+FINISHED_GRACE_S = 600.0  # keep the match/map books on tape while the venue settles the series
 MAX_SLUGS_PER_CYCLE = 8  # <= 4 req/s; shares the venue's 20 req/s with mapentry + postquote
 HEARTBEAT_S = 30.0
 GATEWAY_TIMEOUT_S = 4.0
@@ -59,10 +64,13 @@ class LiveTracker:
     """Latest ``seriesState`` per series -> the live ``{series_id: map_number}`` set."""
 
     def __init__(self, stale_s: float = STALE_S,
-                 test_ids: frozenset[str] = config.GRID_TEST_SERIES_IDS) -> None:
+                 test_ids: frozenset[str] = config.GRID_TEST_SERIES_IDS,
+                 finished_grace_s: float = FINISHED_GRACE_S) -> None:
         self.stale_s = stale_s
+        self.finished_grace_s = finished_grace_s
         self.test_ids = test_ids
         self._states: dict[str, tuple[dict, float]] = {}
+        self._finished_at: dict[str, float] = {}  # sid -> clock reading of the first finished state
 
     def ingest(self, record: dict, seen: float) -> None:
         """Keep the newest state per series; ``seen`` is the clock reading it arrived at."""
@@ -73,23 +81,44 @@ class LiveTracker:
             return
         state = (record.get("data") or {}).get("seriesState") or {}
         self._states[sid] = (state, seen)
+        if state.get("finished"):
+            self._finished_at.setdefault(sid, seen)  # the grace clock starts at the FIRST finished row
 
     def live_maps(self, now: float) -> dict[str, int]:
         out: dict[str, int] = {}
         for sid, (state, seen) in list(self._states.items()):
-            if state.get("finished") or now - seen > self.stale_s:
-                del self._states[sid]  # finished or silent: never poll it again
+            finished_at = self._finished_at.get(sid)
+            if (finished_at is not None and now - finished_at > self.finished_grace_s) \
+                    or now - seen > self.stale_s:
+                del self._states[sid]  # settled past the grace, or silent: never poll it again
+                self._finished_at.pop(sid, None)
                 continue
             if not state.get("started"):
                 continue
-            game = r.current_game(state)
-            if game is None:
-                continue
-            seq = game.get("sequenceNumber")
+            seq = live_map_number(state)
             if seq is None:
                 continue
-            out[sid] = int(seq)
+            out[sid] = seq
         return out
+
+
+def live_map_number(state: dict) -> int | None:
+    """The map whose books to poll: the live game, else the last finished one.
+
+    Between maps (every started game finished) and after the series finishes,
+    the just-decided map's book and the match book are exactly where the
+    information lands; going blind there is the tape's worst failure mode.
+    """
+    game = r.current_game(state)
+    if game is None:
+        finished = [g for g in state.get("games") or []
+                    if g.get("started") and g.get("finished")
+                    and g.get("sequenceNumber") is not None]
+        if not finished:
+            return None
+        game = max(finished, key=lambda g: int(g["sequenceNumber"]))
+    seq = game.get("sequenceNumber")
+    return None if seq is None else int(seq)
 
 
 # --- slug selection ----------------------------------------------------------

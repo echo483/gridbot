@@ -101,12 +101,23 @@ class TestLiveTracker:
         tr.ingest(_ss(live_map=3), seen=0.0)
         assert tr.live_maps(1.0) == {SID: 3}
 
-    def test_finished_series_is_dropped(self):
-        tr = LiveTracker()
+    def test_finished_series_is_polled_through_the_grace_then_dropped(self):
+        tr = LiveTracker(finished_grace_s=600.0)
         tr.ingest(_ss(live_map=3), seen=0.0)
         assert tr.live_maps(1.0) == {SID: 3}
-        tr.ingest(_ss(finished=True, live_map=None), seen=2.0)
-        assert tr.live_maps(3.0) == {}
+        # series over: every game finished -> keep the LAST map's book + match book on tape
+        tr.ingest(_ss(finished=True, live_map=None, games_before=3), seen=2.0)
+        assert tr.live_maps(3.0) == {SID: 3}
+        tr.ingest(_ss(finished=True, live_map=None, games_before=3), seen=300.0)  # re-polled: grace not reset
+        assert tr.live_maps(601.9) == {SID: 3}
+        assert tr.live_maps(602.1) == {}
+        assert tr.live_maps(700.0) == {}  # dropped for good, even if asked again
+
+    def test_finished_series_that_was_never_seen_live_still_gets_the_grace(self):
+        tr = LiveTracker(finished_grace_s=600.0)
+        tr.ingest(_ss(finished=True, live_map=None, games_before=2), seen=10.0)
+        assert tr.live_maps(11.0) == {SID: 2}
+        assert tr.live_maps(611.0) == {}
 
     def test_not_started_series_is_not_live_until_it_starts(self):
         tr = LiveTracker()
@@ -127,9 +138,16 @@ class TestLiveTracker:
             tr.ingest(_ss(sid=sid, live_map=1), seen=0.0)
         assert tr.live_maps(1.0) == {}
 
-    def test_no_current_game_means_not_live(self):
+    def test_between_maps_keeps_the_last_finished_map_live(self):
         tr = LiveTracker()
-        tr.ingest(_ss(live_map=None), seen=0.0)  # between maps: every game finished
+        tr.ingest(_ss(live_map=None), seen=0.0)  # between maps: games 1 and 2 finished, 3 not started
+        assert tr.live_maps(1.0) == {SID: 2}
+        tr.ingest(_ss(live_map=3), seen=2.0)  # map 3 starts: the live game wins again
+        assert tr.live_maps(3.0) == {SID: 3}
+
+    def test_started_series_with_no_games_at_all_is_not_live(self):
+        tr = LiveTracker()
+        tr.ingest(_ss(live_map=None, games_before=0), seen=0.0)
         assert tr.live_maps(1.0) == {}
 
     def test_missing_sequence_number_is_skipped(self):
@@ -362,13 +380,19 @@ class TestRecorderCycle:
         assert len(w.rows) == 1 and (w.rows[0]["bid"], w.rows[0]["ask"]) == (None, None)
         rec.close()
 
-    def test_finished_series_is_not_polled(self, tmp_path):
+    def test_finished_series_is_polled_on_its_last_map_until_the_grace_ends(self, tmp_path):
         client = FakeClient()
-        rec, w = _recorder(tmp_path, client, FakeClock(0.0),
+        clock = FakeClock(0.0)
+        rec, w = _recorder(tmp_path, client, clock,
                            [_ss(live_map=2), _ss(req_ns=REQ_NS + 1, finished=True, live_map=None)],
                            [_mapping()])
         summary = rec.cycle()
-        assert summary["live"] == {} and summary["polled"] == [] and w.rows == []
+        assert summary["live"] == {SID: 2}
+        assert summary["polled"] == [_map_slug(2), MATCH_SLUG]
+        assert [row["map_number"] for row in w.rows] == [2, 2]
+        clock.t = 601.0  # past FINISHED_GRACE_S: dropped, nothing polled
+        summary = rec.cycle()
+        assert summary["live"] == {} and summary["polled"] == []
         rec.close()
 
     def test_cap_round_robins_across_cycles(self, tmp_path):
