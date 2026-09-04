@@ -37,6 +37,7 @@ class Obs:
     t_ns: int
     opp_ask: float | None
     opp_size: float | None
+    own_bid: float | None = None  # best bid on OUR leg (level-consumption channel); None = unknown
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,8 @@ class FillRule:
 
     touch: str  # "strict" -> opp_ask < P ; "at" -> opp_ask <= P
     persist: bool  # True -> the NEXT observation in the window must also touch
-    queue: str  # "behind_displayed" -> sized out from behind the queue ; "front"
+    queue: str  # "behind_displayed" -> sized out from behind the queue ; "front" ; "unsized"
+    consumption: bool = False  # EXEC1-AMEND1: credit a fill when OUR level is consumed (own_bid < P)
 
 
 LOWER = FillRule(touch="strict", persist=True, queue="behind_displayed")
@@ -56,6 +58,15 @@ UPPER = FillRule(touch="at", persist=False, queue="front")
 # when the confirming observation has no size (a sized observation behaves like
 # ``behind_displayed`` with the queue at the first observation).
 LOWER_UNSIZED = FillRule(touch="strict", persist=True, queue="unsized")
+# EXEC1-AMEND1 (2026-09-04): the level-consumption channel. A maker fill on these
+# books mostly comes from a taker hitting OUR resting bid, which never moves the
+# opposing quote; on the 28 rested real orders the touch channel saw 2-3 of 13
+# fills, consumption saw 7 with zero false positives. A consumption fill needs
+# the FIRST in-window observation to show us at the top (own_bid >= P) and a
+# later one with own_bid < P (persist: two consecutive). Quantity: 1 contract
+# (our consumed size is not observable). Touch fills still apply.
+LOWER_CONSUMPTION = FillRule(touch="strict", persist=True, queue="unsized", consumption=True)
+UPPER_CONSUMPTION = FillRule(touch="at", persist=False, queue="front", consumption=True)
 
 
 @dataclass(frozen=True)
@@ -78,6 +89,31 @@ def _touches(rule: FillRule, P: float, opp_ask: float | None) -> bool:
     return opp_ask <= P
 
 
+def _consumption_fill(rule: FillRule, P: float, qty: float, window: list[Obs]) -> Fill | None:
+    """Level-consumption channel (EXEC1-AMEND1): our resting level vanished below P.
+
+    Walk the window: own_bid > P means someone sits ABOVE us and our level is
+    invisible from then on (undetectable); own_bid < P means our level is gone —
+    we never cancel inside the TTL, so it was consumed (a fill at that
+    observation; LOWER needs the next observation to agree); own_bid == P means
+    we are still resting. Returns None when the channel cannot decide.
+    """
+    eps = 1e-9
+    for i, o in enumerate(window):
+        if o.own_bid is None:
+            continue
+        if o.own_bid > P + eps:
+            return Fill(False, None, 0.0, None, "undetectable")
+        if o.own_bid < P - eps:
+            if rule.persist:
+                nxt = window[i + 1] if i + 1 < len(window) else None
+                if nxt is None or nxt.own_bid is None or nxt.own_bid >= P - eps:
+                    return None
+                return Fill(True, nxt.t_ns, float(min(qty, 1.0)), i, "consumed")
+            return Fill(True, o.t_ns, float(min(qty, 1.0)), i, "consumed")
+    return None
+
+
 def simulate(
     rule: FillRule,
     P: float,
@@ -97,13 +133,18 @@ def simulate(
 
     first = next((i for i, o in enumerate(window) if _touches(rule, P, o.opp_ask)), None)
     if first is None:
+        if rule.consumption:
+            consumed = _consumption_fill(rule, P, qty, window)
+            if consumed is not None:
+                return consumed  # a fill, or "undetectable" (someone above us)
         return Fill(False, None, 0.0, None, "no_touch")
 
     if rule.persist:
         conf = first + 1
-        if conf >= len(window):
-            return Fill(False, None, 0.0, first, "no_persist")
-        if not _touches(rule, P, window[conf].opp_ask):
+        if conf >= len(window) or not _touches(rule, P, window[conf].opp_ask):
+            consumed = _consumption_fill(rule, P, qty, window) if rule.consumption else None
+            if consumed is not None and consumed.filled:
+                return consumed
             return Fill(False, None, 0.0, first, "no_persist")
     else:
         conf = first

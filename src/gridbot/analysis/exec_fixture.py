@@ -114,7 +114,8 @@ def fixture_orders(intents, mapentry_rows, settle_docs):
     an order whose venue state is None is excluded from ``actual`` and counted
     ``unknown_state``.
 
-    Returns ``(orders, actual, counts)`` with counts = {placed, joined, unjoined,
+    Returns ``(orders, actual, counts)`` — ``actual`` keyed by (series_id, map_number,
+    us_side, t0_ns) so re-entered orders stay distinct — with counts = {placed, joined, unjoined,
     unknown_state, rejected, rested, filled}.
     """
     states = venue_states(intents, settle_docs)
@@ -176,7 +177,7 @@ def fixture_orders(intents, mapentry_rows, settle_docs):
         if filled:
             counts["filled"] += 1
 
-        actual[(order.series_id, order.map_number, order.us_side)] = Actual(
+        actual[(order.series_id, order.map_number, order.us_side, order.t0_ns)] = Actual(
             rested=rested,
             filled=filled,
             t_fill_ns=fill_ts,

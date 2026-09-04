@@ -209,3 +209,34 @@ def test_lower_unsized_credits_one_contract_when_sizes_are_missing():
     assert simulate(LOWER_UNSIZED, 0.52, 25.0, t0, sized_obs).qty == 3.0
     # no touch is still no fill
     assert not simulate(LOWER_UNSIZED, 0.52, 25.0, t0, [Obs(t0 + 10 * 10**9, 0.55, None)]).filled
+
+
+def test_consumption_channel_credits_one_contract_when_our_level_vanishes():
+    """EXEC1-AMEND1: a taker hitting OUR resting bid never moves the opposing quote.
+    UPPER: one later observation with own_bid < P; LOWER: two consecutive; the first
+    in-window observation must show us at the top (own_bid >= P) or it is undetectable."""
+    from gridbot.analysis.exec_fills import LOWER_CONSUMPTION, UPPER_CONSUMPTION, Obs, simulate
+    t0 = 1_000_000_000_000
+    S = 10**9
+    # at the top at +30s, consumed by +60s, still gone at +120s; opposing ask never touches
+    obs = [Obs(t0 + 30 * S, 0.62, None, own_bid=0.60), Obs(t0 + 60 * S, 0.62, None, own_bid=0.51),
+           Obs(t0 + 120 * S, 0.62, None, own_bid=0.49)]
+    up = simulate(UPPER_CONSUMPTION, 0.60, 25.0, t0, obs)
+    assert up.filled and up.reason == "consumed" and up.qty == 1.0 and up.t_fill_ns == t0 + 60 * S
+    lo = simulate(LOWER_CONSUMPTION, 0.60, 25.0, t0, obs)
+    assert lo.filled and lo.reason == "consumed" and lo.t_fill_ns == t0 + 120 * S
+    # single dip then back: upper fills, lower (two consecutive) does not
+    flick = [Obs(t0 + 30 * S, 0.62, None, own_bid=0.60), Obs(t0 + 60 * S, 0.62, None, own_bid=0.51),
+             Obs(t0 + 120 * S, 0.62, None, own_bid=0.60)]
+    assert simulate(UPPER_CONSUMPTION, 0.60, 25.0, t0, flick).filled
+    assert not simulate(LOWER_CONSUMPTION, 0.60, 25.0, t0, flick).filled
+    # someone sat above us at the first look: undetectable, no fill either bound
+    above = [Obs(t0 + 30 * S, 0.35, None, own_bid=0.30), Obs(t0 + 60 * S, 0.34, None, own_bid=0.27)]
+    assert not simulate(UPPER_CONSUMPTION, 0.28, 25.0, t0, above).filled
+    assert not simulate(LOWER_CONSUMPTION, 0.28, 25.0, t0, above).filled
+    # own_bid unknown (legacy Obs without the field) -> channel inert, touch path unchanged
+    legacy = [Obs(t0 + 30 * S, 0.62, None), Obs(t0 + 60 * S, 0.62, None)]
+    assert not simulate(UPPER_CONSUMPTION, 0.60, 25.0, t0, legacy).filled
+    # a touch still fills first
+    touch = [Obs(t0 + 30 * S, 0.59, None, own_bid=0.60)]
+    assert simulate(UPPER_CONSUMPTION, 0.60, 25.0, t0, touch).reason == "filled"

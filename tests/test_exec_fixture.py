@@ -37,6 +37,13 @@ def intent(**over):
     return base
 
 
+def _a(actual, sid):
+    """The Actual for the (single) order of series ``sid``; keys are (sid, map, side, t0_ns)."""
+    hits = [v for k, v in actual.items() if k[0] == sid]
+    assert len(hits) <= 1
+    return hits[0] if hits else None
+
+
 def mrow(**over):
     """A real-shaped mapentry row (uses the exec_population field set + book)."""
     base = {
@@ -157,19 +164,20 @@ def test_t3_states_and_fill_semantics():
     orders, actual, counts = ef.fixture_orders(ints, rows, [d])
 
     assert len(orders) == 4
-    a1 = actual[("S1", 2, "long")]
+    a1 = _a(actual, "S1")
     assert a1.rested is False and a1.filled is False and a1.state == "ORDER_STATE_REJECTED"
-    a2 = actual[("S2", 2, "long")]
+    a2 = _a(actual, "S2")
     assert a2.rested is True and a2.filled is False and a2.t_fill_ns is None
-    a3 = actual[("S3", 2, "long")]  # fill row -> filled with its ts_ns
+    a3 = _a(actual, "S3")  # fill row -> filled with its ts_ns
     assert a3.rested is True and a3.filled is True and a3.t_fill_ns == 781_795_744
-    a4 = actual[("S4", 2, "long")]  # FILLED state, no fill row -> t_fill_ns None
+    a4 = _a(actual, "S4")  # FILLED state, no fill row -> t_fill_ns None
     assert a4.rested is True and a4.filled is True and a4.t_fill_ns is None
 
     assert counts["rejected"] == 1 and counts["rested"] == 3 and counts["filled"] == 2
 
     # actual_dicts drops the order_id/state and keeps the runner's input shape.
-    assert ef.actual_dicts(actual) == {
+    # keys are (series, map, side, t0_ns); compare on the first three parts here
+    assert {k[:3]: v for k, v in ef.actual_dicts(actual).items()} == {
         ("S1", 2, "long"): {"rested": False, "filled": False, "t_fill_ns": None, "one_sided": False},
         ("S2", 2, "long"): {"rested": True, "filled": False, "t_fill_ns": None, "one_sided": False},
         ("S3", 2, "long"): {"rested": True, "filled": True, "t_fill_ns": 781_795_744, "one_sided": False},
@@ -184,7 +192,7 @@ def test_t4_unknown_state_excluded_from_actual():
     i1 = intent(series_id="S1", order_id="O1")
     orders, actual, counts = ef.fixture_orders([i1], [mrow(series_id="S1")], [])
     assert len(orders) == 1
-    assert ("S1", 2, "long") not in actual
+    assert _a(actual, "S1") is None
     assert counts["unknown_state"] == 1
 
 # --- T5: join uses all five keys; unjoined intents are counted.
@@ -233,8 +241,8 @@ def test_t6_one_sided_and_topsize():
     )
     orders, actual, _ = ef.fixture_orders(ints, rows, [d])
 
-    assert actual[("S1", 2, "long")].one_sided is False
-    assert actual[("S2", 2, "long")].one_sided is True  # ask None
+    assert _a(actual, "S1").one_sided is False
+    assert _a(actual, "S2").one_sided is True  # ask None
     top = {o.slug: o.top_size for o in orders}
     assert top == {"sl1": 10, "sl2": 10, "sl3": 7, "sl4": None}  # long/short/None
 

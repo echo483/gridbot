@@ -227,3 +227,17 @@ def test_t7_missing_series_excluded_even_after_holdout():
     out = orders([present, missing], {"S1": HOLD})
     assert len(out) == 1
     assert out[0].series_id == "S1"
+
+def test_our_side_bid_and_observations_carry_own_bid():
+    """EXEC1-AMEND1: every observation carries the best bid on OUR leg."""
+    assert ep.our_side_bid("long", 0.57, 0.60) == 0.57
+    assert ep.our_side_bid("short", 0.57, 0.60) == 0.40   # 1 - yes_ask
+    assert ep.our_side_bid("short", 0.57, None) is None
+    assert ep.our_side_bid("long", 0.0, 0.60) is None
+    o = Order(series_id="S1", map_number=1, us_side="short", slug="s", t0_ns=HOLD,
+              cost=0.40, team="TD", opponent="OMG", p_map=0.5, top_size=None,
+              row=row(series_id="S1", map_number=1, us_side="short", team="TD", ts_ns=HOLD))
+    pq = {HOLD: [{"type": "postquote", "us_side": "short", "bid": 0.57, "ask": 0.60,
+                  "ts_ns": HOLD + 30 * 10**9}]}
+    obs = ep.observations(o, pq, {})
+    assert len(obs) == 1 and obs[0].own_bid == 0.40 and obs[0].opp_ask == 0.43

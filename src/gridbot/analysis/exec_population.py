@@ -158,6 +158,20 @@ def our_side_quote(
     return None, None
 
 
+def our_side_bid(us_side, bid, ask) -> float | None:
+    """Best bid on OUR leg: LONG -> the Yes bid; SHORT -> ``1 - yes_ask`` (4 dp).
+
+    EXEC1-AMEND1's level-consumption channel: after we post at cost ``c`` we are
+    the top of our leg's book (own_bid == c); a later own_bid < c means a taker
+    consumed our level. None when the side is dead/one-sided.
+    """
+    if us_side == "long":
+        return float(bid) if _positive(bid) else None
+    if us_side == "short":
+        return round(1.0 - float(ask), 4) if _positive(ask) else None
+    return None
+
+
 def _positive(v) -> bool:
     return isinstance(v, (int, float)) and v is not None and v > 0.0
 
@@ -179,8 +193,18 @@ def observations(
     t0 = order.t0_ns
     end = t0 + ttl_ns
 
+    # Postquote samples are keyed by the EVALUATION that spawned them
+    # (src_ts_ns == mapentry.ts_ns). A held-out order's t0 IS that evaluation
+    # time; a fixture order's t0 is the later intent time, so look the samples
+    # up by the source row's ts_ns first and fall back to t0 (review 2026-09-04:
+    # keying by t0 alone left all 48 real orders with zero observations).
+    src_key = order.row.get("ts_ns") if isinstance(order.row, dict) else None
+    pq_rows = postquote_by_src.get(src_key, ()) if isinstance(src_key, int) else ()
+    if not pq_rows:
+        pq_rows = postquote_by_src.get(t0, ())
+
     items: list[tuple[int, Obs, bool]] = []  # t_ns, obs, is_tape
-    for pq in postquote_by_src.get(t0, ()):
+    for pq in pq_rows:
         if pq.get("us_side") != order.us_side:
             continue
         t = pq.get("ts_ns")
@@ -193,7 +217,8 @@ def observations(
             pq.get("bid_size"),
             pq.get("ask_size"),
         )
-        items.append((t, Obs(t_ns=t, opp_ask=price, opp_size=size), False))
+        own = our_side_bid(order.us_side, pq.get("bid"), pq.get("ask"))
+        items.append((t, Obs(t_ns=t, opp_ask=price, opp_size=size, own_bid=own), False))
 
     for tape in tape_by_slug.get(order.slug, ()):
         t = tape.get("req_ns")
@@ -206,7 +231,8 @@ def observations(
             tape.get("bid_size"),
             tape.get("ask_size"),
         )
-        items.append((t, Obs(t_ns=t, opp_ask=price, opp_size=size), True))
+        own = our_side_bid(order.us_side, tape.get("bid"), tape.get("ask"))
+        items.append((t, Obs(t_ns=t, opp_ask=price, opp_size=size, own_bid=own), True))
 
     # sort by time; within an equal time the tape row (is_tape True) sorts last
     # and wins the dedupe.
