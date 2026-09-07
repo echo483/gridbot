@@ -102,8 +102,10 @@ async def test_transport_failure_on_one_series_does_not_abort_the_batch(tmp_path
     assert [r["series_id"] for r in errs] == ["bad"]
     assert "ConnectError" in errs[0]["error"]
     assert g.polls == 3
-    assert g.tracked["bad"]["next_poll"] >= t0 + config.SS_IDLE_POLL_S
-    for sid in ("a", "c", "d"):
+    # A single blip retries at LIVE cadence, not a full idle cycle — see
+    # TestTransportErrorBackoff for the measurement behind that.
+    assert g.tracked["bad"]["next_poll"] < t0 + config.SS_IDLE_POLL_S
+    for sid in ("a", "bad", "c", "d"):
         assert g.tracked[sid]["next_poll"] >= t0 + config.SS_LIVE_POLL_S
 
 
@@ -387,3 +389,63 @@ async def test_discovery_seeds_breaker_fields(tmp_path, monkeypatch):
     entry = g.tracked["new1"]
     assert entry["empty_streak"] == 0
     assert entry["ever_valid"] is False
+
+
+# ── transient blips must not cost a live series a full idle cycle ─────────────
+# Measured 2026-09-07 on 47 real transport errors: the outages are INSTANTANEOUS
+# — 15 clusters, p50 span 0.0s, max 12.1s. Every error in a cluster fires in the
+# same concurrent batch and the network is fine again immediately. Backing a live
+# series off to SS_IDLE_POLL_S=60s for that produced 39 gaps >30s clustered at
+# 85-95s (12s cadence + instant failure + 60s backoff), roughly 55 minutes of
+# blindness across 4.4h — almost all self-inflicted rather than the outage.
+async def test_one_transport_blip_retries_at_live_cadence(tmp_path, monkeypatch):
+    g = _capture(tmp_path)
+    g.tracked = {"a": _entry(started=True)}
+
+    async def boom(client, url, query, variables=None, **kw):
+        raise httpx.ConnectError("[Errno -3] Temporary failure in name resolution")
+
+    monkeypatch.setattr(grid_poller, "post", boom)
+    t0 = time.monotonic()
+    await g.poll_due(None)
+    delay = g.tracked["a"]["next_poll"] - t0
+    assert delay < config.SS_IDLE_POLL_S, "one blip cost a full idle cycle"
+    assert delay >= config.SS_LIVE_POLL_S
+    assert g.tracked["a"]["err_streak"] == 1
+
+
+async def test_repeated_transport_errors_still_escalate_to_idle(tmp_path, monkeypatch):
+    """The backoff must survive: a genuinely dead feed is not hammered forever."""
+    g = _capture(tmp_path)
+    g.tracked = {"a": _entry(started=True)}
+
+    async def boom(client, url, query, variables=None, **kw):
+        raise httpx.ConnectError("down")
+
+    monkeypatch.setattr(grid_poller, "post", boom)
+    for _ in range(grid_poller.ERR_BACKOFF_AFTER):
+        g.tracked["a"]["next_poll"] = 0.0
+        await g.poll_due(None)
+    g.tracked["a"]["next_poll"] = 0.0
+    t0 = time.monotonic()
+    await g.poll_due(None)
+    assert g.tracked["a"]["next_poll"] >= t0 + config.SS_IDLE_POLL_S
+
+
+async def test_a_success_resets_the_transport_error_streak(tmp_path, monkeypatch):
+    g = _capture(tmp_path)
+    g.tracked = {"a": _entry(started=True)}
+    state = {"fail": True}
+
+    async def flaky(client, url, query, variables=None, **kw):
+        if state["fail"]:
+            raise httpx.ConnectError("blip")
+        return {"seriesState": {"id": "a", "started": True, "finished": False}}
+
+    monkeypatch.setattr(grid_poller, "post", flaky)
+    await g.poll_due(None)
+    assert g.tracked["a"]["err_streak"] == 1
+    state["fail"] = False
+    g.tracked["a"]["next_poll"] = 0.0
+    await g.poll_due(None)
+    assert g.tracked["a"]["err_streak"] == 0

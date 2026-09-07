@@ -24,6 +24,14 @@ from gridbot.ratelimit import RateLimiter
 log = logging.getLogger(__name__)
 
 STALE_LIVE_S = 180
+# Consecutive transport errors before a LIVE series drops to idle cadence.
+# Measured 2026-09-07 on 47 real errors: the outages are INSTANTANEOUS —
+# 15 clusters, p50 span 0.0s, max 12.1s — so backing a live series off a
+# full 60s for one blip cost ~55min of blindness across 4.4h (39 gaps >30s,
+# clustered at 85-95s = cadence + instant failure + idle backoff). Retry at
+# live cadence first; escalate only when the feed is genuinely down. The
+# per-series rate limiter (6/min) independently bounds retry pressure.
+ERR_BACKOFF_AFTER = 3
 # A series that has NEVER returned a payload is retired after this many consecutive
 # empty (null seriesState) responses — ~6.7h at the idle cadence. Corpus scan of
 # 2026-08-24..09-07: the longest empty run later followed by a VALID payload was
@@ -99,6 +107,7 @@ class GridCapture:
                             "stale_flagged": False,
                             "empty_streak": 0,
                             "ever_valid": False,
+                            "err_streak": 0,
                         },
                     )
                     entry["scheduled"] = node.get("startTimeScheduled")
@@ -192,9 +201,17 @@ class GridCapture:
                     "error": f"{type(exc).__name__}: {exc}"[:400],
                 }
             )
-            st["next_poll"] = time.monotonic() + config.SS_IDLE_POLL_S
+            st["err_streak"] = st.get("err_streak", 0) + 1
+            live = st["started"] and not st["finished"]
+            backoff = (
+                config.SS_LIVE_POLL_S
+                if live and st["err_streak"] < ERR_BACKOFF_AFTER
+                else config.SS_IDLE_POLL_S
+            )
+            st["next_poll"] = time.monotonic() + backoff
             return
         self.polls += 1
+        st["err_streak"] = 0
         state = (data or {}).get("seriesState") or {}
         self.writer.append(
             {

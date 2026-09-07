@@ -476,3 +476,60 @@ as journal lines. Worth a look at the host resolver; it is costing real coverage
 
 `evidence_qa` and `crossvenue-coverage` both `Result=success`. No failed units.
 7 services + 3 timers. `dry_run` untouched, no orders.
+
+---
+
+# ADDENDUM 6 — the host-sleep root cause, found
+
+## 7h26m of tape lost (11:31:55Z → 18:47:41Z), and the reason
+
+Third occurrence: 09-02 (7h48m), 09-05 (13h01m), 09-07 (7h26m) — **28+ hours** of
+irreplaceable capture. Bigger than every code defect fixed overnight, combined.
+
+**Root cause, confirmed:** capture holds a `block`-mode inhibitor on **`sleep`**:
+
+```
+gridbot-capture  ops  systemd-inhibit  sleep  "GRID capture continuity (corpus moat)"  block
+HandleLidSwitch = suspend
+IdleAction      = ignore          <- so idle-suspend was never the mechanism
+```
+
+In `logind`, a **lid-close suspend is gated by the `handle-lid-switch` inhibitor,
+not by `sleep`** — they are separate locks. The unit's own comment says it was
+written to "block IDLE suspend (KDE's 2h AC...)", and `IdleAction=ignore` means
+that path was already dead. So the inhibitor has been working perfectly and
+guarding the wrong door the entire time; every outage was a lid close walking past
+it.
+
+**The fix (one word), for Nick to apply — it has a physical consequence:**
+
+```bash
+sed -i 's/--what=sleep /--what=sleep:handle-lid-switch /' \
+    ~/.config/systemd/user/gridbot-capture.service && \
+systemctl --user daemon-reload && systemctl --user restart gridbot-capture
+```
+
+**Tradeoff:** the laptop then will not suspend on lid close while capture runs. In
+a bag, it keeps running and can overheat. If that is a real scenario, the correct
+fix is the always-on host item open since 08-31.
+
+## Fallout from the resume, contained
+
+On wake every `Persistent=true` timer fired in the same second (11:47:23 PDT) and
+raced a network that was not up — `gridbot-pmus`, `-pmus-map` and `-backup` all
+failed with DNS resolution errors. Self-healing as designed: `pmus` and
+`evidence-qa` were back to `success` on their next fire; `backup` was triggered
+manually and completed (offsite copies uploaded, **6.6 GB memory peak** — worth
+watching as tapes grow); `pmus-map` retries on its 15-minute timer.
+
+Capture itself came back clean: 13 series tracked, 800 intl book assets, tapes
+flowing (113 GRID rows / 163,850 intl book rows per 5 min).
+
+## Landed before the sleep: graduated transport-error backoff
+
+Measured on 47 real transport errors: the DNS outages are **instantaneous**
+(15 clusters, p50 span 0.0s, max 12.1s). But the poller backed a failed live series
+off a full `SS_IDLE_POLL_S`=60s, which produced 39 gaps >30s clustered at 85-95s —
+roughly 55 minutes of blindness across 4.4h, **almost all self-inflicted rather
+than the outage**. Now retries at live cadence and escalates to idle only after
+`ERR_BACKOFF_AFTER`=3 consecutive failures. 1059 tests green.
