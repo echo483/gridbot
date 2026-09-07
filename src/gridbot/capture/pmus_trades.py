@@ -96,7 +96,16 @@ log = logging.getLogger("gridbot.pmus_trades")
 POLL_S = 2.0                 # how often we re-derive the live slug set
 MAPPING_RELOAD_S = 60.0
 HEARTBEAT_ROW_S = 30.0       # "recorder was up, book was quiet" != "recorder was down"
-SILENCE_TIMEOUT_S = 90.0     # no frame at all (heartbeats included) -> recycle
+# No frame at all -> recycle. NOT 90s: measured 2026-09-07 over 687 real prints,
+# the venue sends NO heartbeats on the trade subscription (every stats line
+# reported frames == trades), so this bounds how long a LIVE market can go
+# without a PRINT, not how long a connection can be silent. Observed gaps
+# between consecutive prints on an active slate: p50 0.0s, p90 17.4s, p99 54.9s,
+# max 132.1s. At 90s it fired twice in fifty minutes on healthy sockets, and each
+# recycle drops the subscription — losing prints from the moat to defend against
+# a reader death that has never been observed. On a market genuinely quiet for
+# 15 minutes a recycle is nearly free: there are no prints to miss.
+SILENCE_TIMEOUT_S = 900.0
 BACKOFF_MIN_S = 1.0
 BACKOFF_MAX_S = 60.0
 STATS_LOG_S = 60.0

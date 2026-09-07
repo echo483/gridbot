@@ -513,6 +513,21 @@ class TestReconnect:
         assert ws.connect_calls >= 2
         assert any(r.get("event") == "silent" for r in writer.rows)
 
+    def test_silence_timeout_clears_observed_trade_sparsity(self):
+        """The venue sends NO heartbeats on the trade subscription — measured
+        2026-09-07 over 687 real prints, every stats line reported frames ==
+        trades. So this constant bounds how long a LIVE market can go without a
+        print, not how long a connection can be silent.
+
+        Observed gaps between consecutive prints on an active slate: p50 0.0s,
+        p90 17.4s, p99 54.9s, max 132.1s. The original 90s value was written
+        assuming heartbeats would keep the clock alive and fired twice in fifty
+        minutes on healthy sockets, each recycle dropping the subscription and
+        losing prints. Pinned so a future tightening trips a test rather than
+        silently reintroducing the churn.
+        """
+        assert pt.SILENCE_TIMEOUT_S >= 300.0
+
     def test_an_unsubscribe_ack_is_not_treated_as_schema_drift(self, tmp_path):
         """Observed live 2026-09-07: the venue ACKs an unsubscribe with
         ``{"requestId": ..., "unsubscribed": true}``. That is normal protocol
