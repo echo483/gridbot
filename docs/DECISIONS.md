@@ -1,4 +1,44 @@
-# Decisions pending — baseline 2026-09-04
+# Decisions — updated 2026-09-07
+
+## RESOLVED 2026-09-07 (the list below this section is the 09-04 original)
+
+- **D1 — H-MODELMOMENTUM1: CLOSED.** Never registered; closes under the same
+  reasoning as NOTE8 (the post-shock edge was a dead-book artifact). Its reusable
+  parts — depth-limited fills, the artifact checks — are carried in NOTE8 and the
+  CROSSVENUE1 design.
+- **D2 — what qualifies a strategy to go live: ANSWERED, and it closed the lane.**
+  EXEC1 was built to answer it and failed its own calibration gate
+  (`EXEC1-NOTE3`), which produced the generalizable rule `NOTE10`: *a maker
+  strategy cannot be validated on a BBO tape.* H-MAPENTRY1 closed
+  (`H-MAPENTRY1-CLOSE1`). The rail-3 path for the NEXT lane is therefore: trades
+  tape first, then a fill-modelled instrument whose calibration gate actually
+  passes, then a pre-registered holdout, then the user's own arming act.
+- **D6/D8 — ops: DONE.** `loginctl enable-linger ops` set (nothing survived an
+  unattended reboot before this); dota removed from `GRIDBOT_EXTRA_TITLES`.
+  Watchdogs were considered and REJECTED on evidence — see STATE.md.
+
+## OPEN — needs your call
+
+- **C1 — pre-register `H-CROSSVENUE1`?** Design is written
+  (`docs/superpowers/specs/2026-09-07-crossvenue1-design.md`), holdout boundary
+  stamped `2026-09-07T06:39:27Z`, and intl CS2 data now flows. The registry row is
+  NOT drafted yet because the join must be verified first (§7 of the design: a
+  sign-inverted Yes convention produces a beautiful, entirely fictional signal).
+  Sequence: verify join → draft row → you register → holdout accrues.
+- **C2 — `MAX_ASSETS` and the prop spill.** Cap is 800; winner books are fully
+  covered (488/488) and 312 tokens spill into CS2 props. A hard priority floor
+  would cut the spill but `verdict.py:124` consumes the intl tape, so I left it.
+  Say the word if you want the leaner cut.
+- **C3 — pre-match coverage.** PMUS lists a match a median **4.46h** before
+  scheduled start (p25 1.7h, p75 16.5h) across 50 matches/day, and the recorder
+  only starts at GRID `started` — so we capture none of it. That is where a thin
+  book is most mispriced. Costs book-poll budget; needs your sizing call.
+- **C4 — tape volume.** The intl catalog goes ~6.7 MB/day → 30–250 MB/day with
+  CS2 discovery working. 682 GB free, so a note, not a blocker.
+
+---
+
+# Decisions pending — baseline 2026-09-04 (original)
 
 This is the list the clean baseline hands you. Everything below is either a
 decision only you can make (the rails say so) or a design gate that needs your

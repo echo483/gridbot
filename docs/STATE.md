@@ -27,7 +27,55 @@ an LLM, rail 1), pre-registered hypotheses with frozen falsification bars
 (rail 3), capture continuity as the moat (rail 4). LLMs live in the slow
 loop only: analysis, reviews, reports, hypothesis drafts.
 
-## Baseline 2026-09-04 (start here)
+## Baseline 2026-09-07 (START HERE — supersedes the 09-04 baseline below)
+
+**H-MAPENTRY1 is CLOSED as a live candidate** (registry `H-MAPENTRY1-CLOSE1`).
+Not a falsification — the holdout never falsified it. It closed because there was
+no path to a verdict: clause (iii) stuck at 39/60 in a fully-resolved window,
+EXEC1 failing its own calibration gate (`EXEC1-NOTE3`, UPPER recall 0.4615 vs the
+0.6 bar), and the structural finding that it traded the *map* book while the
+*match* book on the same venue is far more active at far tighter spreads.
+
+**`p_map` is RETIRED as a fair-value estimator.** `gap ≈ 0.9 × discount` in every
+tercile: when the model disagreed with the book, the book was ~90% right. A
+recalibrated `p_cal` therefore converges on "trust the book" and can only ever be
+harm reduction. **`q_round` is NOT retired** — it stays calibrated live (1,984
+resolved instances, Brier 0.1105, skill +0.063, ECE 0.031) and takes a new job:
+not *what is this worth* but *is this repricing informed?*
+
+**New lane: `H-CROSSVENUE1`** — design in
+`docs/superpowers/specs/2026-09-07-crossvenue1-design.md`. Swap the ESTIMATOR
+rather than improve the model: use the deep intl CLOB as fair value, execute on
+the PMUS match book, and use GRID's 13–27s lead to pull/skew before informed flow
+arrives. NOT yet pre-registered; holdout boundary stamped `2026-09-07T06:39:27Z`.
+
+**The capture layer was structurally blind, and is no longer.** Fixed 09-07:
+
+| defect | consequence | state |
+|---|---|---|
+| `pm_discovery` swept an unfiltered event list against gamma's ~2000 offset ceiling | **ZERO CS2 match markets ever captured on intl** — every CS2 row in the whole tape history was one season-long future | fixed (tag-scoped); 83 CS2 events, 27,330 winner-book price changes in the first 10 min |
+| prop books displaced winner books under `MAX_ASSETS` | 80% of CS2 tokens were Games Total / Map Handicap / Odd-Even props; finished matches (one from 2026-03-10) held subscriptions via still-open props | fixed (winner-first cut); 488/488 winner tokens, 82/82 events |
+| `poll_due` caught only `GraphQLError` | one series' DNS failure aborted the whole batch — the day's three worst gaps (216s/213s/209s, simultaneous) | fixed |
+| `poll_due` was sequential | last of a 20-series batch waited ~5s before its request was sent | fixed (`asyncio.gather`) |
+| `_prune` + `setdefault` reset `last_hash` | **the stale alarm and the 6h frozen-prune silently disarmed themselves**; a stuck series polled forever | fixed (bounded tombstone) |
+| no alarm read row CONTENT | a 13× collapse passed with `ok:true` everywhere | `scripts/evidence_qa.py` |
+| `Linger=no` | **no unit survived an unattended reboot** — the cause of the multi-hour "outages" | `enable-linger` set by the user |
+
+**Corrections to the prior record (do not re-inherit these):**
+- The "PMUS venue book activity collapsed 78.0 → 2.7 → 23.6, venue-side"
+  conclusion in `docs/learnings/2026-09-06.md` is **wrong**. `gridbot-pmus-books`
+  did not start until 17:58:48Z on 09-05; that tape spans **6.0h** against 23.7h
+  on 09-06. A six-hour day was compared against full days. The map-vs-match
+  comparison is unaffected.
+- Wasted GRID polls were **not** a latency cost. The 180/min global bucket peaks
+  at 60/min (33%); the bottleneck was code serialization, not budget.
+- **Do NOT add `WatchdogSec=`** to any unit. All are `Type=simple` with
+  `NotifyAccess=none` and nothing implements `sd_notify`, so a watchdog would kill
+  capture on a timer. Evidence-flow monitoring is the watchdog instead.
+
+Tests 994 green; `ruff check .` green.
+
+## Baseline 2026-09-04 (superseded — kept for lineage)
 
 Clean baseline, cut the morning after the 09-03 overnight loop: main is
 pushed and the tree is empty; 872 hermetic tests pass; `uv run ruff check .`
