@@ -1,0 +1,24 @@
+# gridbot evidence-flow QA — oneshot, fired by gridbot-evidence-qa.timer.
+#
+# WHY THIS EXISTS: on 2026-09-05/06 the venue's book-change rate collapsed and
+# every alarm stayed green — health reported {"ok":true,"problems":[]}, all
+# units active, NRestarts=0, error rate 0.1%. Every other check in this repo
+# reads PROCESS LIVENESS or directory mtime; none reads row CONTENT. Worse,
+# data/pmus/books-*.jsonl can never go mtime-stale during a freeze, because the
+# recorder writes a heartbeat every HEARTBEAT_S per slug regardless.
+#
+# Exit 1 when a check flags is the INTENDED loud failure (systemctl shows the
+# unit failed, and the journal carries the table) — never a green empty summary.
+#
+# NOTE: systemd WatchdogSec= is NOT an alternative to this. Every gridbot unit
+# is Type=simple with NotifyAccess=none and nothing implements sd_notify, so a
+# watchdog would kill capture on a timer. Evidence flow is the watchdog.
+[Unit]
+Description=gridbot evidence-flow QA (row-content checks; analysis only, no trade path)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ops/gridbot
+ExecStart=/home/ops/.local/bin/uv run python scripts/evidence_qa.py
+NoNewPrivileges=true
+PrivateTmp=true

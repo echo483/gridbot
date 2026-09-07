@@ -229,6 +229,27 @@ class TestCheck1:
         day = eq.books_day(tmp_path / "books-20260904.jsonl")
         assert day["span_s"] is None
 
+    def test_a_historical_flag_does_not_keep_the_exit_code_red_forever(self):
+        """`flagged` drives the systemd exit code, so it must reflect only
+        RECENT days. 2026-09-05 is a real past incident that sits in the window
+        permanently; if it kept the unit red, the alarm would be ignored within a
+        week and would be worse than no alarm. The table still shows history —
+        only the exit code is scoped.
+        """
+        old = {"day": "20260101", "flag": True, "verdict": "capture_broke"}
+        recent = {"day": "20260110", "flag": False, "verdict": "ok"}
+        assert eq.flagged_recently([old, recent], [], [], today="20260110") is False
+
+    def test_a_recent_flag_does_turn_the_exit_code_red(self):
+        old = {"day": "20260101", "flag": False, "verdict": "ok"}
+        recent = {"day": "20260110", "flag": True, "verdict": "venue_quiet"}
+        assert eq.flagged_recently([old, recent], [], [], today="20260110") is True
+
+    def test_recent_window_covers_yesterday_not_just_today(self):
+        """A collapse that starts overnight must not wait a day to alarm."""
+        y = {"day": "20260109", "flag": True, "verdict": "venue_quiet"}
+        assert eq.flagged_recently([y], [], [], today="20260110") is True
+
     def test_no_slate_day_never_flags(self):
         days = [
             {"day": "a", "ratio": 60.0, "slate": 50, "hb_per_slug": 90.0, "per_kind": {}},

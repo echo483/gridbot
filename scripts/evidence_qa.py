@@ -18,7 +18,11 @@ that must never be conflated:
                       collapse.
 
 Run: uv run python scripts/evidence_qa.py [--json]
-Exit: 0 when all checks pass, 1 when any check flags.
+Exit: 0 when all checks pass, 1 when a check flags within the RECENT window
+(today or yesterday). The exit code drives the systemd unit's state, so it is
+deliberately NOT 'did anything ever flag' — 2026-09-05 is a real past incident
+that sits in the tape permanently, and a unit red forever gets ignored within a
+week. The printed table still shows the full history; see flagged_recently().
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ import argparse
 import json
 import statistics
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from gridbot import config
@@ -290,7 +295,13 @@ def build_report(books_days: list[dict], postquote_days: list[dict],
                 "days": reported["gate_passing"],
             },
         },
-        "flagged": (
+        # Scoped to recent days on purpose — see flagged_recently().
+        "flagged": flagged_recently(
+            reported["venue_book_change"],
+            reported["postquote_degeneracy"],
+            reported["gate_passing"],
+        ),
+        "flagged_any_day": (
             any(d["flag"] for d in reported["venue_book_change"])
             or any(d["flag"] for d in reported["postquote_degeneracy"])
             or any(d["flag"] for d in reported["gate_passing"])
@@ -341,6 +352,29 @@ def _fmt_human(report: dict) -> str:
     lines.append("RESULT: " + ("FLAGGED (exit 1)" if report["flagged"]
                                else "all checks pass (exit 0)"))
     return "\n".join(lines)
+
+
+RECENT_DAYS = 2  # today + yesterday: an overnight collapse must not wait a day
+
+
+def flagged_recently(*day_lists, today: str | None = None) -> bool:
+    """Whether any check flags within the RECENT window.
+
+    This drives the process exit code, and therefore whether systemd shows the
+    unit failed. It is deliberately NOT "did anything ever flag": 2026-09-05 is a
+    real past incident that sits in the window permanently, and a unit that is
+    red forever gets ignored within a week — worse than no alarm at all. The
+    printed table still carries the full history for context; only the exit code
+    is scoped. ``flagged_any_day`` in the report keeps the unscoped answer.
+    """
+    if today is None:
+        today = datetime.now(UTC).strftime("%Y%m%d")
+    cutoff = (datetime.strptime(today, "%Y%m%d").replace(tzinfo=UTC)
+              - timedelta(days=RECENT_DAYS - 1)).strftime("%Y%m%d")
+    return any(
+        d.get("flag") and str(d.get("day", "")) >= cutoff
+        for days in day_lists for d in days
+    )
 
 
 def main() -> None:
