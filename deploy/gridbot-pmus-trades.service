@@ -1,0 +1,61 @@
+# gridbot PMUS trades tape.
+#
+# INSTALLED 2026-09-07 with the repo owner's explicit approval ("yeah its fine
+# for the ed25519 creds just make sure necessary guardrails are there").
+# This unit authenticates with the Ed25519 key pair that can place real orders,
+# so it was installed only after the isolation was verified three independent
+# ways: the import graph loads no order-capable module (whole venue SDK stays
+# unloaded until connect; the only executor modules reachable are the
+# docstring-only package __init__ and us_mapping, a pure name matcher importing
+# just gridbot.config), the websocket object is screened for any order surface
+# at connect, and a live 45s read-only smoke run connected and exited 0.
+# To reverse: systemctl --user disable --now gridbot-pmus-trades.
+#
+# WHY THIS EXISTS: registry H-MAPENTRY1-NOTE10 — a maker strategy cannot be
+# validated on a best-bid/best-ask tape (a BBO tape cannot separate a sale
+# through our resting level from a cancel of it, and never sees queue
+# position; EXEC1 fill-detection recall capped at 0.46 against a 0.60 bar).
+# Every future resting-entry strategy needs actual prints. This records them
+# to data/pmus/trades-YYYYMMDD.jsonl.
+#
+# READ-ONLY: subscribes to SUBSCRIPTION_TYPE_TRADE market data and appends
+# frames verbatim. It places NO orders, never arms, makes no edge/ROI claim.
+# The process is structurally incapable of trading — the websocket object is
+# screened for any order|place|cancel|submit|buy|sell attribute at connect and
+# refuses to run on a hit, and the module imports neither gridbot.executor's
+# wire layer nor polymarket_us' order-capable REST client
+# (tests/test_pmus_trades.py enforces both on every suite run).
+#
+# KEYRING ANCHOR: unlike gridbot-pmus-books (public gateway, no keys), this
+# recorder REQUIRES credentials — BaseWebSocket.connect calls
+# create_auth_headers unconditionally, even for market data. So it anchors to
+# graphical-session.target exactly like gridbot-capture: with linger enabled a
+# default.target anchor would start at boot, find the keyring locked, and
+# retry-loop forever. Do not "simplify" this to default.target.
+
+[Unit]
+Description=gridbot PMUS trades tape (READ-ONLY trade prints; no trading surface)
+Documentation=file:///home/ops/gridbot/SECURITY.md
+After=network-online.target graphical-session.target
+Wants=network-online.target
+PartOf=graphical-session.target
+# Requisite: a direct start outside the graphical session FAILS FAST rather
+# than running against a locked keyring.
+Requisite=graphical-session.target
+StartLimitIntervalSec=600
+StartLimitBurst=20
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ops/gridbot
+# Non-secret runtime knobs only. NEVER put a secret here — secrets live in the
+# OS keyring (service `gridbot`) and are read only via gridbot.config.require.
+EnvironmentFile=-/home/ops/gridbot/deploy/capture.env
+ExecStart=/home/ops/.local/bin/uv run python -m gridbot.capture.pmus_trades
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=graphical-session.target

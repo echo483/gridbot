@@ -8,7 +8,7 @@ docs/analysis — read them, rerun them, never rewrite them), and **OPS**
 (keeping the machine alive). Orientation order stays: CLAUDE.md → STATE.md →
 registry → LIVE_FIRE.md; this file is the floor plan.
 
-## src/gridbot — the system (49 files)
+## src/gridbot — the system (56 files)
 
 | package | tier | what it is |
 |---|---|---|
@@ -18,7 +18,7 @@ registry → LIVE_FIRE.md; this file is the floor plan.
 | instruments/ | STRATEGY | detectors, mapentry recorder + verdicts, postquote sampler, shadow lanes. Each armable lane pairs with a frozen registry row. |
 | model/ | STRATEGY | roundwin training/dataset (LightGBM q). Frozen mapwin-race-v1 aggregation lives with the instruments. |
 | sizing/ | WIRING | kelly + params (quarter-Kelly caps). |
-| analysis/ | OPS | slow-loop Claude analyst (daily, managed) — LLM territory, never trade path (rail 1). |
+| analysis/ | OPS | slow-loop Claude analyst (daily, managed) — LLM territory, never trade path (rail 1). Also the offline quant instruments: `exec_*` (the EXEC1 replay machinery, retained after H-MAPENTRY1-CLOSE1 as reusable execution modelling) and `crossvenue_join.py` (H-CROSSVENUE1 plumbing — resolves intl↔PMUS markets AND their Yes-side orientation; computes no basis or edge). |
 | config.py / redaction.py / ratelimit.py / graphql.py | WIRING | keyring-only secrets (5s-timeout reads + last-good cache), log redaction, GRID rate budget, GQL client. |
 
 ## scripts/ (47 files) — by tier
@@ -30,9 +30,19 @@ instrument), replay_harness.py (real capture through the real Engine —
 the verification gauntlet's core), setup_secrets.py, grid_probe.py.
 
 **OPS (live units/crons point here):** health_check.py + keyring_watch.py
-(5-min watchdog), capture_qa.py (hermes cron), backup_raw.py, pmus_map_run.py,
-pmus_watch.py, eod_report.py, morning_report.py, settle_truth.py,
-check_no_secrets.py (pre-commit hook), setup_managed_agent.py.
+(5-min watchdog), capture_qa.py (**cron wiring is STALE — the wrapper
+`~/.hermes/scripts/gridbot-capture-qa.sh` exists but no job in
+`~/.hermes/cron/jobs.json` invokes it; audit 2026-09-07**), backup_raw.py
+(gzips finished day files OFFSITE; does NOT compress or prune locally — see the
+disk item in the 09-07 sitrep), pmus_map_run.py, pmus_watch.py, eod_report.py,
+morning_report.py, settle_truth.py, check_no_secrets.py (pre-commit hook),
+setup_managed_agent.py.
+**evidence_qa.py** (added 09-07) is the EVIDENCE-FLOW watchdog: every other
+alarm here checks process liveness or directory mtime, none reads row content,
+which is how a 13× venue collapse passed with `ok:true` everywhere. It is **not
+yet wired to a timer** — see the sitrep. Note systemd `WatchdogSec=` must NOT be
+used as an alternative: all units are `Type=simple`/`NotifyAccess=none` with no
+`sd_notify`, so a watchdog would kill capture on a timer.
 **Armed-night operator tools (manual):** watch_night.py (status panel),
 night_alerts.py (Telegram alerter), live_fire_test.py (first-fire plumbing
 check — LIVE_FIRE.md).
