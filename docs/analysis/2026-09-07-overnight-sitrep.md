@@ -1,8 +1,11 @@
 # SITREP — overnight 2026-09-06/07
 
-For Nick, on waking. Branch `capture/latency-and-evidence-flow`, **4 commits, not
-pushed** (your call). Tests **1005 green**, `ruff check .` green, all six units
-active, `dry_run` untouched, no orders, no live exposure.
+For Nick, on waking. Branch `capture/latency-and-evidence-flow`, **13 commits, not
+pushed** (your call). Tests **1053 green**, `ruff check .` green, **8 services + 3
+timers** active, `dry_run` untouched, no orders, no live exposure.
+
+Read this section, then **ACTION ITEMS**; the two addenda at the end cover the
+later work (trades tape, quality pass, join-coverage report).
 
 ---
 
@@ -150,7 +153,7 @@ deliberate pass, not an unattended 1am one. **Your call on approach.**
 
 ### A2 — Push the branch
 
-4 commits on `capture/latency-and-evidence-flow`. I don't push without you.
+13 commits on `capture/latency-and-evidence-flow`. I don't push without you.
 
 ### A3 — Pre-register H-CROSSVENUE1 (decision C1)
 
