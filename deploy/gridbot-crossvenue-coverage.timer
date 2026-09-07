@@ -1,0 +1,9 @@
+[Unit]
+Description=Run gridbot intl-PMUS join coverage daily at 09:15 local
+
+[Timer]
+OnCalendar=*-*-* 09:15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

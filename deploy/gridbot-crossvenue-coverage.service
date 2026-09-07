@@ -1,0 +1,20 @@
+# gridbot intl<->PMUS join coverage — oneshot, fired daily by its timer.
+#
+# WHY: H-CROSSVENUE1's join is the lane's go/no-go, and a join that DEGRADES
+# looks exactly like "no opportunities" unless coverage is tracked over time.
+# This writes the daily breakdown (joined, by kind, by orientation, and the
+# refusal reasons) to the journal so the series exists when the hypothesis is
+# registered.
+#
+# SCOPE: coverage ONLY — no basis, lead, edge or PnL. The hypothesis is not
+# pre-registered and measuring before the freeze (2026-09-07T06:39:27Z) would
+# burn the holdout. Analysis lane, read-only, no trade path, no keys.
+[Unit]
+Description=gridbot intl-PMUS join coverage (analysis only; no trade path)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ops/gridbot
+ExecStart=/home/ops/.local/bin/uv run python scripts/crossvenue_coverage.py
+NoNewPrivileges=true
+PrivateTmp=true
