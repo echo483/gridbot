@@ -138,9 +138,18 @@ Two audit recommendations were rejected on evidence:
 
 ### A1 — Disk. 29-day fuse. *(highest priority)*
 
-The intl tape now grows at **~23 GiB/day** (was 0.5–1.1). 681 GB free ⇒ **~29
-days**. The volume is legitimate — **73% of it is CS2 winner markets**, exactly
-what the strategy needs — so the fix is retention, not capturing less.
+**ESCALATED — re-measured three times as the slate filled:**
+
+| slate | rate | headroom |
+|---|---|---|
+| quiet (0 live series) | 23.1 GiB/day | 29 days |
+| 2 live series | 27.3 GiB/day | 25 days |
+| **3 live series + fuller intl** | **36.4 GiB/day** | **19 days** |
+
+Historic baseline was 0.5–1.1 GiB/day. A peak evening slate has run **18** series,
+so the rate will go higher again — 19 days is an upper bound, not a floor. The
+volume is legitimate — **73% of it is CS2 winner markets**, exactly what the
+strategy needs — so the fix is retention, not capturing less.
 
 `scripts/backup_raw.py` already gzips finished day files offsite but **never
 compresses or prunes locally**, and this data gzips **10.0×**. Compressing
@@ -373,3 +382,59 @@ nights. ACKs now classify as `pmus_trades_ack`; the canary keeps its teeth
 **27.3 GiB/day** (quiet-slate estimate was 23.1), 680 GiB free ⇒ **~25 days**.
 Measured with only **2** live series, so a busy evening slate will be worse. Still
 the top action item, still wants your call on approach.
+
+---
+
+# ADDENDUM 4 — 09:20Z check, with a correction
+
+## Trades tape: accruing cleanly
+
+**688 prints** (84 → 688 in an hour), 4 slugs, **zero error rows**, 19 trades/min
+at peak. ACK classification confirmed working live (`pmus_trades_ack: 4`; the lone
+`unknown` is the pre-fix one).
+
+## Fixed: the silence watchdog was measuring the wrong thing
+
+Reading the live tape showed **2 recycles in 50 minutes on healthy sockets**.
+Cause: `SILENCE_TIMEOUT_S = 90` was written assuming "no frame at all (heartbeats
+included)" — but measured over 687 prints, **the venue sends no heartbeats on this
+subscription** (frames == trades in every stats line). So it was bounding *trade
+sparsity*, not connection health. Print gaps run p50 0.0s / p90 17.4s / p99 54.9s
+/ **max 132.1s**, and exactly 2 exceeded 90s — matching the 2 recycles precisely.
+
+Each recycle re-authenticates and drops the subscription, **losing prints from the
+moat** to defend against a reader death never once observed. Now 900s, pinned by a
+test carrying the measurement.
+
+## CORRECTION — my "zero gaps >30s" was a small-sample artifact
+
+I reported the GRID poller at *max 15.40s, zero gaps >30s*. That was **40 samples
+on a quiet window**. On **576 samples across 4 live series**:
+
+```
+p50 13.27s   p90 13.98s   p99 24.02s   max 135.59s   gaps>30s: 5
+```
+
+Those 5 gaps are **simultaneous across series** and coincide with 16
+`ConnectError: Temporary failure in name resolution` + 6 `ConnectTimeout` — a
+genuine **host DNS outage**, which no poller change can eliminate.
+
+**The fix is still verified working, by a better measure than gap length:**
+
+```
+2026-09-06:           55 "grid poll failed" journal lines  (batch aborts, invisible in the tape)
+2026-09-07 post-fix:   0 journal aborts  →  16 ss_error rows recorded instead
+```
+
+55/day of *invisible* batch-kills became contained, per-series, recorded errors —
+and p99 improved 31.79s → 24.02s. The residual long gaps are the network being
+down, not the poller losing the batch.
+
+**New, for your attention:** this host's DNS is flaky enough to cost real capture
+coverage (~5 minutes of gaps in the observed window). Previously invisible; now
+measurable via `ss_error` rows. Worth a look at the host resolver.
+
+## Everything else green
+
+`evidence_qa` fired 02:05, exit 0, next 03:05. No failed units. 7 services + 3
+timers. `dry_run` untouched.
