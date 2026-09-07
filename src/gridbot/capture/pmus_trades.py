@@ -361,6 +361,12 @@ class TradesRecorder:
             return
         self._request_seq += 1
         self._request_id = f"trades-{self._request_seq}"
+        # A real subscription earns a fresh silence window. Without this the frame
+        # clock, stale from an idle overnight stretch, would trip the watchdog on
+        # the first loop after subscribing — recycling the socket at exactly the
+        # moment real trades begin arriving. An EMPTY resubscribe deliberately
+        # does not reset it, so an idle loop can never mask a dead reader.
+        self._last_frame = self.clock()
         await ws.subscribe_trades(self._request_id, list(slugs))
         log.info("subscribed %d slug(s) as %s: %s", len(slugs), self._request_id, slugs)
         self.tape.status("subscribed", request_id=self._request_id, slugs=list(slugs))
@@ -375,9 +381,16 @@ class TradesRecorder:
                 return
             if self._closed or not ws.is_connected:
                 return
-            if now - self._last_frame > self.silence_timeout_s:
+            if self.subscribed and now - self._last_frame > self.silence_timeout_s:
                 # The SDK's reader task can die on a non-ConnectionClosed exception
                 # without clearing self._ws, so is_connected still reports OPEN.
+                #
+                # Guarded by `self.subscribed`: silence is only evidence of a dead
+                # reader when we ASKED for frames. Observed live on the first night
+                # — with no CS2 series in the slate the recorder subscribed to
+                # nothing, so it recycled every 90s all night, ~40 authenticated
+                # reconnects an hour for no reason. An empty subscription is a
+                # quiet slate, not a fault.
                 log.warning("no frame for %.0fs; recycling the connection",
                             now - self._last_frame)
                 self.tape.status("silent", quiet_s=round(now - self._last_frame, 1))

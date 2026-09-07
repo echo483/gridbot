@@ -513,6 +513,53 @@ class TestReconnect:
         assert ws.connect_calls >= 2
         assert any(r.get("event") == "silent" for r in writer.rows)
 
+    async def test_subscribing_gives_the_silence_watchdog_a_fresh_window(self, tmp_path):
+        """Second-order bug from the guard above: while subscribed to nothing the
+        frame clock goes stale (hours, overnight). Without a reset, the first
+        subscription of the morning would find `now - _last_frame` already past
+        the timeout and recycle immediately — churning the socket at exactly the
+        moment real trades start arriving.
+        """
+        ws, writer = FakeWS(), FakeWriter()
+        driver = Driver()
+        rec = _recorder(tmp_path, writer, ws, driver, silence_timeout_s=0.05)
+        rec._last_frame = driver.clock() - 10_000.0      # idle all night
+        await rec._resubscribe(ws, ["acme-cs2-aaa-bbb-2026-09-07"])
+        assert driver.clock() - rec._last_frame < 1.0, "stale frame clock survived subscribe"
+
+    async def test_subscribing_to_nothing_does_not_reset_the_frame_clock(self, tmp_path):
+        """Only a real subscription earns a fresh window — otherwise an empty
+        resubscribe loop would mask a genuinely dead reader forever.
+        """
+        ws, writer = FakeWS(), FakeWriter()
+        driver = Driver()
+        rec = _recorder(tmp_path, writer, ws, driver, silence_timeout_s=0.05)
+        stale = driver.clock() - 10_000.0
+        rec._last_frame = stale
+        await rec._resubscribe(ws, [])
+        assert rec._last_frame == stale
+
+    async def test_silence_with_nothing_subscribed_does_not_recycle(self, tmp_path):
+        """Observed live on the first night: with no CS2 series in the slate the
+        recorder subscribed to nothing, received nothing, and recycled the socket
+        every 90s — ~40 authenticated reconnects an hour, all night, for no
+        reason. Silence is only evidence of a dead reader when we ASKED for
+        frames; with an empty subscription it is the expected state.
+        """
+        ws, writer = FakeWS(), FakeWriter()
+        driver = Driver()
+        grid, pmus = tmp_path / "grid", tmp_path / "pmus"
+        _write_tape(grid, "series_state", [])      # no live series at all
+        _write_tape(pmus, "mappings", [])
+        rec = pt.TradesRecorder(
+            ws_factory=lambda: ws, writer=writer, grid_dir=grid, pmus_dir=pmus,
+            from_start=True, clock=driver.clock, sleep=driver.sleep,
+            poll_s=0.01, silence_timeout_s=0.05,
+        )
+        await rec.run(seconds=5.0)
+        assert ws.connect_calls == 1, "recycled while subscribed to nothing"
+        assert not any(r.get("event") == "silent" for r in writer.rows)
+
 
 # --- liveness / smoke ---------------------------------------------------------
 
