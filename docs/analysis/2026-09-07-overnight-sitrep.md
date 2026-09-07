@@ -138,16 +138,19 @@ Two audit recommendations were rejected on evidence:
 
 ### A1 — Disk. 29-day fuse. *(highest priority)*
 
-**ESCALATED — re-measured three times as the slate filled:**
+**~21 days.** Measured honestly at 10:23Z, after two bad attempts (method
+matters here, so both are recorded):
 
-| slate | rate | headroom |
+| method | result | verdict |
 |---|---|---|
-| quiet (0 live series) | 23.1 GiB/day | 29 days |
-| 2 live series | 27.3 GiB/day | 25 days |
-| **3 live series + fuller intl** | **36.4 GiB/day** | **19 days** |
+| 40-second file-growth samples ×3 | 23.1 / 27.3 / 36.4 GiB/day | **too noisy** — caught bursts, ranged 17–36 on repeat |
+| whole-of-day file size ÷ coverage hours | 10.4 GiB/day, 65 days | **misleading** — diluted by 7h of pre-fix data |
+| **bytes written after the 07:11Z fix ÷ that window** | **32.2 GiB/day, 21 days** | **the honest one** |
 
-Historic baseline was 0.5–1.1 GiB/day. A peak evening slate has run **18** series,
-so the rate will go higher again — 19 days is an upper bound, not a floor. The
+Cross-checks: pre-fix bytes work out to ~0.65 GiB/day, matching the measured
+full days before the fix (09-03: 0.6, 09-04: 0.7, 09-06: 1.0). So the discovery
+fix took the tape from ~1 to ~32 GiB/day — a ~30–50× step. The 3.25h window spans
+the slate opening, so it includes both quiet and active hours. The
 volume is legitimate — **73% of it is CS2 winner markets**, exactly what the
 strategy needs — so the fix is retention, not capturing less.
 
@@ -438,3 +441,38 @@ measurable via `ss_error` rows. Worth a look at the host resolver.
 
 `evidence_qa` fired 02:05, exit 0, next 03:05. No failed units. 7 services + 3
 timers. `dry_run` untouched.
+
+---
+
+# ADDENDUM 5 — 10:23Z check
+
+## Watchdog fix: confirmed over a full hour
+
+**Zero recycles** since the 900s change (was ~2 per 50 min). Trades tape at
+**1,213 prints** across 6 slugs, **zero error rows**, ACK classification working
+(`pmus_trades_ack: 10`). Slate now `tracked=14, live=4`.
+
+## A1 — I escalated on bad methodology, then corrected it
+
+Worth reading the method, not just the number. My 40-second growth samples ranged
+**17–36 GiB/day on repeat measurements of the same system** — far too noisy to
+extrapolate a fuse from, and I used one to escalate to "19 days". Measuring the
+whole day file instead gave 10.4 GiB/day / 65 days, which looked authoritative and
+was **worse**: it averaged in seven hours of pre-fix data.
+
+The defensible measurement is bytes written *after* the 07:11Z discovery fix
+divided by that window: **32.2 GiB/day → ~21 days**. Cross-checked against pre-fix
+bytes (~0.65 GiB/day, matching the 0.6/0.7/1.0 GiB measured on the three prior full
+days). So the original escalation was directionally right; the method wasn't.
+
+## Host DNS: still degrading, now measurable
+
+`ss_error` rows today: **27 `ConnectError: Temporary failure in name resolution` +
+12 `ConnectTimeout`** (was 16 + 6 an hour ago). Ongoing, roughly 39 so far. These
+were invisible before the poller fix — they killed whole batches and only appeared
+as journal lines. Worth a look at the host resolver; it is costing real coverage.
+
+## Timers and units
+
+`evidence_qa` and `crossvenue-coverage` both `Result=success`. No failed units.
+7 services + 3 timers. `dry_run` untouched, no orders.
