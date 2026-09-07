@@ -29,6 +29,29 @@ loop only: analysis, reviews, reports, hypothesis drafts.
 
 ## Baseline 2026-09-07 (START HERE — supersedes the 09-04 baseline below)
 
+**Clean baseline cut for the KG + NautilusTrader phase.** One branch (`main`, no
+feature branches outstanding), empty working tree, **1059 tests green**,
+`ruff check .` green, replay harness passes on both armed days, 8 services + 3
+timers running with zero failed units, `dry_run` untouched, no orders, no live
+exposure. `deploy/` matches every live systemd unit (drift-checked). Registry at
+42 rows and parsing.
+
+Where the strategy stands in one breath: **H-MAPENTRY1 is closed** (no path to a
+verdict — not a falsification), `p_map` is retired as a fair-value estimator,
+`q_round` is retained with a new job, and the successor lane **H-CROSSVENUE1** has
+a written design, a stamped holdout boundary (`2026-09-07T06:39:27Z`), a working
+orientation-checked join, and — as of today — the **trade prints** that
+`NOTE10` makes mandatory for any resting-entry strategy. It is NOT registered;
+nothing measures edge until it is.
+
+Next phase, per the user: an always-on inefficiency engine on the **homelab**
+(not this laptop), a knowledge graph, and NautilusTrader with its Rust core as
+the learning vehicle. Environment gaps to close first: `nautilus_trader`,
+`pyarrow`/`pandas` and a Rust toolchain are all absent, and this host runs Python
+3.13.5 — check Nautilus's supported Python range before committing to it.
+The fill model is framework-independent and required either way, so it is the
+first work item under any of those paths.
+
 **H-MAPENTRY1 is CLOSED as a live candidate** (registry `H-MAPENTRY1-CLOSE1`).
 Not a falsification — the holdout never falsified it. It closed because there was
 no path to a verdict: clause (iii) stuck at 39/60 in a fully-resolved window,
@@ -199,12 +222,15 @@ in-sample CIs exclude zero) — do NOT re-cut on same-night data.
 
 | unit | role |
 |---|---|
-| gridbot-capture.service | GRID SS/CD + PM books capture, sleep-inhibited (corpus moat) |
+| gridbot-capture.service | GRID SS/CD + PM books capture, sleep-inhibited (corpus moat). Inhibitor is `--what=sleep:handle-lid-switch` — **sleep alone is not enough**, logind gates a lid-close suspend on the separate handle-lid-switch lock; a sleep-only inhibitor guarded the wrong door through four outages totalling 39+ hours. |
 | gridbot-shadow.service | detectors for 4 registered lanes → data/shadow/instances-*.jsonl |
 | gridbot-mapentry.service | H-MAPENTRY1 recorder: joins instances to PMUS map books, frozen race fair value, qualification — data/shadow/mapentry-*.jsonl |
 | gridbot-executor.service | dry-run engine: instances+mapentry → capped intents ledger (NEVER arms itself) |
 | gridbot-postquote.service | adverse-selection diagnostic: samples book mid +30/+60/+120s after every QUALIFYING mapentry row, ORIENTED to taken side — data/shadow/postquote-*.jsonl (analysis rule: never pool unoriented across sides) |
 | gridbot-pmus-books.service | PMUS BBO tape (timing-chain Part A, 2026-09-03): polls the live map + match books of every live mapped series on the public gateway every 2s, change-only rows + 30s heartbeat — data/pmus/books-*.jsonl; read-only, no keys. Joined by scripts/timing_chain.py |
+| **gridbot-pmus-trades.service** (2026-09-07) | PMUS TRADE PRINTS — the H-MAPENTRY1-NOTE10 prerequisite: a maker strategy cannot be validated on a BBO tape. Subscribes SUBSCRIPTION_TYPE_TRADE for live CS2 match+map winner slugs → data/pmus/trades-*.jsonl. Each print carries price, size, and BOTH maker and taker side, so the aggressor is identifiable. AUTHENTICATED (Ed25519, same keys that could trade) and therefore guardrailed structurally: no order surface on the socket (screened at every connect, fatal on a hit), no order-capable import, secrets via config.require only — all test-enforced. |
+| **gridbot-evidence-qa.timer** (hourly) | EVIDENCE-FLOW watchdog. Every other alarm checks process liveness or directory mtime; none reads row content — which is how a 13x venue collapse passed with ok:true everywhere. Three ratio-normalised checks; exit code scoped to today+yesterday so a historical incident cannot hold the unit permanently red. NOTE: systemd WatchdogSec= is NOT an alternative — every unit is Type=simple/NotifyAccess=none with no sd_notify, so a watchdog would kill capture on a timer. |
+| **gridbot-crossvenue-coverage.timer** (daily 09:15) | intl↔PMUS join coverage + refusal reasons for H-CROSSVENUE1, so a degrading join cannot masquerade as "no opportunities". Coverage only — no basis, lead or edge (the hypothesis is unregistered; measuring would burn the holdout). |
 | gridbot-pmus-map.timer (15m) | GRID↔PMUS mapping snapshots |
 | gridbot-timing-chain.timer (17:30 local = 00:30 UTC) | nightly scripts/timing_chain.py on the UTC day just closed → data/analysis/timing_chain-YYYYMMDD.{json,md}; citable at ≥5 nights / ≥1,000 moved events |
 | gridbot-ingest (1h) / gridbot-backup (05:10) | corpus → Supabase; raw offsite |

@@ -21,7 +21,7 @@ registry → LIVE_FIRE.md; this file is the floor plan.
 | analysis/ | OPS | slow-loop Claude analyst (daily, managed) — LLM territory, never trade path (rail 1). Also the offline quant instruments: `exec_*` (the EXEC1 replay machinery, retained after H-MAPENTRY1-CLOSE1 as reusable execution modelling) and `crossvenue_join.py` (H-CROSSVENUE1 plumbing — resolves intl↔PMUS markets AND their Yes-side orientation; computes no basis or edge). |
 | config.py / redaction.py / ratelimit.py / graphql.py | WIRING | keyring-only secrets (5s-timeout reads + last-good cache), log redaction, GRID rate budget, GQL client. |
 
-## scripts/ (47 files) — by tier
+## scripts/ (48 files) — by tier
 
 **WIRING (fork these with the system):** dispatch.py + _anthropic_lane.py
 (agent-team routing; bot-mode profile lanes), _jsonl.py (tolerant reads),
