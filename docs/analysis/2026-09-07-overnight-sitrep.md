@@ -164,7 +164,7 @@ PMUS lists a match a median **4.46h** before scheduled start (p25 1.7h, p75 16.5
 50 matches/day) and the recorder only starts at GRID `started`. We capture **none**
 of it — and that is where a thin book is most mispriced. Costs book-poll budget.
 
-### A5 — Trades tape
+### A5 — Trades tape — **BUILT, INSTALLED, RUNNING**
 
 `subscribe_trades` exists in the vendored SDK and `NOTE10` makes it the
 prerequisite for any maker lane. You approved the Ed25519 credentials. Strongest
@@ -172,9 +172,78 @@ guardrail found: **`MarketsWebSocket` has zero order surface** — no
 `order/place/cancel/submit/buy/sell` attribute exists — so the recorder is
 structurally incapable of trading. Build status is in the addendum below.
 
-### A6 — Codebase cleanup
+### A6 — Codebase cleanup — **DONE**
 
-Audit was running at write time; results in the addendum.
+---
+
+# ADDENDUM (written later the same night)
+
+## Trades tape — live
+
+`src/gridbot/capture/pmus_trades.py`, 29 tests, installed as
+`gridbot-pmus-trades.service` and **active**. Seven gridbot units now run.
+
+I installed it rather than leaving it staged, because you approved the Ed25519
+credentials and I verified the isolation three independent ways first:
+
+1. **Import graph** — the venue SDK stays *entirely unloaded* until connect (the
+   SDK import is lazy and targets the leaf module, because
+   `polymarket_us/__init__.py` unconditionally imports its order-capable REST
+   client). The only executor modules reachable are the docstring-only package
+   `__init__` and `us_mapping`, a pure name matcher importing just
+   `gridbot.config`. I confirmed both by reading them.
+2. **Order surface** — `dir(ws)` is screened for
+   `order|place|cancel|submit|buy|sell` at every connect; a hit is fatal. A canary
+   test pins the real SDK class, so if the venue ever *adds* an order method the
+   suite fails rather than the recorder quietly gaining one.
+3. **Live smoke** — a 45s read-only run connected and exited 0.
+
+The builder mutation-tested its own guardrails rather than trusting green, and
+corrected my brief in two places (the literal "imports neither" I asked for is
+impossible; it implemented a measured allowlist and proved why). It also found a
+venue trap worth knowing: `BaseWebSocket.subscribe` does `if market_slugs:`, so
+an **empty** list omits `marketSlugs` from the frame entirely, which the venue may
+read as *every market*. The recorder never sends that frame; a test pins it.
+
+**To reverse:** `systemctl --user disable --now gridbot-pmus-trades`.
+
+## Evidence-flow QA is now scheduled — and had a real defect
+
+The audit caught that the monitor built to catch the 09-05/06 blindness **had no
+scheduler**. Now an hourly systemd timer.
+
+Test-firing it exposed a defect worth recording: it exited 1 and **would have
+stayed red forever**, because 09-05 is a genuine past incident permanently in the
+tape. A permanently-failed unit gets ignored within a week — worse than no alarm.
+The exit code is now scoped to today+yesterday; the table still prints the full
+history. Verified: exits 0, and 09-05 still shows `FLAG capture_broke`.
+
+## Cleanup
+
+The audit's headline: **zero dead modules, zero dead symbols out of 308.** The
+tree is unusually clean. Actions taken:
+
+- deleted `scripts/preamble_lint.py` — the one provably dead file. Its docstring
+  claimed it blocks PRs, but `.githooks/pre-commit` only runs
+  `check_no_secrets.py`, and its only other references live in `docs/archive/`.
+- `tests/test_constant_agreement.py` pins `US_TICK` (declared independently in
+  **four** modules), the 0.90 ceiling (two) and `ENTRY_MARGIN` (two). All agreed,
+  nothing enforced it — and a tick mismatch between the module that *prices* an
+  order and the one that *scores* it is a silent bias in everything downstream.
+  Full centralisation needs a `config` import in five modules, two in the trade
+  path; deferred deliberately. Mutation-checked non-vacuous.
+- `MAP.md` refreshed; flagged that `capture_qa.py`'s hermes cron wiring is
+  **stale** (the wrapper exists, no job invokes it — worth your confirmation
+  whether that was intentional).
+
+## Two things I did NOT do, deliberately
+
+- **Centralise the duplicated constants.** Five modules, two in the trade path, at
+  1am, unattended. The test is the cheap half; the refactor deserves daylight.
+- **Make readers gzip-aware for the disk fix (A1).** `iter_jsonl` is the single
+  tolerant reader, but `engine.py`'s tail-cap seek and `scripts/_jsonl.py` are
+  bespoke. A half-migrated read path means an instrument silently reading zero
+  rows — the exact vacuous-pass failure this project keeps hitting.
 
 ---
 
