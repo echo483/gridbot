@@ -312,3 +312,64 @@ excludes scripts; corrected to `scripts/_jsonl.read_rows`.
 
 `capture`, `executor`, `mapentry`, `postquote`, `shadow`, `pmus-books`,
 `pmus-trades`, plus `evidence-qa` (hourly) and `crossvenue-coverage` (daily).
+
+---
+
+# ADDENDUM 3 — LIVE VALIDATION (08:22Z, slate open)
+
+Everything built overnight is now verified against a live CS2 slate, not just tests.
+
+## The trades tape works — NOTE10's prerequisite is satisfied
+
+```
+32 real pmus_trade prints · 4 slugs (2 match + 2 map books) · 2 live series
+venue tradeTime -> our receive:  p50 106ms   min 62ms   max 165ms
+```
+
+A real print carries:
+
+```
+price 0.4900   quantity 4.5200   id CBF4TVYV6QDQ   state TRADE_STATE_NEW
+maker.side ORDER_SIDE_SELL
+taker.side ORDER_SIDE_BUY   taker.outcomeSide OUTCOME_SIDE_YES   taker.action BUY
+```
+
+**Both maker and taker sides are identifiable per print.** That is exactly the
+aggressor/queue information a BBO tape structurally cannot supply — the thing that
+capped EXEC1's fill-detection recall at 0.46 against its 0.60 bar and closed
+H-MAPENTRY1. **CROSSVENUE1 clause (iii) is no longer blocked on data**; it now only
+needs the accrual and a calibration gate that passes.
+
+## GRID poller fixes hold on live in-game series
+
+| | before | since the fix |
+|---|---|---|
+| p50 | 13.83s | **13.02s** |
+| p90 | 14.93s | **13.72s** |
+| p99 | 31.79s | **15.40s** |
+| max | **216.23s** | **15.40s** |
+| gaps >30s | 1.1% | **0** |
+
+The batch-abort tail is gone. (Small sample — 40 gaps on a light slate — but a
+216s → 15.4s max is not noise.)
+
+## Everything else green
+
+- intl CS2 winner books: **241,028 rows across 191 markets** in 10 minutes
+- `evidence_qa` hourly timer: fired 01:05, **exit 0**, next 02:05
+- **no failed units**; 7 services + 3 timers
+
+## One fix made from reading the live tape
+
+The venue ACKs an unsubscribe with `{"unsubscribed": true}`, and the recorder
+resubscribes whenever the live slug set changes — so that ACK was being logged as
+`pmus_trades_unknown`, the schema-drift canary. **A canary that fires on routine
+churn stops being read**, which is how the venue freeze went unnoticed for two
+nights. ACKs now classify as `pmus_trades_ack`; the canary keeps its teeth
+(pinned by a test that a renamed field still trips it).
+
+## A1 re-measured on a live slate — slightly worse
+
+**27.3 GiB/day** (quiet-slate estimate was 23.1), 680 GiB free ⇒ **~25 days**.
+Measured with only **2** live series, so a busy evening slate will be worse. Still
+the top action item, still wants your call on approach.
