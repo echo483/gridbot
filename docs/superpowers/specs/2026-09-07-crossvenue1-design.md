@@ -266,3 +266,30 @@ day was compared against full days. The map-vs-match comparison is unaffected
 
 Nothing in steps 2–5 may produce a PnL claim. Rail 3 is unchanged: `dry_run=True`
 until a pre-registered PASS, and flipping it live is the user's own act.
+
+## 12. What the live trades tape changes for clause (iii) — 2026-09-07
+
+The tape is running and carrying real prints (32 in the first window; p50 106ms
+venue->receive). Two consequences for the execution clause, both worth pinning
+before the instrument is written:
+
+**It cannot retro-calibrate EXEC1's fixture.** The 48 venue-verified orders are
+from 2026-08-26/27; the trades tape starts 2026-09-07. There is no way back. So
+EXEC1's failed gate (NOTE3) stays failed — the tape does not rescue it.
+
+**But it changes the KIND of fill model clause (iii) needs.** EXEC1 had to INFER
+fills from a BBO tape, which is why it capped at 0.46 recall: it could not
+separate a sale through our level from a cancel of that level. With prints, the
+question becomes far more direct — did a trade print at or through our resting
+price while we were resting, and how much size went through. The remaining
+uncertainty collapses to QUEUE POSITION (how much of that printed size was ahead
+of us), which is a bounded, modellable quantity rather than an unobservable one.
+Each print also names its aggressor (`maker.side` / `taker.side` /
+`taker.outcomeSide`), so adverse selection — the -6.5pt cost that killed the last
+lane — is directly measurable rather than inferred.
+
+Consequence for sequencing: clause (iii) can be calibrated on FORWARD held-out
+data as the tape accrues, and does not have to wait on live-small orders. The
+calibration gate still applies and must actually pass this time (NOTE3's lesson);
+what changes is that the instrument is no longer being asked to infer something
+its data cannot express.
