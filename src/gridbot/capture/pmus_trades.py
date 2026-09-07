@@ -110,6 +110,8 @@ SECRET_KEY_SECRET = "POLYMARKET_US_SECRET_KEY"  # pragma: allowlist secret (keyr
 # Anything else is written verbatim as `pmus_trades_unknown` — a schema-drift
 # canary, so a renamed `trade` field never silently empties the tape.
 KNOWN_KEYS = frozenset({"heartbeat", "error", "trade"})
+# Protocol ACKs: recorded, but not schema drift. See TradeTape.classify.
+ACK_KEYS = frozenset({"unsubscribed", "subscribed"})
 
 # Guardrail 1's screen. Nothing on a read-only market socket may match this.
 ORDER_SURFACE_RE = re.compile(r"order|place|cancel|submit|buy|sell", re.IGNORECASE)
@@ -195,6 +197,27 @@ class TradeTape:
 
     def unknown(self, message: dict) -> None:
         self._row("pmus_trades_unknown", payload=message)
+
+    def ack(self, message: dict) -> None:
+        self._row("pmus_trades_ack", payload=message)
+
+    def classify(self, message: dict) -> None:
+        """Record a frame the specific-event handlers do not claim.
+
+        Protocol ACKs are recorded as `pmus_trades_ack`, NOT as schema drift.
+        Observed live 2026-09-07: an unsubscribe is ACKed with
+        ``{"requestId": ..., "unsubscribed": true}``, and the recorder
+        resubscribes every time the live slug set changes — so labelling that
+        "unknown" would fire the drift canary on routine churn. A canary that
+        cries on benign traffic stops being read, which is exactly how the
+        venue freeze went unnoticed. Anything genuinely unrecognised still
+        lands as `pmus_trades_unknown`, verbatim, so a renamed `trade` field
+        can never silently empty the tape.
+        """
+        if ACK_KEYS & message.keys():
+            self.ack(message)
+        else:
+            self.unknown(message)
 
     def error(self, exc: BaseException) -> None:
         self._row("pmus_trades_error", error=type(exc).__name__, detail=_detail(exc))
@@ -319,7 +342,7 @@ class TradesRecorder:
         self._last_frame = self.clock()
         self.stats["frames"] += 1
         if isinstance(message, dict) and not (KNOWN_KEYS & message.keys()):
-            self.tape.unknown(message)
+            self.tape.classify(message)
 
     def _on_trade(self, message) -> None:
         self.stats["trades"] += 1

@@ -513,6 +513,30 @@ class TestReconnect:
         assert ws.connect_calls >= 2
         assert any(r.get("event") == "silent" for r in writer.rows)
 
+    def test_an_unsubscribe_ack_is_not_treated_as_schema_drift(self, tmp_path):
+        """Observed live 2026-09-07: the venue ACKs an unsubscribe with
+        ``{"requestId": ..., "unsubscribed": true}``. That is normal protocol
+        traffic, and the recorder resubscribes every time the live slug set
+        changes — so classifying it as `pmus_trades_unknown` makes the
+        schema-drift canary fire on routine churn. A canary that cries on benign
+        traffic stops being read, which is how the venue-freeze went unnoticed in
+        the first place. The frame is still RECORDED, just correctly labelled.
+        """
+        writer = FakeWriter()
+        tape = pt.TradeTape(writer)
+        tape.classify({"requestId": "trades-2", "unsubscribed": True})
+        kinds = [r["type"] for r in writer.rows]
+        assert "pmus_trades_unknown" not in kinds
+        assert kinds == ["pmus_trades_ack"]
+
+    def test_a_genuinely_unrecognised_frame_still_trips_the_canary(self, tmp_path):
+        """The canary must keep its teeth: a renamed `trade` field must never
+        silently empty the tape."""
+        writer = FakeWriter()
+        tape = pt.TradeTape(writer)
+        tape.classify({"requestId": "x", "someNewFieldTheVenueAdded": {"a": 1}})
+        assert [r["type"] for r in writer.rows] == ["pmus_trades_unknown"]
+
     async def test_subscribing_gives_the_silence_watchdog_a_fresh_window(self, tmp_path):
         """Second-order bug from the guard above: while subscribed to nothing the
         frame clock goes stale (hours, overnight). Without a reset, the first
