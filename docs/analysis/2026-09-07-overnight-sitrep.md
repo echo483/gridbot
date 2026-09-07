@@ -252,3 +252,60 @@ tree is unusually clean. Actions taken:
 - `dry_run=True`. No orders placed. Rail 3 intact — arming is your act alone.
 - Capture runs; `Linger=yes` now, so it survives a reboot for the first time.
 - No strategy has a pre-registered PASS. Nothing is armed or near arming.
+
+---
+
+# ADDENDUM 2 — `/simplify` pass + join-coverage report
+
+## Quality pass (4 parallel review angles + hermes)
+
+All findings applied, `c722f06`. **1053 tests, ruff clean.** Highlights:
+
+- **A monitoring line that lied.** `pmus_trades.stats["reconnects"]` was
+  initialised, logged and reset but **never incremented** — so it printed
+  `0 reconnect(s)` *during* the churn incident when the socket was recycling every
+  90s. I only caught that churn because the `WARNING` lines sat next to it.
+- **The review corrected my own reasoning and `US_TICK` is now centralised.** The
+  docstring I wrote claimed centralising needed "a `config` import in five modules,
+  two in the trade path". Wrong: `intents.py` already imported `TICK` five lines
+  above its own redundant copy, `exec_population.py` declared one and never used
+  it, and `mapentry_verdict.py` could import from `fills` directly. **Four
+  declarations → one, zero new imports, no live daemon touched.** The test now
+  asserts *identity*, so a numerically-equal local copy still fails.
+- `evidence_qa` was re-parsing the **entire historical corpus hourly** (~18.4 MB,
+  O(all-time) for an O(14-day) question) — now scans only what it can use, output
+  verified identical.
+- Plus: byte-identical duplicated regex removed, three hand-rolled NDJSON loops →
+  the shared reader, a latent `KeyError`, a memoised matcher, a dead return.
+
+**Deliberately skipped:** two deeper `grid_poller` refactors (live daemon,
+well-tested, not for unattended surgery), concurrent gamma paging (speculative
+requests at a public API for ~2% freshness), and `capture_priority` as an enum
+(would preempt your open C2 decision).
+
+## Join-coverage report — `scripts/crossvenue_coverage.py`
+
+Daily timer, running. Makes a degrading join visible instead of letting it look
+like "no opportunities":
+
+```
+date      intl(m,map)   pmus  join(m,map) aligned inverted  ref[nm/nbk/ns/yu] rate
+20260903  0,0            82   0,0               0        0            0/0/0/0 0.00
+20260906  0,0           100   0,0               0        0            0/0/0/0 0.00
+20260907  82,162         70   15,0             15        0         136/93/0/0 0.06
+```
+
+**Four days of zero** — not because the join fails, but because no intl CS2 winner
+market existed in capture before the discovery fix. The blindness, as a time series.
+
+**Provenance:** built by the hermes builder lane, which **exited 0 while leaving a
+truncated, syntactically invalid test file and never ran any of the four
+verification commands its brief demanded.** Judged by artifacts per doctrine: the
+script was good and kept, its tests were discarded and rewritten (10 tests). It
+also inherited an error from *my* brief — I told it to use `gridbot.jsonl`, which
+excludes scripts; corrected to `scripts/_jsonl.read_rows`.
+
+## Units now running: 8 services + 3 timers
+
+`capture`, `executor`, `mapentry`, `postquote`, `shadow`, `pmus-books`,
+`pmus-trades`, plus `evidence-qa` (hourly) and `crossvenue-coverage` (daily).
