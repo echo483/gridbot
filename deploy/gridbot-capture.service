@@ -28,10 +28,19 @@ WorkingDirectory=/home/ops/gridbot
 # Non-secret runtime knobs (e.g. GRIDBOT_EXTRA_TITLES after the title probe).
 # NEVER put a secret here — secrets live in the keyring only.
 EnvironmentFile=-/home/ops/gridbot/deploy/capture.env
-# systemd-inhibit: while capture runs, block IDLE suspend (KDE's 2h AC
+# systemd-inhibit: while capture runs, block suspend. NOTE the --what list:
+# `sleep` alone is NOT enough. logind gates a LID-CLOSE suspend on the SEPARATE
+# `handle-lid-switch` inhibitor, so a sleep-only lock guards the wrong door — it
+# was held correctly through FOUR outages (08-25 10.8h, 09-02 7h48m, 09-05
+# 13h01m, 09-07 7h26m = 39+ hours of irreplaceable tape) while the lid suspended the host past
+# it every time. IdleAction=ignore on this host, so the idle path the original
+# comment described was already dead. Do NOT drop handle-lid-switch.
+# Tradeoff accepted: the machine will not suspend on lid close while capture
+# runs, so a lid-closed laptop keeps running (thermal risk in a bag).
+# (original note: block IDLE suspend (KDE's 2h AC
 # auto-suspend put the box to sleep 03:28–14:17 on 2026-08-25 and cost 10.8h
 # of capture). Manual suspend still works — the user sees who blocks and why.
-ExecStart=/usr/bin/systemd-inhibit --what=sleep --who=gridbot-capture "--why=GRID capture continuity (corpus moat)" --mode=block /home/ops/.local/bin/uv run python -m gridbot.capture.supervisor
+ExecStart=/usr/bin/systemd-inhibit --what=sleep:handle-lid-switch --who=gridbot-capture "--why=GRID capture continuity (corpus moat)" --mode=block /home/ops/.local/bin/uv run python -m gridbot.capture.supervisor
 # Graceful stop: SIGTERM the supervisor only; it drains and flushes writers.
 KillMode=mixed
 KillSignal=SIGTERM

@@ -483,7 +483,8 @@ as journal lines. Worth a look at the host resolver; it is costing real coverage
 
 ## 7h26m of tape lost (11:31:55Z → 18:47:41Z), and the reason
 
-Third occurrence: 09-02 (7h48m), 09-05 (13h01m), 09-07 (7h26m) — **28+ hours** of
+**Fourth** occurrence: 08-25 (10.8h), 09-02 (7h48m), 09-05 (13h01m), 09-07
+(7h26m) — **39+ hours** of
 irreplaceable capture. Bigger than every code defect fixed overnight, combined.
 
 **Root cause, confirmed:** capture holds a `block`-mode inhibitor on **`sleep`**:
@@ -533,3 +534,10 @@ off a full `SS_IDLE_POLL_S`=60s, which produced 39 gaps >30s clustered at 85-95s
 roughly 55 minutes of blindness across 4.4h, **almost all self-inflicted rather
 than the outage**. Now retries at live cadence and escalates to idle only after
 `ERR_BACKOFF_AFTER`=3 consecutive failures. 1059 tests green.
+
+**FIXED AND VERIFIED LIVE (Nick applied it):**
+`systemd-inhibit --list` now shows `sleep:handle-lid-switch` block-mode for
+gridbot-capture. The repo copy in `deploy/` was BEHIND the live unit — a redeploy
+would have silently reintroduced the bug — now synced, with the reasoning recorded
+in the unit file so it cannot be "simplified" away. Drift check run across all 18
+units + timers: no other drift.
