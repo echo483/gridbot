@@ -321,7 +321,7 @@ class TestSecretsNeverSurface:
             lambda: ws.emit("close"),
         ])
         rec = _recorder(tmp_path, writer, ws, driver)
-        rec.credentials_present()  # reads both secrets through config.require
+        rec.assert_credentials()  # reads both secrets through config.require
         await rec.run(seconds=0.2)
 
         blob = json.dumps(writer.rows) + "\n" + caplog.text

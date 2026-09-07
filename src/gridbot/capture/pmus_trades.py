@@ -291,12 +291,12 @@ class TradesRecorder:
         self._request_id: str | None = None
         self._last_frame: float = clock()
         self._closed = False
-        self.stats = {"trades": 0, "frames": 0, "errors": 0, "reconnects": 0}
+        self.stats = {"trades": 0, "frames": 0, "errors": 0}
         self._stats_at = clock()
 
     # -- credentials ----------------------------------------------------------
 
-    def credentials_present(self) -> bool:
+    def assert_credentials(self) -> None:
         """Read both secrets through config.require so a missing one fails NOW.
 
         The values are deliberately not returned or stored: this only proves the
@@ -304,7 +304,6 @@ class TradesRecorder:
         """
         config.require(KEY_ID_SECRET)
         config.require(SECRET_KEY_SECRET)
-        return True
 
     # -- event handlers -------------------------------------------------------
 
@@ -404,11 +403,15 @@ class TradesRecorder:
     def _log_stats(self, now: float) -> None:
         if now - self._stats_at < STATS_LOG_S:
             return
-        log.info("last %.0fs: %d trade(s), %d frame(s), %d error(s), %d reconnect(s); "
-                 "subscribed=%s", now - self._stats_at, self.stats["trades"],
-                 self.stats["frames"], self.stats["errors"], self.stats["reconnects"],
-                 self.subscribed)
-        self.stats = {"trades": 0, "frames": 0, "errors": 0, "reconnects": 0}
+        # `reconnects` is deliberately NOT in this window dict. It used to be, was
+        # never incremented, and so this line reported "0 reconnect(s)" while the
+        # socket recycled every 90s — a monitoring line that lied in a recorder
+        # whose whole job is evidence. Reconnects are counted once, cumulatively,
+        # in run()'s `totals`, which is a different question from this window.
+        log.info("last %.0fs: %d trade(s), %d frame(s), %d error(s); subscribed=%s",
+                 now - self._stats_at, self.stats["trades"], self.stats["frames"],
+                 self.stats["errors"], self.subscribed)
+        self.stats = {"trades": 0, "frames": 0, "errors": 0}
         self._stats_at = now
 
     async def _shutdown(self, ws) -> None:
@@ -458,7 +461,11 @@ class TradesRecorder:
                                      detail=_detail(exc))
                 finally:
                     await self._shutdown(ws)
-                    for k in totals:
+                    # Drain the rolling window into the cumulative counters. Only
+                    # the keys the window actually tracks — `reconnects` lives on
+                    # `totals` alone, counted below, because a reconnect is a
+                    # property of the run, not of a 60s observation window.
+                    for k in self.stats:
                         totals[k] += self.stats[k]
                         self.stats[k] = 0
                     self._request_id = None
@@ -495,7 +502,7 @@ def main(argv: list[str] | None = None) -> int:
 
     rec = TradesRecorder(ws_factory=lambda: build_markets_ws())
     try:
-        rec.credentials_present()
+        rec.assert_credentials()
     except config.MissingSecret as exc:
         # exc's message names the secret and the keyring service — never a value.
         log.error("cannot start: %s", exc)

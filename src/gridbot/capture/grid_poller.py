@@ -209,10 +209,13 @@ class GridCapture:
         if state:
             st["ever_valid"] = True
             st["empty_streak"] = 0
-        elif not st.get("ever_valid"):
+        elif not st["ever_valid"]:
             # Never any feed for this id. Neither prune rule can reach it (it never
             # sets started), so it burns the poll budget until discovery ages out.
-            st["empty_streak"] = st.get("empty_streak", 0) + 1
+            # Direct indexing, like every other field access on `st`: both keys are
+            # seeded by the single `setdefault` in discover_once, so a .get() default
+            # here would only mask a genuine missing-key bug instead of raising.
+            st["empty_streak"] += 1
             if st["empty_streak"] >= EMPTY_BREAKER_N:
                 log.warning(
                     "series %s (%s): %d consecutive empty polls, no feed — retiring",

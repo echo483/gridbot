@@ -28,7 +28,8 @@ from gridbot.instruments.mapentry_verdict import (
     provenance,
 )
 
-US_TICK = 0.01
+# (this module declared its own `US_TICK = 0.01` and never used it — removed
+# 2026-09-07; the venue tick lives in instruments.fills.TICK)
 
 
 @dataclass(frozen=True)

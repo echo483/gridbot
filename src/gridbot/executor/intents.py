@@ -19,7 +19,12 @@ from gridbot.instruments.market_match import team_outcome_token
 from gridbot.instruments.verdict import ENTRY_ASK
 
 DEFAULT_ENTRY_CEILING = 0.90  # H-MODELENTRY1 cells: never chase past this
-US_TICK = 0.01  # Polymarket US orderPriceMinTickSize on every observed book
+# The venue tick is `TICK`, imported above from instruments.fills — the single
+# declaration. This module used to redeclare it as a local `US_TICK = 0.01`
+# five lines under an import of the very same constant; a tick that disagreed
+# between the module that PRICES an order and the one that SCORES it would be a
+# silent bias in every number downstream.
+US_TICK = TICK  # Polymarket US orderPriceMinTickSize on every observed book
 
 
 @dataclass(frozen=True)

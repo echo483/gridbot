@@ -56,9 +56,12 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from gridbot.instruments.fills import TICK as _TICK
 from gridbot.jsonl import iter_jsonl
 
-US_TICK = 0.01
+# The venue tick, imported from instruments.fills (the single declaration).
+# fills does not import this module, so there is no cycle.
+US_TICK = _TICK
 CEILING = 0.90
 ENTRY_MARGIN = 0.04
 

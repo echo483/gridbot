@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
+from gridbot.capture.pm_discovery import is_cs2_winner_market
 from gridbot.executor.us_mapping import COVERAGE_FLOOR, _tokens
 
 # "Counter-Strike: A vs B (BO3) - Tournament" — 244/244 live titles parsed
@@ -44,10 +46,13 @@ _EVENT_RE = re.compile(
     re.IGNORECASE,
 )
 _MAP_RE = re.compile(r"\bmap\s*(\d+)\s*winner\b", re.IGNORECASE)
-# A winner question carries the title form; props ("Games Total: O/U 2.5",
-# "Map 1: Odd/Even Total Kills?") do not. Validated against gamma's own
-# groupItemTitle over 1,509 open markets: 1,509 agree, 0 disagree.
-_WINNER_Q_RE = re.compile(r"^\s*counter.?strike\s*:.*\bvs\b", re.IGNORECASE)
+# Winner-vs-prop is decided by pm_discovery.is_cs2_winner_market, imported above
+# rather than re-declared here. Both files consume the same catalog row shape and
+# both derived the rule from the SAME one-time measurement (1,509 open markets
+# checked against gamma's groupItemTitle, 1,509 agree / 0 disagree). Two copies
+# of one venue fact drift the moment the venue changes its title template, and a
+# fix applied to only one of them reintroduces exactly the silent sign/selection
+# error NOTE7 exists to warn about.
 
 
 @dataclass(frozen=True)
@@ -75,6 +80,7 @@ class JoinedMarket:
     orientation: str          # "aligned" | "inverted"
 
 
+@lru_cache(maxsize=4096)
 def _same_team(a: str, b: str) -> bool:
     """Token-coverage identity, symmetric, with the reverse-containment rule.
 
@@ -98,7 +104,7 @@ def parse_intl_market(row: dict[str, Any]) -> IntlMarket | None:
     event, and props are the majority (80% of CS2 tokens measured 2026-09-07).
     """
     question = str(row.get("question") or "")
-    if not _WINNER_Q_RE.search(question):
+    if not is_cs2_winner_market(row):
         return None
     m = _EVENT_RE.match(str(row.get("event_title") or ""))
     if not m:
@@ -150,16 +156,22 @@ def join_markets(
     joined: list[JoinedMarket] = []
     refusals: list[dict[str, Any]] = []
 
+    # Hoisted out of the O(intl x mappings) scan below: grid_teams is invariant
+    # across every intl market, so re-deriving it per pair tokenises the same
+    # few hundred names tens of thousands of times.
+    candidates = [
+        (mapping, teams)
+        for mapping in mapping_rows
+        if len(teams := [str(t) for t in (mapping.get("grid_teams") or [])]) == 2
+    ]
+
     for row in intl_rows:
         market = parse_intl_market(row)
         if market is None:
             continue
 
         hit = None
-        for mapping in mapping_rows:
-            grid_teams = [str(t) for t in (mapping.get("grid_teams") or [])]
-            if len(grid_teams) != 2:
-                continue
+        for mapping, grid_teams in candidates:
             pair = (
                 _same_team(market.teams[0], grid_teams[0])
                 and _same_team(market.teams[1], grid_teams[1])

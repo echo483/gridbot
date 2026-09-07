@@ -7,30 +7,37 @@ but nothing enforced that, and they are venue facts that must never diverge
 silently: a tick mismatch between the module that PRICES an order and the module
 that SCORES it produces a quiet off-by-one-tick bias in every number downstream.
 
-Centralising them would mean adding a `config` import to five modules, two of
-them in the trade path. That refactor is worth doing deliberately; this file is
-the cheap half of it — it costs no production change and fails loudly the moment
-the declarations drift. If they are ever centralised, delete this file.
+`US_TICK` has since been CENTRALISED on `instruments.fills.TICK`. The original
+version of this file claimed that would need "a `config` import in five modules,
+two of them in the trade path"; the altitude review disproved it. `intents.py`
+already imported `TICK` from `fills` five lines above its own redundant
+`US_TICK = 0.01`; `exec_population.py` declared one and never used it at all;
+and `mapentry_verdict.py` could import from `fills` directly, since `fills` does
+not import it back. Net: zero new `config` imports, no live capture daemon
+touched, four declarations reduced to one.
+
+`CEILING`/`ENTRY_MARGIN` are still genuinely independent — `mapentry.py` and
+`mapentry_verdict.py` have no existing import path between them — so those two
+remain pinned here rather than centralised. If they are ever unified, delete the
+matching test below.
 """
 
 from __future__ import annotations
 
-from gridbot.analysis import exec_population
 from gridbot.executor import intents
 from gridbot.instruments import fills, mapentry, mapentry_verdict
 
 
-def test_us_tick_agrees_across_every_module_that_declares_it():
-    ticks = {
-        "instruments.fills.TICK": fills.TICK,
-        "analysis.exec_population.US_TICK": exec_population.US_TICK,
-        "instruments.mapentry_verdict.US_TICK": mapentry_verdict.US_TICK,
-        "executor.intents.US_TICK": intents.US_TICK,
-    }
-    assert len(set(ticks.values())) == 1, f"US_TICK diverged: {ticks}"
-    # Pinned to the venue's observed orderPriceMinTickSize, not to whatever the
-    # modules happen to say — so a coordinated wrong edit still fails.
-    assert set(ticks.values()) == {0.01}, ticks
+def test_us_tick_is_centralised_on_one_declaration():
+    """Every alias must be the SAME object as the canonical constant, not merely
+    an equal literal — an equal-literal check would pass again the moment someone
+    re-introduces a local `US_TICK = 0.01`.
+    """
+    assert intents.US_TICK is fills.TICK
+    assert mapentry_verdict.US_TICK is fills.TICK
+    # Pinned to the venue's observed orderPriceMinTickSize, so a coordinated
+    # wrong edit still fails rather than agreeing with itself.
+    assert fills.TICK == 0.01
 
 
 def test_entry_ceiling_agrees_across_both_declarations():

@@ -36,6 +36,11 @@ from pathlib import Path
 
 from gridbot import config
 
+try:
+    from _jsonl import read_rows  # run as `python scripts/evidence_qa.py`
+except ImportError:  # imported as scripts.evidence_qa (tests)
+    from scripts._jsonl import read_rows
+
 # --- Check 1: venue book-change rate (data/pmus/books-*.jsonl) -------------
 # Metric: non-heartbeat rows / distinct slugs, per day. Flag when the day's
 # ratio falls below CHECK1_RATIO_FLOOR * the trailing median of prior days
@@ -91,30 +96,25 @@ def books_day(path: Path) -> dict:
     per_kind_slugs: dict[str, set[str]] = {}
     ts_lo: int | None = None
     ts_hi: int | None = None
-    with open(path) as fh:
-        for line in fh:
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if row.get("type") != "pmus_bbo":
-                continue
-            slug = row.get("slug")
-            kind = row.get("kind")
-            if slug:
-                slugs.add(slug)
-                if kind:
-                    per_kind_slugs.setdefault(kind, set()).add(slug)
-            ts = row.get("ts_ns")
-            if isinstance(ts, int):
-                ts_lo = ts if ts_lo is None else min(ts_lo, ts)
-                ts_hi = ts if ts_hi is None else max(ts_hi, ts)
-            if row.get("heartbeat"):
-                hb += 1
-                continue
-            nonhb += 1
+    for row in read_rows(path):
+        if row.get("type") != "pmus_bbo":
+            continue
+        slug = row.get("slug")
+        kind = row.get("kind")
+        if slug:
+            slugs.add(slug)
             if kind:
-                per_kind_nonhb[kind] = per_kind_nonhb.get(kind, 0) + 1
+                per_kind_slugs.setdefault(kind, set()).add(slug)
+        ts = row.get("ts_ns")
+        if isinstance(ts, int):
+            ts_lo = ts if ts_lo is None else min(ts_lo, ts)
+            ts_hi = ts if ts_hi is None else max(ts_hi, ts)
+        if row.get("heartbeat"):
+            hb += 1
+            continue
+        nonhb += 1
+        if kind:
+            per_kind_nonhb[kind] = per_kind_nonhb.get(kind, 0) + 1
     slate = len(slugs)
     return {
         "day": _day(path),
@@ -147,20 +147,15 @@ def postquote_day(path: Path) -> dict:
     """Per-day metrics for the adverse-selection diagnostic tape."""
     zero = 0
     nonnull = 0
-    with open(path) as fh:
-        for line in fh:
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if row.get("type") != "postquote":
-                continue
-            move = row.get("oriented_move")
-            if move is None:
-                continue  # fetch failure — excluded from the denominator
-            nonnull += 1
-            if move == 0.0:
-                zero += 1
+    for row in read_rows(path):
+        if row.get("type") != "postquote":
+            continue
+        move = row.get("oriented_move")
+        if move is None:
+            continue  # fetch failure — excluded from the denominator
+        nonnull += 1
+        if move == 0.0:
+            zero += 1
     return {"day": _day(path), "zero": zero, "nonnull": nonnull}
 
 
@@ -168,17 +163,12 @@ def intents_day(path: Path) -> dict:
     """Per-day count of gate-passing crossings in the dry-run intent ledger."""
     gate_passing = 0
     total = 0
-    with open(path) as fh:
-        for line in fh:
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if row.get("type") != "order_intent":
-                continue
-            total += 1
-            if not str(row.get("status", "")).startswith("skipped:"):
-                gate_passing += 1
+    for row in read_rows(path):
+        if row.get("type") != "order_intent":
+            continue
+        total += 1
+        if not str(row.get("status", "")).startswith("skipped:"):
+            gate_passing += 1
     return {"day": _day(path), "gate_passing": gate_passing, "total": total}
 
 
@@ -204,12 +194,14 @@ def check_venue_book_change(days: list[dict]) -> list[dict]:
         ]
         if not comparable:
             out.append({**d, "flag": False, "verdict": "insufficient_baseline",
-                        "baseline_median": None, "hb_baseline_median": None})
+                        "baseline_median": None, "hb_baseline_median": None,
+                        "span_baseline_median": None})
             continue
         median = statistics.median(p["ratio"] for p in comparable)
         if d["ratio"] >= CHECK1_RATIO_FLOOR * median:
             out.append({**d, "flag": False, "verdict": "ok",
-                        "baseline_median": median, "hb_baseline_median": None})
+                        "baseline_median": median, "hb_baseline_median": None,
+                        "span_baseline_median": None})
             continue
         hb_median = statistics.median(p["hb_per_slug"] for p in comparable)
         # Coverage is checked BEFORE heartbeat density. A partially-covered day
@@ -354,7 +346,12 @@ def _fmt_human(report: dict) -> str:
     return "\n".join(lines)
 
 
-RECENT_DAYS = 2  # today + yesterday: an overnight collapse must not wait a day
+# today + yesterday. Two days because the checks are keyed on UTC day files
+# while the timer fires on local time, so 'today' flips mid-run for part of
+# the day; a one-day window would miss a collapse that starts in the evening
+# local and lands in the next UTC file. Not measured — stated as reasoning,
+# unlike the ratio thresholds above, which carry measured baselines.
+RECENT_DAYS = 2
 
 
 def flagged_recently(*day_lists, today: str | None = None) -> bool:
@@ -377,17 +374,31 @@ def flagged_recently(*day_lists, today: str | None = None) -> bool:
     )
 
 
+# The baseline looks back CHECK1_WINDOW_DAYS and the table shows REPORT_DAYS, so
+# nothing older than their sum can affect any output. Parsing the whole corpus
+# anyway made this script O(all-time) for an O(14 days) question: measured
+# 2026-09-07, a run read ~18.4 MB across the three globs, hourly, of which all but
+# today's (and a just-rolled-over yesterday's) file is immutable and re-read for
+# nothing. These directories only ever grow — pmus/books grew 5.5x in one day.
+SCAN_DAYS = CHECK1_WINDOW_DAYS + REPORT_DAYS + 1
+
+
+def _recent_files(directory: Path, prefix: str) -> list[Path]:
+    """The newest SCAN_DAYS day files for a tape. Day files sort by name."""
+    return sorted(directory.glob(f"{prefix}-*.jsonl"))[-SCAN_DAYS:]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
-    books_days = [books_day(p) for p in sorted((config.DATA_DIR / "pmus").glob("books-*.jsonl"))]
+    books_days = [books_day(p) for p in _recent_files(config.DATA_DIR / "pmus", "books")]
     postquote_days = [
-        postquote_day(p) for p in sorted((config.DATA_DIR / "shadow").glob("postquote-*.jsonl"))
+        postquote_day(p) for p in _recent_files(config.DATA_DIR / "shadow", "postquote")
     ]
     intents_days = [
-        intents_day(p) for p in sorted((config.DATA_DIR / "executor").glob("intents-*.jsonl"))
+        intents_day(p) for p in _recent_files(config.DATA_DIR / "executor", "intents")
     ]
     report = build_report(books_days, postquote_days, intents_days)
 
