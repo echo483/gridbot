@@ -98,6 +98,59 @@ arrives. NOT yet pre-registered; holdout boundary stamped `2026-09-07T06:39:27Z`
 
 Tests 994 green; `ruff check .` green.
 
+**09-08 addendum (overnight /loop — three things broke, all fixed or recorded):**
+
+1. **The EXEC1 fill bracket does not contain the truth** (`H-MAPENTRY1-NOTE11`).
+   With the trades tape live, the frozen UPPER bound (19.0% at the bid) fires
+   LESS often than the print-through floor (30.7%) that price priority
+   guarantees. A ceiling under a floor is not a bracket: every fill-rate and
+   per-fill number EXEC1 produced is invalid in the conservative direction, and
+   the held-out renders (−0.167 / −0.142) are VOID as numbers (their SIGN is not
+   established either way; re-rendering needs its own pre-registered amendment
+   and was NOT taken). Cause is misspecification, not tuning — the BBO recorder
+   polls at median 30.7s against continuous execution, and 14.0% of prints
+   (18.4% of notional) land outside BOTH bracketing polls. This independently
+   explains NOTE3's 0.4615 recall failure as blindness rather than low power.
+   New channel: `gridbot.analysis.trade_prints` (21 tests),
+   `scripts/fill_print_audit.py`, `docs/analysis/2026-09-08-fill-model-misspecification.md`.
+   **Any future maker lane computes fills from prints, never from `exec_fills` alone.**
+
+2. **`evidence_qa` read a silent tape as health.** Checks 1–3 key on days that
+   EXIST in their tape and the exit code is scoped to recent days, so a tape that
+   STOPS being written had no day to flag and the unit went green. This script is
+   the watchdog (`WatchdogSec=` is banned on these units), so the hole had no
+   backstop. Fixed: `check_tape_silence()` asserts each tape produced rows
+   recently, independent of what they said, OR'd into the exit code. Also two
+   end-to-end tests were time bombs — they asserted a wall-clock window against
+   fixed fixture days and had been FAILING on main; `--today` makes the calendar
+   injectable.
+
+3. **The timing chain's "43s pipeline" is ~90% game clock.** The legs summed to
+   ~4s against a 43.6s total, inviting the conclusion that 40s vanished in our
+   software; this session reached that wrong conclusion off the table before
+   checking it. The gap is `signal_wait` — the game's inter-round clock plus
+   where inside round N+1 the model first fires (median 29.2s; first instance a
+   median 28s into the round). Chain is now explicit and ADDITIVE (verified:
+   `mapentry.src_ts_ns == instance.ts_ns` in 728/728 events).
+   **Our controllable software cost is 4.19s median / 6.04s p90**, not 43s; the
+   dominant controllable term is poll granularity (median gap 13.9s).
+
+**H-CROSSVENUE1 is NOT ready to register, and the reason is capture, not method**
+(`docs/analysis/2026-09-08-crossvenue1-readiness.md`). The intl discovery fix
+delivered (0 → 110 intl CS2 match markets/day) and the orientation resolver was
+validated on a real inversion (BIG Academy/MORROW, corroborated independently by
+the PMUS slug order). But of the 14 markets that join per day, **9 (09-07) and 13
+(09-08) were never booked on ANY day** — including G2–Astralis and
+GamerLegion–FURIA — because `pmus_books` subscribes only from GRID `started`
+while PMUS lists a market a median 4.46h earlier. Observable population is
+**1–3 markets/day, not 14**. H-MAPENTRY1 died accruing 39 entries against a bar
+of 60; a holdout filed against today's capture repeats that by construction.
+**Gating item is now the pre-match PMUS capture gap**, exactly as the intl
+discovery fix was before it. Draft row (NOT filed, the user files):
+`docs/experiments/DRAFT-crossvenue1-registration.md`.
+
+Tests 1090 green; `ruff check .` green.
+
 ## Baseline 2026-09-04 (superseded — kept for lineage)
 
 Clean baseline, cut the morning after the 09-03 overnight loop: main is
