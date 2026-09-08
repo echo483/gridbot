@@ -208,7 +208,7 @@ lane's central symptom: a paper edge living entirely in orders that never filled
 (`H-MAPENTRY1-NOTE13`).
 
 **The number that matters for registration — settled after TWO corrections.**
-The clean unconditional median basis is **1.5 ticks (p90 9.0)**, below the
+The clean unconditional median basis is **1.5 ticks (p90 3.5 under pointwise liveness)**, below the
 proposed 2-tick clause (ii) bar. The arc: **1.5** (n=41, one market) → **2.0**
 (n≈1,400, but contaminated) → **1.5** (n=1,228, clean). The 2.0 was inflated by a
 single `pinned` book — one holding the identical quote (0.26, 0.27) for 95% of
@@ -289,11 +289,11 @@ exact-match selection is unambiguous.) The amendment in open decision 7 is now a
 efficiency question, not a repair.
 
 **The response read is now n=364 across 7 usable books** (coverage accrued
-overnight, 1 → 7 usable books). STALE/INFORMED/NO_FOLLOW = **120 / 42 / 134** (after excluding a `pinned` book that by construction could never follow anything).
+overnight, 1 → 7 usable books). STALE/INFORMED/NO_FOLLOW = **101 / 38 / 61** under TRAILING liveness (a book can track intl for hours then freeze mid-match; NO_FOLLOW collapses 55% once those windows are excluded).
 **The basis at STALE events is 2.5 ticks median with 61% ≥2 ticks — it clears
 clause (ii)'s proposed 2-tick floor**, and is the first evidence the conditional
 basis exceeds the 1.5-tick unconditional one. Follow lag 35.8s median against the
-150s order TTL. **INFORMED is 14.2%** — one pick-off in seven, the −6.5pt cost
+150s order TTL. **INFORMED is 19.0%** — one pick-off in five, and it has worsened at every correction (12.1% → 14.2% → 19.0%) as artifacts came out, the −6.5pt cost
 (NOTE6) in observable form, a real haircut on any expectancy. NO_FOLLOW remains
 modal at 55%, and persistence says a substantial share of those are intl
 reverting rather than PMUS being stale. Seven books over two days with no fill
@@ -301,11 +301,11 @@ model is not a verdict.
 
 **A fill model now exists on those events, and it is the binding term**
 (`maker_quote` + `trade_prints`, 118 training STALE events after the `pinned`
-exclusion, the engine's real 150s lifetime). Resting **at the touch**: **17.8%
+exclusion, the engine's real 150s lifetime). Resting **at the touch**: **19.2%
 CERTAIN** fill (a print traded
 THROUGH our price — price priority guarantees it), 33.6% including
-queue-dependent prints at our price. Resting **one tick inside**: **33.1%
-certain**, 51.7% possible. **95% of events had prints in the window**, so
+queue-dependent prints at our price. Resting **one tick inside**: **35.4%
+certain**, 55.6% possible. **95% of events had prints in the window**, so
 non-fills are about price, not a dead market. Two consequences: the signal rate
 and the basis both discount hard (~10 fills/day at current coverage), and the
 posting rule is a genuine choice — **+1 tick nearly doubles the fill rate and
@@ -349,6 +349,16 @@ are excluded by design — they pin definitions, not numbers. The check is teste
 to fire, since an audit that can only return empty is indistinguishable from a
 broken one.
 
+**Liveness must be applied POINTWISE, not once per book** (`book_liveness.Trailing`).
+`aec-cs2-lgc-mgc-2026-09-08` tracked intl within 0.5–2 ticks for three hours, then
+its mid **froze at 0.850 at 06:30** for the final hour while intl swung
+0.570→0.170→1.000 and the match resolved. Over the whole day it classifies `live`.
+Pointwise, the basis p90 falls **9.0 → 3.5 ticks** with the median unchanged at
+1.5 — **the entire long tail was books dying mid-match, not dislocation.** So
+there is no evidence of large intermittent cross-venue gaps. Both guards are
+needed and independent: trailing liveness fixes the PMUS side, the intl-freshness
+bound the intl side.
+
 **Orientation risk on the tradeable population is ZERO.** Design §7 called the
 join the lane's highest-risk component. Measured via the KG: **match markets 33/33
 orientable, map markets 0/66** — and it is systematic, not sporadic (every one of
@@ -373,7 +383,7 @@ clock** (intl can go stale between samples), while responses and fills join on t
 **intl event clock**, where intl is fresh by construction. An as-of join is only
 as trustworthy as the freshness of the side it reaches backwards into.
 
-Tests 1275 green; `ruff check` green on everything tracked (3 findings remain in
+Tests 1283 green; `ruff check` green on everything tracked (3 findings remain in
 the still-uncommitted `src/gridbot/kg/`).
 
 ## Baseline 2026-09-04 (superseded — kept for lineage)

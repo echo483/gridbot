@@ -118,13 +118,13 @@ observations.
 > | ≥5 ticks / 30s | 113 | 0.67/h | 6.5t | 23.5t |
 >
 > Why this matters for clause (ii): the **unconditional** clean basis is **1.5
-> ticks (p90 9.0) — BELOW this clause's own bar** (n=1,228 over 12 usable books
+> ticks (p90 3.5 under pointwise liveness) — BELOW this clause's own bar** (n=889
 > at a 600s freshness bound; addendum 9). This number was revised twice: 1.5 from
 > n=41 on one market, then "corrected" to 2.0 at n≈1,400, then back to 1.5 once a
 > **`pinned`** book was excluded — one holding the identical quote for 95% of its
 > observations and supplying 54% of the ≥10-tick tail.
 >
-> The conditional basis at STALE events measures **2.5 ticks with 60.8% ≥2t**, so
+> The conditional basis at STALE events measures **2.5 ticks with 61.4% ≥2t**, so
 > the signal widens the gap by a **full tick**. Read the bar against the *decayed*
 > gap regardless, since about a third of an intl move unwinds inside a 150s order.
 >
@@ -150,11 +150,16 @@ favourable side.
 > the truth. EXEC1's machinery is reused for its **calibration-gate discipline**
 > only, never for its observation channel.
 
-> **Fill feasibility is now measured, and it is the binding term.** On 118
-> training STALE events (`trade_prints`, the engine's real 150s lifetime): a
-> maker resting **at the touch** is CERTAIN-filled **17.8%** of the time (33.1%
-> including queue-dependent prints at our price); resting **one tick inside**,
-> **33.1%** certain (51.7%). 95% of events had prints in the window, so non-fills
+> **Fill feasibility is now measured, and it is the binding term.** On 99
+> training STALE events under pointwise liveness (`trade_prints`, the engine's
+> real 150s lifetime): a maker resting **at the touch** is CERTAIN-filled
+> **19.2%** of the time (35.4% including queue-dependent prints at our price);
+> resting **one tick inside**, **35.4%** certain (55.6%).
+>
+> **And price the adverse selection.** The INFORMED rate — PMUS moved first, we
+> get picked off — is **19.0%**, nearly one event in five. It has worsened at
+> every correction tonight (12.1% → 14.2% → 19.0%) as measurement artifacts were
+> removed, which is the direction that should make a registrant cautious. 95% of events had prints in the window, so non-fills
 > are about price, not a dead market. Clause (iii) must therefore be rendered on
 > **filled** orders at a stated posting rule, and the posting rule is a real
 > choice: +1 tick nearly doubles the fill rate and spends 40% of a 2.5-tick

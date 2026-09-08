@@ -675,3 +675,73 @@ tick**, not half.
 | match | 117 | 77 | 14 | 12 | 6 | **2** | 6 |
 | map | 196 | 39 | 64 | 26 | 41 | **17** | 9 |
 
+---
+
+# Addendum 10: liveness has to be pointwise — the tail was books dying mid-match
+
+Addendum 9 caught one tail market with the `pinned` rule. The other,
+`aec-cs2-lgc-mgc-2026-09-08`, was a different failure and a more instructive one:
+median 1.5 ticks, **p90 38.5**, supplying 39% of the ≥10-tick tail.
+
+Tracing it in 10-minute windows makes it obvious:
+
+| window (UTC) | \|b\| p50 | PMUS mid | intl mid |
+|---|---|---|---|
+| 03:30 → 06:20 | 0.5 – 2.0 | tracks | tracks |
+| 06:30 | 28.0 | **0.850** | 0.570 |
+| 06:40 | 68.5 | **0.850** | 0.170 |
+| 06:50 | 46.5 | **0.850** | 0.395 |
+| 07:10 | 6.5 | **0.850** | 0.860 |
+| 07:20 | 15.0 | **0.850** | 1.000 |
+
+For three hours the venues tracked within 0.5–2 ticks. Then at **06:30 the PMUS
+mid froze at 0.850 and never moved again**, while intl swung 0.570 → 0.170 →
+1.000 and the match resolved. Not a dislocation — the book died mid-match.
+
+## The defect: liveness was evaluated once per book
+
+Over the whole day that book is comfortably `live`: three healthy hours outvote
+one dead one. `book_liveness`'s own docstring already said the classifier is
+causal *when handed a trailing window* — the basis instrument simply was not
+handing it one. `Trailing` makes that usage available, and the instruments now
+apply liveness **pointwise**.
+
+| | global liveness | **trailing (30 min)** |
+|---|---|---|
+| `lgc-mgc` p90 | 38.5t | **3.0t** |
+| `big-bb` p90 | 8.5t | **2.0t** |
+| **pooled basis** p50 / p90 | 1.5t / 9.0t | **1.5t / 3.5t** |
+| pooled ≥2t | 0.429 | 0.368 |
+
+**The entire long tail was books dying mid-match.** The median never moved. So
+there is *no* evidence of large intermittent cross-venue dislocations: the gap is
+consistently small and tight — **1.5 ticks median, 3.5 ticks p90**.
+
+Both guards are needed and they are independent: trailing liveness fixes the PMUS
+side, the intl-freshness bound fixes the intl side. Unbounded intl age still
+reports 7.00 ticks even with trailing liveness on.
+
+## What it does to the response labels — and the pick-off rate gets worse
+
+| | global | **trailing** |
+|---|---|---|
+| n | 296 | 200 |
+| STALE | 120 | **101** |
+| INFORMED | 42 | **38** |
+| NO_FOLLOW | 134 | **61** |
+| INFORMED share | 14.2% | **19.0%** |
+| \|basis\| at STALE | 2.5t | 2.5t |
+| follow lag p50 | 36.9s | 35.7s |
+| fills at the touch | 17.8% | **19.2%** |
+| fills at +1 tick | 33.1% | **35.4%** |
+
+**NO_FOLLOW collapses by 55%**, because a dead book cannot follow anything —
+another chunk of "the gap opens and does not close" was our own capture. The mix
+is now STALE 50.5%, INFORMED 19.0%, NO_FOLLOW 30.5%.
+
+**But INFORMED rises to 19.0% — nearly one event in five.** Across the night that
+figure has gone 12.1% → 14.2% → 19.0%, worsening at every step as artifacts were
+removed. It is the −6.5pt fill-selection cost (NOTE6) in observable form, it is
+the single most decision-relevant number here, and every correction has moved it
+the wrong way for the lane.
+

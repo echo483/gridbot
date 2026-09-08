@@ -51,6 +51,7 @@ FAILS CLOSED. Too little evidence is ``no_data``, never ``live``.
 
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass
 
 # Defaults measured on data/pmus/books-2026090[678].jsonl, match books, 49
@@ -184,3 +185,57 @@ def classify(
         median_spread=round(med_sp, 4) if med_sp is not None else None,
         modal_quote_share=round(modal, 4) if modal is not None else None,
     )
+
+
+# --- trailing-window liveness -----------------------------------------------
+
+
+DEFAULT_TRAILING_WINDOW_NS = 1_800_000_000_000   # 30 min
+TRAILING_MIN_OBS = 10
+TRAILING_MIN_SPAN_S = 300.0
+
+
+class Trailing:
+    """Was this book alive in the ``window`` ENDING at each instant?
+
+    A book does not have to be dead for its whole life to poison a measurement.
+    `aec-cs2-lgc-mgc-2026-09-08` tracked intl within 0.5-2 ticks for three hours,
+    then its mid froze at 0.850 at 06:30 and stayed there for the last hour while
+    intl swung 0.570 -> 0.170 -> 1.000 and the match resolved. Classified over the
+    WHOLE day it is comfortably `live`; the frozen hour supplied its entire
+    38.5-tick p90.
+
+    `classify` already documents that it is causal when handed a trailing window.
+    This is that usage made available, so a consumer applies liveness POINTWISE
+    rather than once per book. Pooled effect on the cross-venue basis: p90 falls
+    from 9.0 ticks to 3.5 while the median is unchanged at 1.5 — the long tail
+    was books dying mid-match, not dislocation.
+
+    Thresholds are looser than the global ones on purpose: a 30-minute slice
+    holds far fewer observations than a day, so the global `min_obs`/`min_span_s`
+    would report `no_data` for every point.
+    """
+
+    __slots__ = ("_cache", "_kw", "_rows", "_ts", "_window")
+
+    def __init__(self, rows: list[tuple[int, float | None, float | None]],
+                 window_ns: int = DEFAULT_TRAILING_WINDOW_NS, **kw) -> None:
+        self._rows = sorted(rows)
+        self._ts = [r[0] for r in self._rows]
+        self._window = window_ns
+        self._kw = {"min_obs": TRAILING_MIN_OBS,
+                    "min_span_s": TRAILING_MIN_SPAN_S, **kw}
+        self._cache: dict[int, Liveness] = {}
+
+    def at(self, t_ns: int) -> Liveness:
+        """Liveness over ``(t - window, t]``. Cached per instant."""
+        hit = self._cache.get(t_ns)
+        if hit is None:
+            lo = bisect.bisect_left(self._ts, t_ns - self._window)
+            hi = bisect.bisect_right(self._ts, t_ns)
+            hit = classify(self._rows[lo:hi], **self._kw)
+            self._cache[t_ns] = hit
+        return hit
+
+    def usable_at(self, t_ns: int) -> bool:
+        return self.at(t_ns).usable_for_basis

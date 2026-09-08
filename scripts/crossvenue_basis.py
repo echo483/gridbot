@@ -45,6 +45,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from gridbot.analysis.book_liveness import Trailing
 from gridbot.analysis.book_liveness import classify as classify_book
 from gridbot.analysis.crossvenue_basis import (
     basis_series,
@@ -137,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     # while ANY bound from 3600s down to 2s gives a stable 1.95-2.00 ticks at a
     # median age under a second. Printing one pooled figure here would have
     # shipped the 7.00.
-    print("\nLIVE/SLUGGISH BOOKS ONLY, by intl-quote freshness bound")
+    print("\nTRAILING-LIVE BOOKS ONLY, by intl-quote freshness bound")
     print("(descriptive -- no edge claim, no verdict):")
     print(f"{'max intl age':>14}{'n':>7}{'|basis| ticks':>15}{'p90':>8}"
           f"{'>=2t':>7}{'age p50 s':>11}")
@@ -145,7 +146,12 @@ def main(argv: list[str] | None = None) -> int:
         cap = int(cap_s * 1e9) if cap_s else None
         pts = []
         for j, iq, pq in clean_series:
-            pts += basis_series(pq, iq, j.orientation, cap)
+            # Liveness POINTWISE, not once per book: a book can track intl for
+            # three hours and then freeze for the last one, and the frozen hour
+            # supplies the whole tail. Pooled effect: p90 9.0t -> 3.5t.
+            tr = Trailing([(q.t_ns, q.bid, q.ask) for q in pq])
+            pts += [b for b in basis_series(pq, iq, j.orientation, cap)
+                    if tr.usable_at(b.t_ns)]
         st = summarise(pts)
         if not st["n"]:
             continue

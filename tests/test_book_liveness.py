@@ -12,6 +12,7 @@ import pytest
 
 from gridbot.analysis.book_liveness import (
     DEFAULT_MIN_SPAN_S,
+    Trailing,
     classify,
 )
 
@@ -208,3 +209,63 @@ class TestPinned:
     def test_one_sidedness_still_outranks_pinning(self):
         q = [(i * 10**11, None, None) for i in range(40)]
         assert classify(q).verdict == "one_sided"
+
+
+class TestTrailing:
+    """Liveness applied POINTWISE, not once per book.
+
+    THE CASE. aec-cs2-lgc-mgc-2026-09-08 tracked intl within 0.5-2 ticks for
+    three hours, then its mid froze at 0.850 at 06:30 and stayed there for the
+    final hour while intl swung 0.570 -> 0.170 -> 1.000 and the match resolved.
+    Over the whole day it classifies `live`; the frozen hour supplied its entire
+    38.5-tick p90. Pooled, trailing liveness takes the basis p90 from 9.0 to 3.5
+    and leaves the median at 1.5.
+    """
+
+    def _alive_then_frozen(self, n_live=120, n_frozen=120, step_s=30):
+        step = int(step_s * 1e9)
+        out = [(i * step, round(0.50 + 0.01 * (i % 9), 4),
+                round(0.51 + 0.01 * (i % 9), 4)) for i in range(n_live)]
+        t0 = n_live * step
+        out += [(t0 + i * step, 0.84, 0.86) for i in range(n_frozen)]
+        return out
+
+    def test_a_book_alive_early_is_usable_early(self):
+        rows = self._alive_then_frozen()
+        tr = Trailing(rows)
+        assert tr.usable_at(rows[110][0]) is True
+
+    def test_the_same_book_is_NOT_usable_after_it_freezes(self):
+        rows = self._alive_then_frozen()
+        tr = Trailing(rows)
+        assert tr.usable_at(rows[-1][0]) is False
+
+    def test_the_whole_series_still_classifies_live_which_is_the_point(self):
+        assert classify(self._alive_then_frozen()).usable_for_basis is True
+
+    def test_thresholds_are_loosened_for_a_short_slice(self):
+        """A 30-minute slice holds far fewer rows than a day; the global
+        min_obs would report no_data for every point."""
+        rows = self._alive_then_frozen()
+        assert Trailing(rows).at(rows[110][0]).verdict != "no_data"
+
+    def test_the_verdict_is_available_not_just_the_boolean(self):
+        rows = self._alive_then_frozen()
+        assert Trailing(rows).at(rows[-1][0]).verdict in ("frozen", "pinned", "no_data")
+
+    def test_results_are_cached_per_instant(self):
+        rows = self._alive_then_frozen()
+        tr = Trailing(rows)
+        assert tr.at(rows[50][0]) is tr.at(rows[50][0])
+
+    def test_unsorted_input_is_sorted(self):
+        """Same verdicts whichever order the rows arrive in."""
+        rows = self._alive_then_frozen()
+        t_live, t_dead = rows[110][0], rows[-1][0]
+        shuffled = Trailing(list(reversed(rows)))
+        assert shuffled.usable_at(t_live) is True
+        assert shuffled.usable_at(t_dead) is False
+
+    def test_before_any_history_there_is_no_data(self):
+        rows = self._alive_then_frozen()
+        assert Trailing(rows).at(rows[0][0]).verdict == "no_data"
