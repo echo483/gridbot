@@ -321,11 +321,59 @@ class TestCheck3:
         assert out["d"]["flag"] is True
 
 
+class TestTapeSilence:
+    """Check 4: the backstop for a tape that stops speaking.
+
+    Checks 1-3 are keyed on days that EXIST in their tape and the exit code is
+    scoped to recent days, so a tape that stops being written has no day to flag.
+    Before this check the watchdog read that silence as health.
+    """
+
+    def test_a_live_tape_does_not_flag(self):
+        out = eq.check_tape_silence(
+            {"t": [("20260905", 10), ("20260906", 10)]}, today="20260906")
+        assert out[0]["flag"] is False
+        assert out[0]["newest_day"] == "20260906"
+
+    def test_one_day_of_grace_is_allowed(self):
+        """Day files roll on UTC while the slate is diurnal, so a tape can be
+        legitimately empty for the first hours of a new UTC day."""
+        out = eq.check_tape_silence({"t": [("20260905", 10)]}, today="20260906")
+        assert out[0]["flag"] is False
+
+    def test_a_tape_that_stopped_flags(self):
+        """THE REGRESSION: before check 4 this exact shape exited 0."""
+        out = eq.check_tape_silence({"t": [("20260905", 10)]}, today="20260907")
+        assert out[0]["flag"] is True
+
+    def test_a_tape_that_never_spoke_flags(self):
+        out = eq.check_tape_silence({"t": []}, today="20260907")
+        assert out[0]["flag"] is True
+        assert out[0]["newest_day"] is None
+
+    def test_an_empty_file_is_silence_with_extra_steps(self):
+        """A day row with zero rows must not count as speaking."""
+        out = eq.check_tape_silence({"t": [("20260907", 0)]}, today="20260907")
+        assert out[0]["flag"] is True
+
+    def test_tapes_are_reported_independently(self):
+        out = {t["tape"]: t for t in eq.check_tape_silence(
+            {"live": [("20260907", 5)], "dead": [("20260901", 5)]},
+            today="20260907")}
+        assert out["live"]["flag"] is False
+        assert out["dead"]["flag"] is True
+
+    def test_silence_and_flagged_recently_share_one_cutoff(self):
+        """The exit code and the backstop must never disagree on 'recent'."""
+        cutoff = eq.check_tape_silence({"t": []}, today="20260907")[0]["cutoff"]
+        assert cutoff == eq._recent_cutoff("20260907")
+
+
 class TestEndToEnd:
     def test_reports_and_flagged(self, tmp_path, monkeypatch, capsys):
         _baseline(tmp_path)
         monkeypatch.setattr(eq.config, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(sys, "argv", ["evidence_qa.py"])
+        monkeypatch.setattr(sys, "argv", ["evidence_qa.py", "--today", "20260906"])
         with pytest.raises(SystemExit) as exc:
             eq.main()
         assert exc.value.code == 1
@@ -336,7 +384,8 @@ class TestEndToEnd:
     def test_json_reproduces_baseline_and_flags(self, tmp_path, monkeypatch, capsys):
         _baseline(tmp_path)
         monkeypatch.setattr(eq.config, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(sys, "argv", ["evidence_qa.py", "--json"])
+        monkeypatch.setattr(
+            sys, "argv", ["evidence_qa.py", "--json", "--today", "20260906"])
         with pytest.raises(SystemExit) as exc:
             eq.main()
         assert exc.value.code == 1
@@ -359,8 +408,33 @@ class TestEndToEnd:
         _write_postquote(tmp_path / "shadow", "20260904", zero=10, nonnull=100)
         _write_intents(tmp_path / "executor", "20260904", passing=3, total=50)
         monkeypatch.setattr(eq.config, "DATA_DIR", tmp_path)
-        monkeypatch.setattr(sys, "argv", ["evidence_qa.py"])
+        # Pinned to the fixture's own day: the tapes are live as of 20260904, so
+        # check 4 must stay quiet. Pinning to a later day would (correctly) flag.
+        monkeypatch.setattr(sys, "argv", ["evidence_qa.py", "--today", "20260904"])
         with pytest.raises(SystemExit) as exc:
             eq.main()
         assert exc.value.code == 0
         assert "all checks pass (exit 0)" in capsys.readouterr().out
+
+    def test_a_dead_tape_turns_the_unit_red_end_to_end(self, tmp_path,
+                                                       monkeypatch, capsys):
+        """Regression: all three checks pass on every day present, and the unit
+        must STILL go red because one tape stopped being written."""
+        _write_books(tmp_path / "pmus", "20260906", [("s", "match", 77, 90)])
+        _write_postquote(tmp_path / "shadow", "20260901", zero=10, nonnull=100)
+        _write_intents(tmp_path / "executor", "20260906", passing=3, total=50)
+        monkeypatch.setattr(eq.config, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(
+            sys, "argv", ["evidence_qa.py", "--json", "--today", "20260906"])
+        with pytest.raises(SystemExit) as exc:
+            eq.main()
+        assert exc.value.code == 1
+        report = json.loads(capsys.readouterr().out)
+        tapes = {t["tape"]: t for t in report["checks"]["tape_silence"]["tapes"]}
+        assert tapes["shadow/postquote"]["flag"] is True
+        assert tapes["pmus/books"]["flag"] is False
+        # No day-keyed check fired: silence is the ONLY reason the unit is red.
+        assert all(not d["flag"]
+                   for k in ("venue_book_change", "postquote_degeneracy",
+                             "gate_passing")
+                   for d in report["checks"][k]["days"])

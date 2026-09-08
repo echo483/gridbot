@@ -17,12 +17,18 @@ that must never be conflated:
   - venue went quiet => heartbeats keep flowing normally, non-heartbeat rows
                       collapse.
 
-Run: uv run python scripts/evidence_qa.py [--json]
+A fourth check closes the hole that day-scoping opens: because checks 1-3 are
+keyed on days that EXIST in their tape, a tape that STOPS being written emits no
+recent day, nothing flags, and the unit goes green — silence read as health. See
+check_tape_silence().
+
+Run: uv run python scripts/evidence_qa.py [--json] [--today YYYYMMDD]
 Exit: 0 when all checks pass, 1 when a check flags within the RECENT window
-(today or yesterday). The exit code drives the systemd unit's state, so it is
+(today or yesterday) OR a tape has gone silent. The day-keyed part is
 deliberately NOT 'did anything ever flag' — 2026-09-05 is a real past incident
 that sits in the tape permanently, and a unit red forever gets ignored within a
 week. The printed table still shows the full history; see flagged_recently().
+``--today`` pins the calendar for replay, and keeps the tests off the wall clock.
 """
 
 from __future__ import annotations
@@ -64,6 +70,17 @@ CHECK2_MIN_SAMPLES = 30     # ... and there are at least this many non-null valu
 # a genuinely dead slate does not false-positive.
 CHECK3_CONSECUTIVE = 2
 CHECK3_MIN_SLATE = 5        # a day's distinct-slug count must be >= this to count
+
+# --- Check 4: tape silence (all three tapes) -------------------------------
+# Checks 1-3 are each keyed on days that EXIST in their tape, and the exit code
+# is scoped to recent days (flagged_recently). A tape that stops being written
+# therefore emits no recent day at all, nothing flags, and the unit goes GREEN:
+# the watchdog reads SILENCE as health. That is the one failure an evidence-flow
+# monitor must never have, because it is indistinguishable from the healthy case
+# in every other check. This check asserts each tape is speaking, independent of
+# what it says. It is a BACKSTOP, not the primary liveness alarm -- gridbot-health
+# runs every 5 minutes; this catches the case where a process is alive and
+# writing nothing.
 
 # --- Reporting -------------------------------------------------------------
 REPORT_DAYS = 7             # trailing days shown per check
@@ -257,8 +274,14 @@ def check_gate_passing(days: list[dict], books_slate: dict[str, int]) -> list[di
 
 
 def build_report(books_days: list[dict], postquote_days: list[dict],
-                 intents_days: list[dict]) -> dict:
-    """Assemble the full report from parsed per-day metrics."""
+                 intents_days: list[dict], today: str | None = None) -> dict:
+    """Assemble the full report from parsed per-day metrics.
+
+    ``today`` is injectable so the report is testable against a fixed calendar;
+    left None it reads the wall clock. Two end-to-end tests silently went green
+    for a week because they asserted on a wall-clock window with fixed fixture
+    days, and then failed the moment the calendar rolled past them.
+    """
     check1 = check_venue_book_change(books_days)
     check2 = check_postquote(postquote_days)
     books_slate = {d["day"]: d["slate"] for d in books_days}
@@ -268,6 +291,17 @@ def build_report(books_days: list[dict], postquote_days: list[dict],
         "postquote_degeneracy": check2[-REPORT_DAYS:],
         "gate_passing": check3[-REPORT_DAYS:],
     }
+    # Liveness is measured on the FULL day lists, not the reported tail: the
+    # question is whether the tape spoke recently, which a trailing slice
+    # cannot make worse but should not be trusted to answer.
+    silence = check_tape_silence(
+        {
+            "pmus/books": [(d["day"], d["total"]) for d in books_days],
+            "shadow/postquote": [(d["day"], d["nonnull"]) for d in postquote_days],
+            "executor/intents": [(d["day"], d["total"]) for d in intents_days],
+        },
+        today=today,
+    )
     return {
         "provisional": {
             "nights": PROVISIONAL_NIGHTS,
@@ -286,15 +320,26 @@ def build_report(books_days: list[dict], postquote_days: list[dict],
                 "metric": "rows whose status does not start with 'skipped:'",
                 "days": reported["gate_passing"],
             },
+            "tape_silence": {
+                "metric": "newest day with rows, per tape (silence backstop)",
+                "tapes": silence,
+            },
         },
-        # Scoped to recent days on purpose — see flagged_recently().
-        "flagged": flagged_recently(
-            reported["venue_book_change"],
-            reported["postquote_degeneracy"],
-            reported["gate_passing"],
+        # Scoped to recent days on purpose — see flagged_recently(). Silence is
+        # OR'd in separately BECAUSE it is not day-scoped: a tape that stopped
+        # being written has no recent day for flagged_recently() to find.
+        "flagged": (
+            flagged_recently(
+                reported["venue_book_change"],
+                reported["postquote_degeneracy"],
+                reported["gate_passing"],
+                today=today,
+            )
+            or any(t["flag"] for t in silence)
         ),
         "flagged_any_day": (
-            any(d["flag"] for d in reported["venue_book_change"])
+            any(t["flag"] for t in silence)
+            or any(d["flag"] for d in reported["venue_book_change"])
             or any(d["flag"] for d in reported["postquote_degeneracy"])
             or any(d["flag"] for d in reported["gate_passing"])
         ),
@@ -341,6 +386,15 @@ def _fmt_human(report: dict) -> str:
     for d in c3["days"]:
         flag = "FLAG" if d["flag"] else "ok"
         lines.append(f"  {d['day']}  {d['gate_passing']:>7}  {d['slate']:>5}  {flag}")
+    c4 = report["checks"]["tape_silence"]
+    lines.append("check 4 tape silence — newest day with rows (backstop)")
+    lines.append("  tape                newest    cutoff    flag")
+    for t in c4["tapes"]:
+        flag = "FLAG" if t["flag"] else "ok"
+        lines.append(
+            f"  {t['tape']:<18}  {t['newest_day'] or '—':<8}  "
+            f"{t['cutoff']:<8}  {flag}"
+        )
     lines.append("RESULT: " + ("FLAGGED (exit 1)" if report["flagged"]
                                else "all checks pass (exit 0)"))
     return "\n".join(lines)
@@ -354,6 +408,46 @@ def _fmt_human(report: dict) -> str:
 RECENT_DAYS = 2
 
 
+def _recent_cutoff(today: str | None = None) -> str:
+    """The oldest day still inside the RECENT window, as YYYYMMDD.
+
+    Shared by flagged_recently() and check_tape_silence() so the exit code and
+    the silence backstop can never disagree about what "recent" means.
+    """
+    if today is None:
+        today = datetime.now(UTC).strftime("%Y%m%d")
+    return (datetime.strptime(today, "%Y%m%d").replace(tzinfo=UTC)
+            - timedelta(days=RECENT_DAYS - 1)).strftime("%Y%m%d")
+
+
+def check_tape_silence(tapes: dict[str, list[tuple[str, int]]],
+                       today: str | None = None) -> list[dict]:
+    """Flag any tape whose newest ROW-BEARING day falls outside the recent window.
+
+    ``tapes`` maps a tape name to ``(day, n_rows)`` pairs. A day with zero rows
+    does not count as speaking: a file that exists and is empty is silence with
+    extra steps. A tape with no days at all flags too — never having spoken is
+    not health.
+
+    Grace is a full day (RECENT_DAYS) because the day files roll on UTC while
+    the slate is diurnal, so a tape can legitimately be empty for the first
+    hours of a new UTC day. That makes this a slow alarm by construction; it is
+    the backstop under the 5-minute health check, not a replacement for it.
+    """
+    cutoff = _recent_cutoff(today)
+    out: list[dict] = []
+    for name in sorted(tapes):
+        days = [d for d, n in tapes[name] if n > 0]
+        newest = max(days) if days else None
+        out.append({
+            "tape": name,
+            "newest_day": newest,
+            "cutoff": cutoff,
+            "flag": newest is None or newest < cutoff,
+        })
+    return out
+
+
 def flagged_recently(*day_lists, today: str | None = None) -> bool:
     """Whether any check flags within the RECENT window.
 
@@ -364,10 +458,7 @@ def flagged_recently(*day_lists, today: str | None = None) -> bool:
     printed table still carries the full history for context; only the exit code
     is scoped. ``flagged_any_day`` in the report keeps the unscoped answer.
     """
-    if today is None:
-        today = datetime.now(UTC).strftime("%Y%m%d")
-    cutoff = (datetime.strptime(today, "%Y%m%d").replace(tzinfo=UTC)
-              - timedelta(days=RECENT_DAYS - 1)).strftime("%Y%m%d")
+    cutoff = _recent_cutoff(today)
     return any(
         d.get("flag") and str(d.get("day", "")) >= cutoff
         for days in day_lists for d in days
@@ -391,6 +482,10 @@ def _recent_files(directory: Path, prefix: str) -> list[Path]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--json", action="store_true")
+    ap.add_argument(
+        "--today", default=None, metavar="YYYYMMDD",
+        help="pin the calendar (replay a past run; keeps tests off the wall clock)",
+    )
     args = ap.parse_args()
 
     books_days = [books_day(p) for p in _recent_files(config.DATA_DIR / "pmus", "books")]
@@ -400,7 +495,7 @@ def main() -> None:
     intents_days = [
         intents_day(p) for p in _recent_files(config.DATA_DIR / "executor", "intents")
     ]
-    report = build_report(books_days, postquote_days, intents_days)
+    report = build_report(books_days, postquote_days, intents_days, today=args.today)
 
     if args.json:
         print(json.dumps(report, indent=1))
