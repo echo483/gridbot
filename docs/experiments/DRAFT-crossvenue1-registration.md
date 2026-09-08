@@ -16,17 +16,24 @@ rail 2 and hypothesis development."*
 ## ⚠ Read this before filing
 
 **Do not file this row yet.** `docs/analysis/2026-09-08-crossvenue1-readiness.md`
-measured the observable population at **1–3 PMUS match markets per day**, not the
-14 the join finds and not the 790–1,645 round-ends the design assumed. Of 14
-joined markets, 9 (09-07) and 13 (09-08) were **never booked on any day** —
-including G2–Astralis and GamerLegion–FURIA — because `pmus_books` subscribes
-only from GRID `started` while PMUS lists a market a median 4.46h earlier.
+measured the observable population at **5 PMUS match markets on 2026-09-07** (the
+one complete day) out of 14 that join — not the 14, and not the 790–1,645
+round-ends the design assumed. The 6 genuine losses split evenly across two
+independent capture gaps:
 
-H-MAPENTRY1 closed after accruing 39 qualifying entries against a bar of 60. A
-holdout filed against today's capture repeats that failure by construction.
+- **(A)** `pmus_books` subscribes from GRID `started`, while PMUS lists a market
+  a median 4.46h earlier — 3 of 14.
+- **(B)** `config.DISCOVERY_WINDOW` is −4h/+1h while the PMUS mapper queries
+  −6h/+30h, so the GRID poller never discovered the series at all (verified
+  against `discovery-*.jsonl`: never seen, not pruned) — 3 of 14.
 
-**Prerequisite before filing: close the pre-match PMUS capture gap, then
-re-measure the observable rate and set clause (iv) from the real number.**
+H-MAPENTRY1 closed after accruing 39 qualifying entries against a bar of 60. At
+~5 observable markets/day, a holdout filed against today's capture accrues at
+about a third of the design's assumed rate.
+
+**Prerequisite before filing: close BOTH capture gaps — fixing one leaves roughly
+half the loss — then re-measure the observable rate over several full days and
+set clause (iv) from that number.**
 
 ---
 
@@ -133,6 +140,8 @@ an agent's, never a default.
 3. **Clause (iii) calibration gate**: what recall/precision bar, given NOTE3's
    lesson that a soft gate gets rendered past?
 4. **Clause (iv)**: set after re-measurement.
-5. **Pre-match capture is a policy call** — subscribing PMUS books from listing
-   rather than kickoff widens what we record; the trades tape already required a
-   credential decision.
+5. **Both capture widenings are policy calls** — subscribing PMUS books from
+   listing rather than kickoff, and widening the GRID discovery horizon, each
+   increase poll load against published rate limits (GRID Central Data 20/min,
+   Series State 180/min global and 6/min per series). The trades tape already
+   required a credential decision; these require a budget one.

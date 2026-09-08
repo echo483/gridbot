@@ -139,14 +139,19 @@ Tests 994 green; `ruff check .` green.
 (`docs/analysis/2026-09-08-crossvenue1-readiness.md`). The intl discovery fix
 delivered (0 → 110 intl CS2 match markets/day) and the orientation resolver was
 validated on a real inversion (BIG Academy/MORROW, corroborated independently by
-the PMUS slug order). But of the 14 markets that join per day, **9 (09-07) and 13
-(09-08) were never booked on ANY day** — including G2–Astralis and
-GamerLegion–FURIA — because `pmus_books` subscribes only from GRID `started`
-while PMUS lists a market a median 4.46h earlier. Observable population is
-**1–3 markets/day, not 14**. H-MAPENTRY1 died accruing 39 entries against a bar
-of 60; a holdout filed against today's capture repeats that by construction.
-**Gating item is now the pre-match PMUS capture gap**, exactly as the intl
-discovery fix was before it. Draft row (NOT filed, the user files):
+the PMUS slug order). But of the 14 markets that join per day, only **5 were
+observable on 09-07** (the one complete day; 09-08 is a partial UTC day and its
+slate was largely unplayed). The 6 genuine losses split evenly across TWO
+independent capture gaps — fixing either alone leaves half the loss:
+(A) `pmus_books` subscribes from GRID `started` while PMUS lists a market a
+median 4.46h earlier (3 of 14); (B) `config.DISCOVERY_WINDOW` is **−4h/+1h**
+while the PMUS mapper queries **−6h/+30h**, so the poller never discovered the
+series at all — verified against `discovery-*.jsonl`, never seen rather than
+pruned (3 of 14). Same bug class as the intl and PMUS sweeps before it: a scoped
+query silently starving a lane. H-MAPENTRY1 died accruing 39 entries against a
+bar of 60; at ~5 observable markets/day a holdout filed against today's capture
+accrues at about a third of the rate the design assumed. **Both capture gaps are
+now gating**, ahead of the registry row. Draft row (NOT filed, the user files):
 `docs/experiments/DRAFT-crossvenue1-registration.md`.
 
 Tests 1090 green; `ruff check .` green.

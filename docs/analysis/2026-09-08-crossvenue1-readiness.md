@@ -43,45 +43,71 @@ This is the first live evidence that `intl_price_as_pmus_yes` is being handed
 correct orientations. It does not retire the risk (one case is not a rate), but
 the component now has a real positive.
 
-## 3. THE BLOCKING FINDING: we cannot see the book we would trade
+## 3. THE BLOCKING FINDING: we mostly cannot see the book we would trade
 
-Of the 14 joined match markets per day, PMUS book coverage exists for almost
-none of them:
+> **Correction (same session).** An earlier revision of this section reported
+> "9 of 14 (09-07) and 13 of 14 (09-08) never booked on any day" and attributed
+> all of it to `pmus_books` subscribing from GRID `started`. Both were wrong.
+> The counts folded in matches that had not yet been played, and the attribution
+> named one subsystem when there are two. Corrected below; the conclusion that
+> the observable population is materially smaller than the join count survives,
+> at a less severe magnitude.
 
-| day | joined | booked that day | booked another day | **never booked, any day** |
-|---|---|---|---|---|
-| 20260907 | 14 | 3 | 2 | **9** |
-| 20260908 | 14 | 1 | 0 | **13** |
+Decomposed properly. 2026-09-08 is a partial UTC day (~6h old), so most of its
+slate had simply not been played yet; **2026-09-07 is the meaningful sample**:
 
-These are not markets that had yet to start. They were never captured at all,
-and they include the most liquid matches on the slate:
+| outcome for a joined market | 20260907 | 20260908 (partial) |
+|---|---|---|
+| **booked — we saw the execution venue** | **5** | 1 |
+| GRID polled the series, PMUS book blind | 3 | 1 |
+| GRID never discovered the series at all | 3 | 11 |
+| future match, not yet due (not a loss) | 3 | 1 |
 
-```
-aec-cs2-g2-ast-2026-09-08        G2 vs Astralis
-aec-cs2-gl-furia-2026-09-08      GamerLegion vs FURIA
-aec-cs2-all-faze-2026-09-08      FaZe
-aec-cs2-big-bb-2026-09-08
-```
+**Observable rate on the fuller day: 5 of 14 (36%).** Of the 6 genuine losses,
+the causes split evenly between two independent subsystems.
 
-**Mechanism, already named in design §10 and never fixed:**
-`LiveTracker.live_maps()` (`pmus_books.py:87-102`) gates on GRID `started`, so
-PMUS books are recorded only from kickoff — while PMUS lists a market a median
-**4.46h** before scheduled start. `MAX_SLUGS_PER_CYCLE=8` against up to 27
-concurrent slugs compounds it. The pre-match window, which the design identifies
-as where a thin book is *most* mispriced, is entirely uncaptured.
+### Cause A — PMUS books blind on a series GRID *was* polling (3 of 14)
 
-### Why this is sequencing-critical, not a detail
+`LiveTracker.live_maps()` (`pmus_books.py:87-102`) gates on GRID `started`, while
+PMUS lists a market a median **4.46h** before scheduled start (design §10).
+`MAX_SLUGS_PER_CYCLE=8` against up to 27 concurrent slugs compounds it. The
+pre-match window the design identifies as *most* mispriced is uncaptured.
 
-H-MAPENTRY1 died of exactly this. Its holdout needed 60 deduped qualifying
-entries and accrued **39** across its whole window — no path to a verdict, and
-the lane closed without ever being falsified (`H-MAPENTRY1-CLOSE1`).
+### Cause B — GRID never discovered the series (3 of 14, same-day matches)
+
+Verified against `data/grid/discovery-*.jsonl`: these series were **never seen**,
+not tracked-then-pruned. The mechanism is a window mismatch between two GRID
+queries that are supposed to describe the same slate:
+
+| consumer | scheduled-time window |
+|---|---|
+| `grid_poller` discovery (`config.DISCOVERY_WINDOW`) | **−4h to +1h** |
+| PMUS mapper (`us_mapping.fetch_grid_series`) | **−6h to +30h** |
+
+The mapper therefore knows about series the poller has not tracked. For a future
+match that is correct by design. But the poller's **1-hour forward horizon** means
+a series must be caught in roughly the four 15-minute sweeps before it starts —
+and a rescheduled start, a drifted start time, or a sweep that misses it loses the
+series for good (`_prune` then drops "never started and scheduled >12h ago").
+Three same-day 09-07 matches were lost exactly this way.
+
+This is the same bug class the repo has already paid for twice: a scoped sweep
+that silently starves a lane. `us_mapping.py:8-13` documents the PMUS instance
+("CS2 is buried under MLB/NFL... silently starved the first watch lane") and §10
+above documents the intl one.
+
+### Why this is sequencing-critical
+
+H-MAPENTRY1 died of exactly this arithmetic. Its holdout needed 60 deduped
+qualifying entries and accrued **39** across its whole window — no path to a
+verdict, and the lane closed without ever being falsified
+(`H-MAPENTRY1-CLOSE1`).
 
 The design argued CROSSVENUE1 escapes that: *"This lane sees more events in one
-night"* than MAPENTRY1's entire holdout. On the measured coverage it does not.
-The observable population is **1–3 markets/day**, not 14 and not 790–1,645
-round-ends. **A holdout pre-registered against today's capture would be starved
-by construction**, and would produce another INCONCLUSIVE lane closure eighteen
-days from now.
+night"* than MAPENTRY1's entire holdout. At **5 observable markets/day** that
+claim is not yet supported — and 6 of the 14 losses per day are fixable capture
+blindness, not market structure. **A holdout pre-registered against today's
+capture accrues at roughly a third of the rate the design assumed.**
 
 ## 4. What the fill channel changes for clause (iii)
 
@@ -104,10 +130,12 @@ lane, both favourable:
 The design's build order has the registry row at step 6, after the classifier.
 The coverage measurement says one item must move ahead of it.
 
-1. **Close the pre-match PMUS capture gap** — subscribe books from listing, not
-   from GRID `started`; raise or window `MAX_SLUGS_PER_CYCLE`. *This is now the
-   gating item, exactly as the intl discovery fix was before it.* Until it ships,
-   every day of holdout accrues 1–3 observable markets instead of 14.
+1. **Close BOTH capture gaps — they are gating, and they are independent.**
+   (A) subscribe PMUS books from listing rather than from GRID `started`, and
+   raise or window `MAX_SLUGS_PER_CYCLE`; (B) widen `config.DISCOVERY_WINDOW`'s
+   forward horizon so the poller's slate matches the mapper's, or seed the
+   tracker from the PMUS mappings it already reads. Each costs ~3 of 14 markets
+   a day. Fixing only one leaves roughly half the loss in place.
 2. Let coverage accrue and **re-measure the observable rate** — the starvation
    clause needs a real number, and today's cannot be it.
 3. Classifier + basis instrument on training data only (pre-boundary).
@@ -120,9 +148,11 @@ pre-registered PASS, and flipping it live is the user's own act.
 
 - No basis, lead, or edge is computed anywhere here. Coverage, orientation and
   observability only.
-- Two days of intl CS2 data is not a rate. The 14/day join count and the 1–3/day
-  observable count are both provisional and must be re-measured after the capture
-  fix.
+- Two days of intl CS2 data is not a rate, and only one of those days is
+  complete. The 14/day join count and the 5/day observable count are provisional
+  and must be re-measured after the capture fixes — on several full days.
+- The cause split (3 / 3) rests on a single complete day. It is enough to
+  establish that BOTH subsystems lose markets; it is not a stable ratio.
 - One correctly-resolved inversion is evidence for the resolver, not a
   measured accuracy. §7's refusal test remains the load-bearing guarantee.
 - The holdout boundary (`2026-09-07T06:39:27Z`) is untouched: nothing here reads
