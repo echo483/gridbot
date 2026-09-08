@@ -191,11 +191,25 @@ and **only 2 of 14 had ANY PMUS overlap** — intl supplied 6,661–173,487 even
 per market against PMUS's 0–85 observations. The channel asymmetry the thesis
 needs is confirmed (intl is a WS stream, **0.2s** stale at the median when we
 sample PMUS). The pooled 3.0-tick median basis is **n=98 from two markets and is
-not to be quoted**; one of the two looks like a dead PMUS book (12.5 ticks, 95%
-≥2 ticks — NOTE8's artifact). Next: enable `PMUS_PREMATCH_BOOKS`, decide the cap,
-accrue several full days, and classify dead books before pooling anything.
+not to be quoted**. **Dead-book classification now exists**
+(`gridbot.analysis.book_liveness`, 18 tests — three axes: two-sidedness,
+activity, width) and it removed **more than half the apparent basis**: pooling
+only live/sluggish books moves median |basis| **3.0 → 1.5 ticks** and p90
+**23.0 → 2.5**. One book with a **37-tick median spread** had supplied 57 of 98
+points. Population health, 2026-09-06/08: **match books 59.2% usable, map books
+9.4%** — an independent corroboration of NOTE9's map-book retirement, and a
+qualification of its headline (0.02 is the ROW median; per book the same tape
+carries 0.31–0.94 spreads).
 
-Tests 1137 green; `ruff check` green on everything tracked (3 findings remain in
+**The number that matters for registration:** the clean *unconditional* median
+basis is **1.5 ticks, below the DRAFT's proposed 2-tick clause (ii) bar**. Not a
+falsification — clause (ii) is about the basis *at a signal* and no signal exists
+yet — but the lane now visibly lives or dies on whether a signal selects the
+tail. Coverage remains the gate: of 46 training markets, 14 have intl data, 12
+have PMUS data, and **2 have both**. Next: enable `PMUS_PREMATCH_BOOKS`, decide
+the cap, accrue full days, then build the signal.
+
+Tests 1155 green; `ruff check` green on everything tracked (3 findings remain in
 the still-uncommitted `src/gridbot/kg/`).
 
 ## Baseline 2026-09-04 (superseded — kept for lineage)

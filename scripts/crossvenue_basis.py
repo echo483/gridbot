@@ -17,6 +17,12 @@ pre-registered boundary, then for each market builds
 and joins them AS-OF ON THE PMUS CLOCK (crossvenue_basis.basis_series): for each
 PMUS observation, what intl believed at that instant, never after it.
 
+BOOK LIVENESS IS APPLIED BEFORE POOLING. gridbot.analysis.book_liveness excludes
+frozen, one-sided and pathologically wide PMUS books, because each of those
+produces a large basis that is entirely an artifact -- the mechanism behind
+H-MAPENTRY1's phantom "+19pt post-shock edge" (NOTE8). Both pooled figures are
+printed so the size of the contamination is visible rather than asserted.
+
 READ THE COVERAGE COLUMN FIRST. The binding constraint on this lane is not the
 basis, it is that we mostly cannot see the venue we would trade -- see
 docs/analysis/2026-09-08-crossvenue1-readiness.md. A market with thousands of
@@ -42,6 +48,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from gridbot.analysis.book_liveness import classify as classify_book
 from gridbot.analysis.crossvenue_basis import (
     Quote,
     basis_series,
@@ -53,9 +60,18 @@ from gridbot.analysis.crossvenue_join import join_markets
 
 
 def load_mappings(data_dir: Path) -> tuple[dict[str, int], list[dict]]:
-    """(first-mapped ns per series, newest mapping row per series) over the corpus."""
+    """(first-mapped ns per series, best mapping row per series) over the corpus.
+
+    "Best" is the newest row that still CARRIES us_markets, not simply the newest
+    row. The mapper re-snapshots every 5 minutes and a settled market drops out of
+    ``us_markets``, so keying on the newest row makes the join decay as matches
+    finish: the same command produced 18 joined markets and then 8 an hour later.
+    An instrument that answers differently each time it is run cannot support a
+    holdout read, so the population is pinned to the mapping as it stood while the
+    market was actually quoted.
+    """
     first: dict[str, int] = {}
-    latest: dict[str, dict] = {}
+    best: dict[str, dict] = {}
     for p in sorted((data_dir / "pmus").glob("mappings-*.jsonl")):
         with p.open() as fh:
             for line in fh:
@@ -68,8 +84,9 @@ def load_mappings(data_dir: Path) -> tuple[dict[str, int], list[dict]]:
                 sid, t = str(r["grid_series_id"]), int(r.get("ts_ns") or 0)
                 if sid not in first or t < first[sid]:
                     first[sid] = t
-                latest[sid] = r
-    return first, list(latest.values())
+                if r.get("us_markets") or sid not in best:
+                    best[sid] = r
+    return first, list(best.values())
 
 
 def load_intl_catalog(days: list[str], data_dir: Path) -> list[dict]:
@@ -181,26 +198,44 @@ def main(argv: list[str] | None = None) -> int:
     pmus = load_pmus_quotes({j.pmus_market_slug for j in train}, a.days, data_dir)
     max_age = int(a.max_intl_age_s * 1e9) if a.max_intl_age_s else None
 
-    print(f"{'market':<32} {'intl evts':>9} {'pmus obs':>8} {'n':>5} "
+    print(f"{'market':<32} {'intl evts':>9} {'pmus obs':>8} {'book':>9} {'n':>5} "
           f"{'|basis|t':>9} {'>=2t':>5} {'age s':>7}")
-    pooled, covered = [], 0
+    pooled, clean, covered = [], [], 0
     for j in train:
         iq = intl.get(j.intl.yes_token, [])
         pq = pmus.get(j.pmus_market_slug, [])
+        # NOTE8's artifact is excluded HERE, before any number is formed -- a
+        # frozen or 37-tick-wide book produces a large, entirely fake basis.
+        lv = classify_book([(q.t_ns, q.bid, q.ask) for q in pq])
         pts = basis_series(pq, iq, j.orientation, max_age)
         pooled += pts
+        if lv.usable_for_basis:
+            clean += pts
         s = summarise(pts)
         if s["n"]:
             covered += 1
-            print(f"{j.pmus_market_slug[:32]:<32} {len(iq):>9,} {len(pq):>8,} {s['n']:>5,} "
+            print(f"{j.pmus_market_slug[:32]:<32} {len(iq):>9,} {len(pq):>8,} "
+                  f"{lv.verdict:>9} {s['n']:>5,} "
                   f"{s['median_abs_basis_ticks']:>9.2f} {s['frac_abs_ge_2_ticks']:>5.2f} "
                   f"{s['median_intl_age_s']:>7.1f}")
         else:
-            print(f"{j.pmus_market_slug[:32]:<32} {len(iq):>9,} {len(pq):>8,} {0:>5}"
-                  f"   (no PMUS coverage)")
-    print(f"\ncoverage: {covered} of {len(train)} training markets had ANY overlap")
-    print("POOLED (training only; descriptive -- no edge claim, no verdict):")
+            print(f"{j.pmus_market_slug[:32]:<32} {len(iq):>9,} {len(pq):>8,} "
+                  f"{lv.verdict:>9} {0:>5}   (no PMUS coverage)")
+    n_intl = sum(1 for j in train if intl.get(j.intl.yes_token))
+    n_pmus = sum(1 for j in train if pmus.get(j.pmus_market_slug))
+    n_both = sum(1 for j in train
+                 if intl.get(j.intl.yes_token) and pmus.get(j.pmus_market_slug))
+    print(f"\ncoverage over {len(train)} training markets:")
+    print(f"   intl series present            {n_intl:>4}   "
+          f"(intl CS2 capture began 2026-09-07)")
+    print(f"   PMUS book present              {n_pmus:>4}")
+    print(f"   BOTH -- a basis is computable  {n_both:>4}")
+    print(f"   with actual overlapping points {covered:>4}")
+    print("\nPOOLED, ALL BOOKS (contaminated -- shown only so the difference is visible):")
     for k, v in summarise(pooled).items():
+        print(f"   {k:<26} {v}")
+    print("\nPOOLED, LIVE/SLUGGISH BOOKS ONLY (descriptive -- no edge claim, no verdict):")
+    for k, v in summarise(clean).items():
         print(f"   {k:<26} {v}")
     return 0
 
