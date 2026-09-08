@@ -27,16 +27,16 @@ except the last.
 | intl reprices | **1.36 events/h** (≥2t/30s, 168.8 market-hours) | works |
 | the move is real, not flicker | **54.8% two-sided** overall; **83.3%** on tradeable markets | works |
 | real moves carry information | two-sided retrace **−0.000 @150s** (52% held) vs one-sided **0.500** (27%) | works |
-| PMUS is stale at those moments | **121 STALE / 44 INFORMED / 199 NO_FOLLOW** (n=364) | partial |
+| PMUS is stale at those moments | **120 STALE / 42 INFORMED / 134 NO_FOLLOW** (n=296) | partial |
 | the gap is worth crossing | basis at STALE **2.5 ticks**, **61% ≥2t** | clears the proposed bar |
 | PMUS reacts slowly enough to rest | follow lag **35.8s** p50 vs a **150s** order | works |
-| a maker actually gets filled | **18.5%** at the touch, **33.6%** one tick inside | binding constraint |
+| a maker actually gets filled | **17.8%** at the touch, **33.1%** one tick inside | binding constraint |
 | **the fill is profitable** | **NOT MEASURED** — that is the edge claim, and it needs registration first | **open** |
 
-Two haircuts sit on top of anything that follows: **12.1% of events are INFORMED**
+Two haircuts sit on top of anything that follows: **14.2% of events are INFORMED**
 (PMUS moved first — the −6.5pt pick-off, NOTE6, in observable form), and
-**NO_FOLLOW is modal at 55%**, of which a substantial share is intl reverting
-rather than PMUS being stale.
+**NO_FOLLOW is 45%**, of which a substantial share is intl reverting rather than
+PMUS being stale.
 
 ### Two risks measured after this brief was first written, both favourable
 
@@ -45,7 +45,7 @@ feed runs at a **median 83.3ms** venue-stamp to receive (7,092,340 messages) —
 0.2% of the 35.8s window. Split by outcome, the medians are *identical*: **82.5ms
 on the events that picked us off, 82.1ms on the ones that did not.** Constant
 clock skew cancels out of that comparison, which is why it carries a conclusion
-the absolute number cannot. The 12.1% is genuine adverse selection: **a cost to
+the absolute number cannot. The 14.2% is genuine adverse selection: **a cost to
 price, not a bug to fix with faster infrastructure.**
 
 **Orientation risk — the design's named highest-risk component — is zero on the
@@ -123,11 +123,11 @@ Proposed: `median |basis| at signal ≥ 2 ticks`. Measured at STALE events: **2.
 ticks median, 61% at or above 2**. It clears — but two qualifications, both
 measured after the first draft of this brief.
 
-**The signal adds less than it looked.** The *unconditional* basis is **2.0
-ticks** (n≈1,400 over 13 usable books), not the 1.5 reported earlier from n=41 on
-a single market. So the signal widens 2.0 → 2.5, a gain of half a tick rather
-than a full one. The lane depends on the trigger less than the earlier framing
-implied — and its case is correspondingly less dramatic.
+**The unconditional basis is 1.5 ticks — below this bar — so the signal is
+load-bearing.** That number was revised twice (1.5 on one market → 2.0 at n≈1,400
+→ 1.5 at n=1,228) because a single **pinned** book, holding one quote for 95% of
+its life, supplied 54% of the distribution's ≥10-tick tail. With it excluded the
+signal widens 1.5 → 2.5: **a full tick**, and the lane does lean on the trigger.
 
 **Clause (ii) must state a freshness bound.** The basis is an as-of join, so with
 no bound on how old the intl quote may be it will happily report **6.50 ticks**
@@ -141,14 +141,14 @@ inside a 150s order.
 ## Decision 5 — clause (iii), the posting rule
 
 This is a genuine tradeoff and it is now quantified: **+1 tick nearly doubles the
-fill rate (18.5% → 33.6% certain) and spends 40% of a 2.5-tick median basis.**
+fill rate (17.8% → 33.1% certain) and spends 40% of a 2.5-tick median basis.**
 Clause (iii) has to name one posting rule and be rendered on filled orders only,
 computed from `trade_prints` — never `exec_fills`, whose bracket does not contain
 the truth (NOTE11).
 
 ## Decision 6 — clause (iv), the starvation floor
 
-At current coverage: ~3.5 usable books/day × ~17 STALE events × 18.5% fill ≈
+At current coverage: ~3.5 usable books/day × ~17 STALE events × 17.8% fill ≈
 **10 fills/day**. H-MAPENTRY1 died accruing 39 against a bar of 60. Set the floor
 from a rate you have actually measured **after** decisions 1 and 2, and make it
 reachable inside a stated window.
