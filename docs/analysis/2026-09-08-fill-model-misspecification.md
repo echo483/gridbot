@@ -36,22 +36,48 @@ For a resting order at cost `P`:
 That asymmetry is the point: `through` is a floor you can stand on, which is
 precisely what the BBO channel could never produce.
 
-## The mechanism: a 30s poll of a continuous process
+## The mechanism: a price series is not an execution record
 
-`gridbot-pmus-books` polls at a **median 30.7s** (p90 32.0s). Executions are
-continuous. So:
+> **Correction (2026-09-08, same session as the original).** This section first
+> read *"a 30s poll of a continuous process"* and blamed the **poll cadence**,
+> citing a median 30.7s between observations. That number is the interval
+> between **tape rows**, and the tape is change-only with a 30s heartbeat
+> (`BookTape.observe`), so 30.7s is mostly the *write policy*, not the sampling
+> rate. The recorder actually polls far faster: measured **53.96 polls/min**
+> across all slugs on 2026-09-07 (`gridbot-pmus-books` stats lines), i.e. one
+> poll every ~5–12s per slug at the observed 4–11 concurrent slugs. The
+> conclusion below is unchanged and the numbers in the table above are
+> unaffected — but the stated cause was wrong, and it implied a wrong fix
+> ("poll faster"), which is why it is corrected rather than quietly amended.
 
-- **14.0% of prints (18.4% of notional, $34,343 of $187,144)** are priced
-  outside the quoted range of *both* the poll before them and the poll after
-  them. The book moved and reverted entirely between two looks. The BBO tape
-  cannot see these trades in principle.
-- Median 1.55 prints fall inside each poll gap; the busiest slug ran 1,708
-  prints against 296 polls.
+The channel is misspecified for a reason no poll rate can repair: **a trade that
+partially consumes a resting order does not move the touch price at all.**
+Measured over 5,992 prints bracketed by two BBO rows on 2026-09-07/08:
 
-This is **model misspecification, not estimation error** (Quantopian lecture 17).
-The observation channel does not span the process it is used to measure, so no
-quantity of additional 30s BBO data corrects it. Only a different channel does —
-which is what `gridbot-pmus-trades` began recording on 2026-09-07.
+| | |
+|---|---|
+| prints where the BBO price is **identical** before and after | **1,630 (27.2%)** |
+| ...of those with sizes recorded, where top-of-book **size moved** | **1,019 (63.5%)** |
+
+Better than a quarter of all executions leave no trace whatsoever in a
+price-only series. Doubling the poll rate returns exactly the same quotes on
+either side of those trades, because there is nothing in the price to observe.
+Separately, **14.8% of prints (19.4% of notional, $37,662 of $194,003)** are
+priced outside the quoted range of *both* bracketing rows — the complementary
+failure, where the book *did* move and reverted between looks. That one **is**
+cadence-bound and a faster poll would shrink it; the 27.2% above would not move
+at all. (`fill_print_audit.py` reports 14.0% / 18.4% / $34,343 for the same
+quantity: it enumerates slugs present in the BOOK tape, this script enumerates
+slugs present in the PRINT tape, so the populations differ at the margin. Both
+are stated rather than reconciled, because neither is load-bearing — the
+load-bearing number is the 27.2%, which no cadence changes.)
+
+This is **model misspecification, not estimation error** (Quantopian lecture 17),
+and stating the mechanism correctly makes it a *stronger* claim than the first
+version did: the observation channel does not span the process it is used to
+measure, and no quantity of additional BBO data at any cadence corrects it. Only
+a different channel does — which is what `gridbot-pmus-trades` began recording
+on 2026-09-07. Reproduce: `scripts/fill_channel_mechanism.py`.
 
 ## This corroborates EXEC1's own calibration failure
 

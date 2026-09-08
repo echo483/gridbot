@@ -18,22 +18,33 @@ rail 2 and hypothesis development."*
 **Do not file this row yet.** `docs/analysis/2026-09-08-crossvenue1-readiness.md`
 measured the observable population at **5 PMUS match markets on 2026-09-07** (the
 one complete day) out of 14 that join — not the 14, and not the 790–1,645
-round-ends the design assumed. The 6 genuine losses split evenly across two
-independent capture gaps:
+round-ends the design assumed.
 
-- **(A)** `pmus_books` subscribes from GRID `started`, while PMUS lists a market
-  a median 4.46h earlier — 3 of 14.
-- **(B)** `config.DISCOVERY_WINDOW` is −4h/+1h while the PMUS mapper queries
-  −6h/+30h, so the GRID poller never discovered the series at all (verified
-  against `discovery-*.jsonl`: never seen, not pruned) — 3 of 14.
+> **Corrected 2026-09-08 (twice, same session).** This warning first named two
+> independent capture gaps and asked for both to be closed. Measurement
+> (`scripts/discovery_attribution.py`) says there is **one**, plus an uptime
+> problem that was already fixed:
+>
+> - **(A) REAL.** `pmus_books` subscribes from GRID `started`, while PMUS lists a
+>   market a median 4.46h earlier. Landed behind `config.PMUS_PREMATCH_BOOKS`,
+>   **default off** — a rate-budget call, see readiness §6.
+> - **(B) WITHDRAWN.** `config.DISCOVERY_WINDOW` was blamed for series the poller
+>   never discovered. Testing each one against actual sweep timestamps puts
+>   **every** such series in the "no sweep ran at all" bucket and **none** in the
+>   "swept and still missed" bucket, on both days measured. The cause was the
+>   2026-09-07 host suspend (7h16m), already fixed in the capture unit's
+>   inhibitor. **Do not widen the window; it would spend rate budget and recover
+>   nothing.**
 
 H-MAPENTRY1 closed after accruing 39 qualifying entries against a bar of 60. At
 ~5 observable markets/day, a holdout filed against today's capture accrues at
 about a third of the design's assumed rate.
 
-**Prerequisite before filing: close BOTH capture gaps — fixing one leaves roughly
-half the loss — then re-measure the observable rate over several full days and
-set clause (iv) from that number.**
+**Prerequisite before filing: enable and measure gap (A), and re-measure the
+observable rate over several full days with capture actually up, then set clause
+(iv) from that number.** The observable rate is a joint measure of coverage AND
+uptime; the 09-07 sample was taken across a day that lost 7h16m of tape, so it
+understates what today's code can see.
 
 ---
 
@@ -140,8 +151,12 @@ an agent's, never a default.
 3. **Clause (iii) calibration gate**: what recall/precision bar, given NOTE3's
    lesson that a soft gate gets rendered past?
 4. **Clause (iv)**: set after re-measurement.
-5. **Both capture widenings are policy calls** — subscribing PMUS books from
-   listing rather than kickoff, and widening the GRID discovery horizon, each
-   increase poll load against published rate limits (GRID Central Data 20/min,
-   Series State 180/min global and 6/min per series). The trades tape already
-   required a credential decision; these require a budget one.
+5. **One capture widening is a policy call**, not two. Subscribing PMUS books
+   from listing rather than kickoff is live behind `config.PMUS_PREMATCH_BOOKS`
+   (default off). The venue ceiling is not the constraint — measured 0.9 req/s
+   against a 20 req/s limit — but `MAX_SLUGS_PER_CYCLE` is a round-robin cap, so
+   more candidates means each slug is polled less often, and NOTE11 is a finding
+   about exactly that resolution. Raising the cap alongside the flag is the half
+   that actually spends budget, and it is left to the user.
+   The GRID discovery horizon is **withdrawn** from this list — see the corrected
+   warning above.

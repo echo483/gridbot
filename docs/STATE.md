@@ -107,12 +107,20 @@ Tests 994 green; `ruff check .` green.
    per-fill number EXEC1 produced is invalid in the conservative direction, and
    the held-out renders (−0.167 / −0.142) are VOID as numbers (their SIGN is not
    established either way; re-rendering needs its own pre-registered amendment
-   and was NOT taken). Cause is misspecification, not tuning — the BBO recorder
-   polls at median 30.7s against continuous execution, and 14.0% of prints
-   (18.4% of notional) land outside BOTH bracketing polls. This independently
-   explains NOTE3's 0.4615 recall failure as blindness rather than low power.
+   and was NOT taken). Cause is misspecification, not tuning. **The mechanism as
+   first published was wrong and is corrected in `H-MAPENTRY1-NOTE12`:** it blamed
+   a "30s poll", but 30.7s is the interval between tape ROWS (change-only writes
+   with a 30s heartbeat) — actual polling is 53.96/min. The real mechanism is
+   cadence-independent and stronger: **a trade that partially consumes a resting
+   order does not move the touch price at all.** 27.2% of prints (1,630 of 5,992)
+   show an IDENTICAL BBO before and after, and 63.5% of those moved top-of-book
+   size — invisible to a price-only channel at ANY poll rate. A separate 14.8%
+   (19.4% of notional) sit outside both bracketing quotes; that part IS cadence.
+   This independently explains NOTE3's 0.4615 recall failure as blindness rather
+   than low power.
    New channel: `gridbot.analysis.trade_prints` (21 tests),
-   `scripts/fill_print_audit.py`, `docs/analysis/2026-09-08-fill-model-misspecification.md`.
+   `scripts/fill_print_audit.py`, `scripts/fill_channel_mechanism.py`,
+   `docs/analysis/2026-09-08-fill-model-misspecification.md`.
    **Any future maker lane computes fills from prints, never from `exec_fills` alone.**
 
 2. **`evidence_qa` read a silent tape as health.** Checks 1–3 key on days that
@@ -142,19 +150,40 @@ validated on a real inversion (BIG Academy/MORROW, corroborated independently by
 the PMUS slug order). But of the 14 markets that join per day, only **5 were
 observable on 09-07** (the one complete day; 09-08 is a partial UTC day and its
 slate was largely unplayed). The 6 genuine losses split evenly across TWO
-independent capture gaps — fixing either alone leaves half the loss:
-(A) `pmus_books` subscribes from GRID `started` while PMUS lists a market a
-median 4.46h earlier (3 of 14); (B) `config.DISCOVERY_WINDOW` is **−4h/+1h**
-while the PMUS mapper queries **−6h/+30h**, so the poller never discovered the
-series at all — verified against `discovery-*.jsonl`, never seen rather than
-pruned (3 of 14). Same bug class as the intl and PMUS sweeps before it: a scoped
-query silently starving a lane. H-MAPENTRY1 died accruing 39 entries against a
-bar of 60; at ~5 observable markets/day a holdout filed against today's capture
-accrues at about a third of the rate the design assumed. **Both capture gaps are
-now gating**, ahead of the registry row. Draft row (NOT filed, the user files):
+independent capture gaps. **Corrected later the same session — there is ONE
+capture gap, not two** (`H-MAPENTRY1-NOTE12`):
+(A) **REAL.** `pmus_books` subscribes from GRID `started` while PMUS lists a
+market a median 4.46h earlier. Now behind `config.PMUS_PREMATCH_BOOKS`,
+**default off** — the venue ceiling is not the constraint (measured 0.9 req/s
+against 20 req/s), but `MAX_SLUGS_PER_CYCLE` is a round-robin cap, so more
+candidates means each slug is polled *less* often. Raising the cap is the half
+that spends budget and is the user's call.
+(B) **WITHDRAWN.** `config.DISCOVERY_WINDOW` was blamed for series the poller
+never discovered. A sweep at *t* queries *[t−4h, t+1h]*, so a series scheduled at
+*S* is discoverable by any sweep in *[S−1h, S+4h]* — the original analysis read
+the interval backwards. Tested against real sweep timestamps
+(`scripts/discovery_attribution.py`): 09-06 → 0 capture-down / 0 window-gap;
+09-07 → **7 capture-down / 0 window-gap**. Every miss was the poller not running;
+none was the window. Cause was the 09-07 host suspend (7h16m, 04:31:59–11:47:24
+PDT), already the fourth outage recorded in the capture unit and already fixed by
+the `sleep:handle-lid-switch` inhibitor. **Do not widen the window.**
+
+The enabling defect is fixed: the discovery tape wrote only per-series rows, so a
+sweep over an empty window wrote *nothing* and was indistinguishable from a sweep
+that never ran — uptime could only be inferred, and that inference produced the
+wrong cause. `discover_once` now writes one `discovery_sweep` row per sweep
+(always, including zero-result and failed sweeps). Same defect class as the
+tape-silence hole closed in `evidence_qa` check 4 the same night.
+
+H-MAPENTRY1 died accruing 39 entries against a bar of 60; at ~5 observable
+markets/day a holdout accrues at about a third of the design's assumed rate — but
+that 5 was measured across a day that lost 7h16m of tape, so it understates what
+today's code sees. **Re-measure over several full days with capture up before
+setting clause (iv).** Draft row (NOT filed, the user files):
 `docs/experiments/DRAFT-crossvenue1-registration.md`.
 
-Tests 1090 green; `ruff check .` green.
+Tests 1114 green; `ruff check` green on everything tracked (3 findings remain in
+the still-uncommitted `src/gridbot/kg/`).
 
 ## Baseline 2026-09-04 (superseded — kept for lineage)
 
