@@ -205,3 +205,28 @@ an agent's, never a default.
    that actually spends budget, and it is left to the user.
    The GRID discovery horizon is **withdrawn** from this list — see the corrected
    warning above.
+7. **AMEND THE FROZEN TRIGGER? — decide before any conditional basis is measured.**
+   The trigger as frozen (≥2 ticks of the intl **mid** over 30s) fires mostly on
+   flicker: of its 229 training events, **135 (59%) are ONE-SIDED** — only one
+   side of the touch moved, so the mid moved half as far as the quote that
+   actually changed. Measured consequence
+   (`docs/analysis/2026-09-08-crossvenue1-basis-first-look.md`, addendum 3):
+
+   | quality | n | median retrace @150s (order TTL) | held |
+   |---|---|---|---|
+   | both sides moved | 72 | **−0.000** | 0.522 |
+   | one side moved | 135 | **0.500** | 0.267 |
+
+   A two-sided repricing holds past the order lifetime; a one-sided one gives back
+   half. The separation survives holding move size fixed, so it is not size in
+   disguise.
+
+   **Proposed amendment: require both bid and ask to move in the direction of the
+   mid.** Cost: events fall 229 → 72, so the rate falls **1.36/h → ~0.43/h** and
+   clause (iv) must be set against the lower number.
+
+   This was found by a measurement that never touched the basis, PMUS, or any
+   outcome — which is why it can still be fixed without burning the
+   pre-registration. Once the conditional basis is measured, changing this turns
+   the lane into a search.
+

@@ -212,3 +212,69 @@ class TestPersistence:
         )
         s = summarise_persistence([Persistence(0, 4.0, {30: None})], horizons_s=(30,))
         assert s["h30s"] == {"n": 0}
+
+
+class TestMoveQuality:
+    """Real repricing vs one side of the book flickering.
+
+    move_persistence found small moves unwinding more than large ones and named
+    bid-ask bounce as the likely confound. The mid cannot tell them apart; the
+    two sides of the touch can.
+    """
+
+    def _mq(self, b0, a0, b1, a1):
+        from gridbot.analysis.crossvenue_signal import move_quality
+        q0 = Quote(int(20 * S), b0, a0)
+        q1 = Quote(int(60 * S), b1, a1)
+        mv = Move(int(60 * S), int(20 * S), (b0 + a0) / 2, (b1 + a1) / 2)
+        return move_quality(mv, [q0, q1])
+
+    def test_both_sides_moving_up_is_a_repricing(self):
+        from gridbot.analysis.crossvenue_signal import REPRICING
+        mq = self._mq(0.49, 0.51, 0.53, 0.55)
+        assert mq.label == REPRICING and mq.is_repricing
+        assert mq.d_bid_ticks == pytest.approx(4.0)
+        assert mq.d_ask_ticks == pytest.approx(4.0)
+
+    def test_both_sides_moving_down_is_a_repricing(self):
+        from gridbot.analysis.crossvenue_signal import REPRICING
+        assert self._mq(0.49, 0.51, 0.45, 0.47).label == REPRICING
+
+    def test_only_the_bid_moving_is_one_sided(self):
+        """THE BOUNCE SHAPE. The mid moves half as far as the quote that changed."""
+        from gridbot.analysis.crossvenue_signal import ONE_SIDED
+        mq = self._mq(0.49, 0.51, 0.53, 0.51)
+        assert mq.label == ONE_SIDED
+        assert mq.d_ask_ticks == pytest.approx(0.0)
+        assert mq.is_repricing is False
+
+    def test_only_the_ask_moving_is_one_sided(self):
+        from gridbot.analysis.crossvenue_signal import ONE_SIDED
+        assert self._mq(0.49, 0.51, 0.49, 0.55).label == ONE_SIDED
+
+    def test_sides_moving_apart_is_a_spread_change(self):
+        from gridbot.analysis.crossvenue_signal import SPREAD_CHANGE
+        mq = self._mq(0.49, 0.51, 0.45, 0.57)
+        assert mq.label == SPREAD_CHANGE
+        assert mq.spread_after_ticks > mq.spread_before_ticks
+
+    def test_a_side_moving_against_the_mid_is_not_counted_as_moving(self):
+        from gridbot.analysis.crossvenue_signal import SPREAD_CHANGE
+        # mid rises, but the bid FELL: not a clean repricing
+        assert self._mq(0.49, 0.51, 0.45, 0.61).label == SPREAD_CHANGE
+
+    def test_spreads_are_reported_in_ticks(self):
+        mq = self._mq(0.49, 0.51, 0.53, 0.55)
+        assert mq.spread_before_ticks == pytest.approx(2.0)
+        assert mq.spread_after_ticks == pytest.approx(2.0)
+
+    def test_a_one_sided_endpoint_yields_None_not_a_guess(self):
+        from gridbot.analysis.crossvenue_signal import move_quality
+        mv = Move(int(60 * S), int(20 * S), 0.50, 0.54)
+        qs = [Quote(int(20 * S), None, 0.51), Quote(int(60 * S), 0.53, 0.55)]
+        assert move_quality(mv, qs) is None
+
+    def test_a_missing_endpoint_yields_None(self):
+        from gridbot.analysis.crossvenue_signal import move_quality
+        mv = Move(int(60 * S), int(20 * S), 0.50, 0.54)
+        assert move_quality(mv, [Quote(int(20 * S), 0.49, 0.51)]) is None

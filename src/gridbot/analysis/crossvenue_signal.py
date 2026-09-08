@@ -216,3 +216,72 @@ def summarise_persistence(ps: list[Persistence],
         }
     return out
 
+
+# --- quality: a real repricing, or one side of the book flickering? ----------
+
+REPRICING = "repricing"        # both sides moved the way the mid moved
+ONE_SIDED = "one_sided"        # only one side moved; the other held
+SPREAD_CHANGE = "spread_change"  # the sides moved oppositely
+
+
+@dataclass(frozen=True)
+class MoveQuality:
+    """Why the mid moved, from the two sides of the touch.
+
+    ``move_persistence`` found that small moves unwind more than large ones, and
+    named bid-ask bounce as the likely confound: on a 2-tick-wide book a 2-tick
+    "move" of the MID can be one side flickering while the other never moves. The
+    mid alone cannot tell those apart. Both sides of the touch can.
+
+    A genuine repricing shifts the whole book -- bid and ask both move the way
+    the mid moved. A one-sided change moves the mid by half as much as the quote
+    that actually changed, and is the shape a flicker takes. Sides moving
+    oppositely is a spread change, where the mid may barely move at all while
+    nothing was repriced.
+    """
+
+    d_bid_ticks: float
+    d_ask_ticks: float
+    spread_before_ticks: float
+    spread_after_ticks: float
+    label: str
+
+    @property
+    def is_repricing(self) -> bool:
+        return self.label == REPRICING
+
+
+def move_quality(mv: Move, quotes) -> MoveQuality | None:
+    """Classify one move from the touch at its reference and firing instants.
+
+    Returns ``None`` when either endpoint has no two-sided quote -- a book we
+    cannot price on both sides cannot be said to have repriced.
+    """
+    before = after = None
+    for q in quotes:
+        if q.t_ns == mv.ref_t_ns and q.bid is not None and q.ask is not None:
+            before = q
+        if q.t_ns == mv.t_ns and q.bid is not None and q.ask is not None:
+            after = q
+    if before is None or after is None:
+        return None
+    d_bid = (after.bid - before.bid) / TICK
+    d_ask = (after.ask - before.ask) / TICK
+    sign = 1.0 if mv.to_mid > mv.from_mid else -1.0
+    bid_moved = d_bid * sign > 1e-9
+    ask_moved = d_ask * sign > 1e-9
+    opposed = d_bid * d_ask < -1e-9
+    if bid_moved and ask_moved:
+        label = REPRICING
+    elif opposed:
+        label = SPREAD_CHANGE
+    else:
+        label = ONE_SIDED
+    return MoveQuality(
+        d_bid_ticks=round(d_bid, 4),
+        d_ask_ticks=round(d_ask, 4),
+        spread_before_ticks=round((before.ask - before.bid) / TICK, 4),
+        spread_after_ticks=round((after.ask - after.bid) / TICK, 4),
+        label=label,
+    )
+

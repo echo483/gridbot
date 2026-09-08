@@ -260,7 +260,20 @@ the frozen trigger after seeing a measurement is the tuning the freeze exists to
 prevent. It is a decision for the user before registration. Caveat: mid-based, and
 bid-ask bounce on a 2-tick book is a live confound for the small-move end.
 
-Tests 1204 green; `ruff check` green on everything tracked (3 findings remain in
+**That confound was real, and resolving it both rehabilitates the signal and
+indicts the frozen trigger** (`move_quality`; the two sides of the touch separate
+a repricing from a flicker, and were already on the tape). Median retrace at the
+150s order TTL: **−0.000 when BOTH sides moved** (n=72, 52% held) vs **0.500 when
+only one did** (n=135, 27% held). The separation survives holding move size fixed,
+so Addendum 2's size effect was largely quality leaking through size. **A
+two-sided intl repricing is genuine information that outlives a maker order** —
+which is what the lane needs. But the frozen trigger reads the MID only, and
+**135 of its 229 events (59%) are one-sided**: as frozen it fires mostly on
+flicker. Proposed amendment (open decision 7, the user's call, and it must be made
+BEFORE any conditional basis is measured): require both bid and ask to move.
+Cost — events 229 → 72, rate **1.36/h → ~0.43/h**, so clause (iv) drops with it.
+
+Tests 1213 green; `ruff check` green on everything tracked (3 findings remain in
 the still-uncommitted `src/gridbot/kg/`).
 
 ## Baseline 2026-09-04 (superseded — kept for lineage)

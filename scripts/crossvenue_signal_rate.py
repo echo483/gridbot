@@ -37,6 +37,7 @@ from gridbot.analysis.crossvenue_join import join_markets
 from gridbot.analysis.crossvenue_signal import (
     intl_moves,
     move_persistence,
+    move_quality,
     summarise_moves,
     summarise_persistence,
 )
@@ -118,6 +119,36 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {name:<18} n={b['n']:>4}  median retrace @150s "
                       f"{b['median_retrace']:>6.3f}  >=half reverted "
                       f"{b['frac_reverted_half']:>5.3f}")
+
+        # WHY they unwind: the mid cannot tell a repricing from one side of the
+        # book flickering, but the two sides of the touch can.
+        rows = []
+        for _j, qs in series:
+            mvs = intl_moves(qs)
+            byt = {p.t_event_ns: p for p in move_persistence(mvs, qs, horizons_s=HORIZONS_S)}
+            for mv in mvs:
+                q, pp = move_quality(mv, qs), byt.get(mv.t_ns)
+                if q is not None and pp is not None:
+                    rows.append((q, pp))
+        if rows:
+            print(f"\nBy move QUALITY ({len(rows)} events with both reads):")
+            print(f"{'quality':<15}{'n':>5}{'retrace@30s':>13}{'@150s':>9}"
+                  f"{'@900s':>9}{'held@150s':>11}")
+            for lab in ("repricing", "one_sided", "spread_change"):
+                grp = [pp for q, pp in rows if q.label == lab]
+                if not grp:
+                    continue
+                st = summarise_persistence(grp, horizons_s=HORIZONS_S)
+
+                def cell(h: int, k: str, st: dict = st) -> str:
+                    b = st[f"h{h}s"]
+                    return f"{b[k]:.3f}" if b["n"] else "n/a"
+
+                print(f"{lab:<15}{len(grp):>5}{cell(30, 'median_retrace'):>13}"
+                      f"{cell(150, 'median_retrace'):>9}{cell(900, 'median_retrace'):>9}"
+                      f"{cell(150, 'frac_held'):>11}")
+            print("\nA two-sided repricing HOLDS; a one-sided move gives half of itself")
+            "back. The mid alone cannot separate them."
     return 0
 
 

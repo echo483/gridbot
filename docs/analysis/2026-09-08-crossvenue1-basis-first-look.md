@@ -270,3 +270,63 @@ order lifetime the median move has already given back **32%** of itself, and by
   recorded as a decision for the user **before** registration, not taken here.
 - No PMUS book is read anywhere in this addendum, and no edge is claimed.
 
+---
+
+# Addendum 3: the reversion was mostly bid-ask bounce — and the frozen trigger has a defect
+
+`gridbot.analysis.crossvenue_signal.move_quality` ·
+`uv run python scripts/crossvenue_signal_rate.py --persistence`
+
+Addendum 2 named bid-ask bounce as the likely confound behind small moves
+reverting more than large ones. The mid cannot separate a repricing from one side
+of the book flickering — but the **two sides of the touch** can, and they were
+already on the tape.
+
+- **REPRICING** — bid *and* ask both moved the way the mid moved. The book shifted.
+- **ONE_SIDED** — only one side moved. The mid moves half as far as the quote that
+  actually changed. This is the shape a flicker takes.
+- **SPREAD_CHANGE** — the sides moved oppositely. Nothing was repriced.
+
+| quality | n | retrace@30s | @150s | @900s | held@150s |
+|---|---|---|---|---|---|
+| **repricing** | 72 | 0.050 | **−0.000** | 0.500 | **0.522** |
+| one_sided | 135 | 0.292 | **0.500** | 0.661 | 0.267 |
+| spread_change | 22 | 0.000 | 0.400 | 0.083 | 0.476 |
+
+**A two-sided repricing holds.** Median retrace at the 150s order TTL is
+**−0.000** — the median two-sided move has given back *nothing* by the time a
+maker order expires, and 52% are still at or beyond their post-move level. A
+one-sided move gives back **half** of itself and only 27% hold.
+
+**And it is not size in disguise.** Holding size fixed, quality still separates:
+
+| | n | retrace@150s | held |
+|---|---|---|---|
+| repricing < 5t | 50 | 0.167 | 0.500 |
+| one_sided < 5t | 98 | 0.500 | 0.316 |
+| repricing ≥ 5t | 19 | −0.015 | 0.579 |
+| one_sided ≥ 5t | 33 | 0.426 | 0.121 |
+
+Within both buckets the two-sided/one-sided split dominates. Addendum 2's
+size effect was largely quality leaking through size.
+
+## This rehabilitates the signal — and indicts the frozen trigger
+
+The pessimistic read in Addendum 2 was driven by the one-sided majority. On the
+two-sided subset the intl move is genuine information that persists past the
+order lifetime, which is what the lane needs.
+
+But **the frozen trigger does not require two-sidedness**, and **135 of its 229
+events (59%) are one-sided**. As frozen, it fires mostly on flicker.
+
+Fixing it costs accrual: two-sided events are **72 of 229**, so the effective rate
+falls from **1.36/h to ~0.43/h**, and clause (iv) must be set against the lower
+number.
+
+**The trigger is NOT being changed here.** It sits in the draft pre-registration,
+the amendment is a user decision, and it must be made *before* the conditional
+basis is measured — after that, it is a search. This is recorded as open decision
+(7). That the defect was found by a measurement which never touched the basis,
+PMUS, or any outcome is the reason it can be fixed at all without burning the
+pre-registration.
+
