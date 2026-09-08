@@ -101,13 +101,32 @@ MODEL_HORIZONS = ("30s", "60s", "120s", "next_round")      # move fields to proj
 MODEL_BUCKETS = ("all", "<0.02", "0.02-0.04", ">=0.04")    # by |model_gap|; >=0.04 is the entry band
 MODEL_ENTRY_BAND = 0.04              # |model_gap| >= this is the pre-registered entry band
 PHASES = (("early (round <= 6)", 1, 6), ("mid (7-18)", 7, 18), ("late (>= 19)", 19, 10**9))
+# The chain below is ADDITIVE and verified so: mapentry.src_ts_ns equals the
+# joined instance's ts_ns in 728/728 events (2026-09-03..07), so
+#   total_ms == signal_wait_ms + detect_ms + recorder_ms + engine_ms
+# per event, to within float noise. grid_rtt_ms is deliberately OUTSIDE the
+# chain -- it times the poll's own round trip, not a step between t_obs and the
+# intent -- and is reported separately so it cannot be added in by mistake.
+#
+# signal_wait_ms is the one that matters and the one that is easiest to
+# misread. It is NOT our software: it spans the game's own inter-round clock,
+# GRID's reporting of the next round, and the point inside that round at which
+# the model first fires. Measured over the same 728 events it is a median 29.2s,
+# and the first instance lands a median 28s INTO round N+1 (clock_seconds 87.5
+# of 115). Our controllable software cost is detect+recorder+engine ~= 4.1s.
 LEGS = (
-    ("grid_rtt_ms", "GRID round trip (ss.ts_ns - req_ns)"),
+    ("signal_wait_ms", "signal wait (instance.grid_ts_ns - t_obs_ns) [GAME CLOCK, not us]"),
     ("detect_ms", "detect lag (instance.ts_ns - grid_ts_ns)"),
     ("recorder_ms", "recorder lag (mapentry.ts_ns - src_ts_ns)"),
     ("engine_ms", "engine lag (intent.ts_ns - mapentry.ts_ns)"),
-    ("total_ms", "total (intent.ts_ns - t_obs_ns)"),
+    ("total_ms", "total (intent.ts_ns - t_obs_ns) = sum of the four above"),
 )
+# Reported beside the chain, never inside it.
+OFF_CHAIN_LEGS = (
+    ("grid_rtt_ms", "GRID round trip (ss.ts_ns - req_ns) — off-chain"),
+)
+# Legs we control: everything after GRID's own timestamp for the state we acted on.
+SOFTWARE_LEGS = ("detect_ms", "recorder_ms", "engine_ms")
 CAVEAT = (
     "lead_vs_obs_s is a LOWER bound on the true GRID lead: round ends are seen at poll "
     "granularity (12s live cadence) and the book at the 2s recorder cadence. NEGATIVE means "
@@ -425,8 +444,8 @@ def join_pipeline(events: list[dict], instances: list[dict], mapentries: list[di
     window_ns = int(INTENT_JOIN_WINDOW_S * 1e9)
     for ev in events:
         legs = ev.setdefault("legs", {})
-        legs.update({"detect_ms": None, "recorder_ms": None, "engine_ms": None,
-                     "total_ms": None})
+        legs.update({"signal_wait_ms": None, "detect_ms": None, "recorder_ms": None,
+                     "engine_ms": None, "total_ms": None})
         sid, map_number, rn = ev["series_id"], ev["map_number"], ev["round_number"] + 1
         insts = sorted(inst_by.get((sid, map_number, rn), []), key=lambda x: x["ts_ns"])
         if not insts:
@@ -434,6 +453,10 @@ def join_pipeline(events: list[dict], instances: list[dict], mapentries: list[di
         first = insts[0]
         if isinstance(first.get("grid_ts_ns"), int):
             legs["detect_ms"] = round((first["ts_ns"] - first["grid_ts_ns"]) / 1e6, 1)
+            # The dominant term, and the one that is NOT ours: the game's
+            # inter-round clock plus where in round N+1 the model first fires.
+            legs["signal_wait_ms"] = round(
+                (first["grid_ts_ns"] - ev["t_obs_ns"]) / 1e6, 1)
         mes: list[dict] = []
         for inst in insts:
             mes.extend(me_by.get((inst.get("hypothesis_id"), sid, map_number, rn,
@@ -697,9 +720,21 @@ def summarize(day: str, events: list[dict]) -> dict:
     oriented = [ev for ev in events if ev["outcome"] in ("moved", "no_move_300s")]
     m120 = [ev["move_120s"] for ev in oriented if ev.get("move_120s") is not None]
     legs = {}
-    for key, label in LEGS:
+    for key, label in LEGS + OFF_CHAIN_LEGS:
         vals = [ev["legs"][key] for ev in events if ev.get("legs", {}).get(key) is not None]
-        legs[key] = {"label": label, "n": len(vals), "median_ms": pct(vals, 0.5)}
+        legs[key] = {"label": label, "n": len(vals), "median_ms": pct(vals, 0.5),
+                     "p90_ms": pct(vals, 0.9), "on_chain": key in dict(LEGS)}
+    # Summed PER EVENT, then aggregated: medians do not add, so a "software cost"
+    # read off the column above would be wrong. This is the number to quote when
+    # asking whether OUR code is fast enough for the lead.
+    sw = [sum(ev["legs"][k] for k in SOFTWARE_LEGS)
+          for ev in events
+          if all(ev.get("legs", {}).get(k) is not None for k in SOFTWARE_LEGS)]
+    legs["software_total_ms"] = {
+        "label": "OUR SOFTWARE, summed per event (detect + recorder + engine)",
+        "n": len(sw), "median_ms": pct(sw, 0.5), "p90_ms": pct(sw, 0.9),
+        "on_chain": False,
+    }
     return {
         "day": day,
         "caveat": CAVEAT,
@@ -863,12 +898,29 @@ def render(summary: dict) -> str:
         "",
         "## our pipeline legs (same events; median ms where joinable, never imputed)",
         "",
-        "| leg | n joinable | median ms |",
-        "|---|---|---|",
+        ("The chain is ADDITIVE per event: `total = signal_wait + detect + "
+         "recorder + engine`. Do NOT read `total` as our latency — `signal_wait` "
+         "is the game's own inter-round clock plus the point inside round N+1 at "
+         "which the model first fires, and it dominates. The line to read for "
+         "\"is our code fast enough\" is OUR SOFTWARE."),
+        "",
+        "| leg | n joinable | median ms | p90 ms |",
+        "|---|---|---|---|",
     ]
     missing = []
     for key, blk in summary["legs"].items():
-        lines.append(f"| {blk['label']} | {blk['n']} | {_fmt(blk['median_ms'])} |")
+        if not blk.get("on_chain"):
+            continue
+        lines.append(f"| {blk['label']} | {blk['n']} | {_fmt(blk['median_ms'])} | "
+                     f"{_fmt(blk.get('p90_ms'))} |")
+        if blk["n"] == 0:
+            missing.append(key)
+    lines += ["", "| off-chain / derived | n | median ms | p90 ms |", "|---|---|---|---|"]
+    for key, blk in summary["legs"].items():
+        if blk.get("on_chain"):
+            continue
+        lines.append(f"| {blk['label']} | {blk['n']} | {_fmt(blk['median_ms'])} | "
+                     f"{_fmt(blk.get('p90_ms'))} |")
         if blk["n"] == 0:
             missing.append(key)
     if missing:

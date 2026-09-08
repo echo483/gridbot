@@ -289,8 +289,12 @@ class TestPipelineLegs:
         ev = _event()
         insts, mes, intents = _pipeline_rows(ev["t_obs_ns"])
         tc.join_pipeline([ev], insts, mes, intents)
-        assert ev["legs"] == {"grid_rtt_ms": 250.0, "detect_ms": 300.0, "recorder_ms": 150.0,
+        assert ev["legs"] == {"grid_rtt_ms": 250.0, "signal_wait_ms": 250.0,
+                              "detect_ms": 300.0, "recorder_ms": 150.0,
                               "engine_ms": 2000.0, "total_ms": 2700.0}
+        # The chain is additive by construction, and stays that way.
+        chain = ("signal_wait_ms", "detect_ms", "recorder_ms", "engine_ms")
+        assert sum(ev["legs"][k] for k in chain) == ev["legs"]["total_ms"]
         ev = _event()
         tc.join_pipeline([ev], insts, [], [])
         assert ev["legs"]["detect_ms"] == 300.0 and ev["legs"]["recorder_ms"] is None
@@ -329,11 +333,49 @@ class TestSummary:
         assert s["by_phase"]["early (round <= 6)"]["n"] == 1
         assert s["by_phase"]["mid (7-18)"]["n"] == 1
         assert s["by_phase"]["late (>= 19)"]["n"] == 2
-        assert s["legs"]["grid_rtt_ms"] == {"label": tc.LEGS[0][1], "n": 6, "median_ms": 250.0}
+        assert s["legs"]["grid_rtt_ms"] == {
+            "label": tc.OFF_CHAIN_LEGS[0][1], "n": 6, "median_ms": 250.0,
+            "p90_ms": 250.0, "on_chain": False}
+        # grid_rtt is reported BESIDE the chain, never inside it: adding it in
+        # would double-count the poll that t_obs is already measured from.
+        assert s["legs"]["grid_rtt_ms"]["on_chain"] is False
+        assert s["legs"]["signal_wait_ms"]["on_chain"] is True
         assert s["legs"]["total_ms"]["n"] == 0 and s["legs"]["total_ms"]["median_ms"] is None
         text = tc.render(s)
         assert "LOWER bound" in text and "| moved | 4 |" in text
         assert "missing legs" in text and "total_ms" in text
+
+    def test_software_total_is_summed_per_event_not_from_medians(self):
+        """Medians do not add, so the software cost must be a per-event sum.
+
+        Two events with the SAME median per leg but different pairings: reading
+        the leg medians would give one answer, the honest per-event sum another.
+        """
+        legs_a = {"signal_wait_ms": 40_000.0, "detect_ms": 100.0,
+                  "recorder_ms": 1000.0, "engine_ms": 5000.0, "total_ms": 46100.0}
+        legs_b = {"signal_wait_ms": 40_000.0, "detect_ms": 300.0,
+                  "recorder_ms": 3000.0, "engine_ms": 1000.0, "total_ms": 44300.0}
+        evs = [{**_event(n=3), "outcome": "skipped:no_book", "legs": legs_a},
+               {**_event(n=4), "outcome": "skipped:no_book", "legs": legs_b}]
+        s = tc.summarize(DAY, evs)
+        sw = s["legs"]["software_total_ms"]
+        assert sw["n"] == 2
+        # per-event sums are 6100 and 4300 -> median 5200. Summing the leg
+        # medians (200 + 2000 + 3000) would give 5200 here only by luck, so
+        # assert the actual per-event values are what was aggregated.
+        assert sw["median_ms"] == 5200.0
+        assert sw["on_chain"] is False
+
+    def test_a_leg_missing_on_one_event_drops_it_from_the_software_total(self):
+        """Never imputed: an event lacking any software leg is excluded whole."""
+        full = {"signal_wait_ms": 1.0, "detect_ms": 100.0, "recorder_ms": 200.0,
+                "engine_ms": 300.0, "total_ms": 601.0}
+        partial = {**full, "engine_ms": None, "total_ms": None}
+        evs = [{**_event(n=3), "outcome": "skipped:no_book", "legs": full},
+               {**_event(n=4), "outcome": "skipped:no_book", "legs": partial}]
+        s = tc.summarize(DAY, evs)
+        assert s["legs"]["software_total_ms"]["n"] == 1
+        assert s["legs"]["software_total_ms"]["median_ms"] == 600.0
 
 
 # --- end to end --------------------------------------------------------------
@@ -366,7 +408,8 @@ class TestMain:
         ev = doc["events"][0]
         assert ev["outcome"] == "moved" and ev["lead_vs_obs_s"] == -7.0
         assert ev["winner_team"] == "Vexar" and ev["us_side"] == "long"
-        assert ev["legs"] == {"grid_rtt_ms": 250.0, "detect_ms": 300.0, "recorder_ms": 150.0,
+        assert ev["legs"] == {"grid_rtt_ms": 250.0, "signal_wait_ms": 250.0,
+                              "detect_ms": 300.0, "recorder_ms": 150.0,
                               "engine_ms": 2000.0, "total_ms": 2700.0}
         s = doc["summary"]
         assert s["n_round_ends"] == 1 and s["n_joined"] == 1
@@ -377,7 +420,8 @@ class TestMain:
         data = _day(tmp_path, with_pipeline=False)
         assert tc.main([DAY], data_dir=data) == 0
         out = capsys.readouterr().out
-        assert "missing legs (no joinable rows): detect_ms, recorder_ms, engine_ms, total_ms" in out
+        assert ("missing legs (no joinable rows): signal_wait_ms, detect_ms, "
+                "recorder_ms, engine_ms, total_ms" in out)
 
     def test_empty_pmus_bbo_input_exits_1_loudly(self, tmp_path, capsys):
         data = _day(tmp_path, with_books=False)
