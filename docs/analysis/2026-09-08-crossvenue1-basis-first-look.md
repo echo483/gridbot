@@ -157,3 +157,61 @@ markets and then **8** an hour later. An instrument that answers differently eac
 time it runs cannot support a holdout read. The population is now pinned to the
 newest mapping row that still carries `us_markets` — the market as it stood while
 it was actually quoted.
+
+---
+
+# Addendum: does PMUS actually follow intl?
+
+`gridbot.analysis.crossvenue_response` (18 tests) ·
+reproduce: `uv run python scripts/crossvenue_response.py --horizon-sweep`
+
+Every other piece of this lane is plumbing for one assertion. Each frozen intl
+event (≥2 ticks / 30s) is now labelled by what PMUS did around it:
+
+| label | meaning | |
+|---|---|---|
+| **STALE** | intl moved, PMUS had not, PMUS followed inside the horizon | the target |
+| **INFORMED** | PMUS had **already** moved that way before the event fired | the pick-off |
+| **NO_FOLLOW** | PMUS never moved that way inside the horizon | no convergence |
+
+`INFORMED` is what keeps this honest. A study asking only *"does PMUS eventually
+follow"* scores a pick-off as a success — and that pick-off is the **−6.5pt
+fill-selection cost (NOTE6)** in observable form.
+
+## First read — one usable book, n=11
+
+| | |
+|---|---|
+| STALE / INFORMED / NO_FOLLOW | **4 / 1 / 6** |
+| median \|basis\| at STALE events | **2.0 ticks** (50% ≥ 2t) |
+| median follow lag | **62.3s** (p90 141.7s) |
+
+Two things in that table matter more than the counts.
+
+**NO_FOLLOW is the modal outcome, and it is not a truncation artifact.** Stretching
+the horizon from 150s to 3600s — **24×** — converts exactly **one** NO_FOLLOW into
+STALE (4→5). The gap opens and simply does not close. A maker waiting for
+convergence is waiting for something that mostly does not arrive.
+
+**When PMUS does follow, it follows slowly enough to trade.** Median 62.3s against
+the engine's own 150s maker order lifetime, so a resting order is still alive. The
+p90 of 141.7s sits right at that limit. This half of the mechanism looks fine.
+
+## What it does not establish, and one alternative it cannot yet rule out
+
+- **n=11, one market, one label away from a different story.** Nothing here
+  decides anything. It is the instrument working end to end, and a first shape.
+- **NO_FOLLOW has (at least) two readings and this instrument cannot separate
+  them.** Either PMUS is stale and never corrects — bad for a maker but the gap is
+  real — or **intl overshot and reverted**, in which case PMUS was right all along
+  and there was never a gap to take. Distinguishing them requires asking whether
+  *intl* reverts after an unfollowed event. That test is cheap, is the obvious
+  next instrument, and until it is run NO_FOLLOW should not be read as evidence
+  for or against the thesis.
+- **The `wide` book showed 9/25 INFORMED (36%) against 1/11 (9%) on the live
+  book.** Consistent with wide books being adversely selected, and equally
+  consistent with the wide book's mid being noise. Not evidence either way; it is
+  reported because suppressing it would be worse.
+- **A followed gap is not a filled order.** Fills come from `trade_prints`
+  (NOTE11/NOTE12), and nothing here models one.
+

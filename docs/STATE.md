@@ -231,7 +231,23 @@ been taken — freezing the trigger first is what keeps it a test rather than a
 search (Quantopian L22). Rates vary 0.00–13.67/h per market: a ~4h span is
 in-play, a ~24h span is listing-to-settlement and mostly dormant.
 
-Tests 1176 green; `ruff check` green on everything tracked (3 findings remain in
+**The mechanism claim now has an instrument, and its first read is not
+encouraging — on n=11** (`gridbot.analysis.crossvenue_response`, 18 tests). Each
+intl event is labelled STALE (intl moved, PMUS hadn't, PMUS followed) / INFORMED
+(PMUS had already moved — the −6.5pt pick-off, NOTE6, in observable form) /
+NO_FOLLOW. On the single usable training book: **4 / 1 / 6**. Median |basis| at
+STALE events **2.0 ticks** (50% ≥2t); median follow lag **62.3s** against the
+engine's own **150s** order TTL, so when PMUS follows, a resting order is still
+alive. But **NO_FOLLOW is modal and horizon-robust**: stretching 150s → 3600s
+(24×) converts exactly one event. The gap opens and does not close.
+
+**Do not read that as a verdict.** n=11 from one market, and NO_FOLLOW has two
+readings this instrument cannot separate — PMUS stale and never correcting, or
+**intl overshooting and reverting**, in which case there was never a gap. The
+cheap next test is whether *intl* reverts after an unfollowed event; until it is
+run, NO_FOLLOW is evidence for neither side.
+
+Tests 1194 green; `ruff check` green on everything tracked (3 findings remain in
 the still-uncommitted `src/gridbot/kg/`).
 
 ## Baseline 2026-09-04 (superseded — kept for lineage)
