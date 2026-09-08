@@ -307,6 +307,21 @@ settlement is the edge claim and the lane is unregistered (rail 2). The 12.1%
 INFORMED rate is a haircut that sits on top of whatever expectancy is eventually
 measured.
 
+**The intl feed is not the problem, and that is now measured**
+(`scripts/intl_feed_latency.py`, 7,092,340 messages). Venue stamp → our receive:
+**p50 83.3ms**, p90 99.1ms — against a 35.8s PMUS reaction window we spend **0.2%**
+of it learning what happened. But the tail is ugly: **p99 3.06s, p99.9 31.5s**,
+max 56.6s — a capture-health item invisible to checks that watch for a tape going
+silent rather than running late. (Clock skew bounds the absolute figure: 2.51% of
+messages arrive "before" their venue stamp.)
+
+Split by what PMUS did, the medians are **identical** — 82.5ms on INFORMED events
+against 82.1ms on STALE. Constant skew cancels out of that comparison, which is
+why it carries the conclusion: **the pick-off is genuine adverse selection, not
+our slowness, and no infrastructure fixes it.** The 12.1% INFORMED rate is a cost
+to price, not a bug to engineer away. (The tail split — 4.5% vs 1.7% over 1s — is
+the expected direction but is 2 events; not evidence.)
+
 Tests 1221 green; `ruff check` green on everything tracked (3 findings remain in
 the still-uncommitted `src/gridbot/kg/`).
 
