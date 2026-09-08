@@ -322,7 +322,24 @@ our slowness, and no infrastructure fixes it.** The 12.1% INFORMED rate is a cos
 to price, not a bug to engineer away. (The tail split — 4.5% vs 1.7% over 1s — is
 the expected direction but is 2 events; not evidence.)
 
-Tests 1221 green; `ruff check` green on everything tracked (3 findings remain in
+**The knowledge graph is committed and it audits provenance**
+(`src/gridbot/kg/`, 21 tests; `uv run python -m gridbot.kg build|why|orphans`).
+Two extractor defects fixed: it read only **72 of 95** docs — missing STATE.md
+(which alone contributes 47 edges), MAP.md, DECISIONS.md and all of
+`docs/experiments/` — and it could not see the **158 bare `NOTEn`** prose
+references. Bare notes now resolve, but only where exactly one registered row
+ends in that suffix (NOTE1/2/3 are shared across lanes and resolve to nothing);
+those edges carry `method="bare_note"` so a consumer can drop them.
+
+`kg orphans` now answers the graph's headline question — **is this number
+traceable?** A row that declares an instrument but whose docs name no script
+states something nobody can re-derive. Current answer: **zero such rows**. Rows
+declaring no instrument (`EXECUTION_RULE_CLARIFIED`, `BAR_RESTRUCTURE_PRE_REGISTERED`)
+are excluded by design — they pin definitions, not numbers. The check is tested
+to fire, since an audit that can only return empty is indistinguishable from a
+broken one.
+
+Tests 1260 green; `ruff check` green on everything tracked (3 findings remain in
 the still-uncommitted `src/gridbot/kg/`).
 
 ## Baseline 2026-09-04 (superseded — kept for lineage)

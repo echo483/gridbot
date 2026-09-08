@@ -114,6 +114,12 @@ def extract_registry(registry_path: Path) -> Graph:
                 "statuses": statuses,
                 "status": statuses[-1] if statuses else None,
                 "has_evidence_field": any("evidence" in r for r in rows),
+                # A row that names an instrument is CLAIMING a number someone
+                # can re-derive. A row that names none is pinning a definition
+                # or recording a rule change, and has nothing to reproduce.
+                # `orphans` uses this to tell a broken evidence chain apart from
+                # a row that never had one.
+                "declares_instrument": any(r.get("instrument") for r in rows),
             },
         ))
 

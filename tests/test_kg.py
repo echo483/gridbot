@@ -150,3 +150,59 @@ class TestStore:
         keys = [json.loads(x)["key"]
                 for x in (tmp_path / "g" / "nodes.jsonl").read_text().splitlines()]
         assert keys == sorted(keys)
+
+
+class TestTraceabilityAudit:
+    """Question 1 of the schema docstring: is this number traceable?
+
+    A registry row cites a doc; the doc names the script that produced it. A row
+    CLAIMING a number whose docs name no script states something nobody can
+    re-derive — NOTE8's rule applied to the record itself.
+    """
+
+    def _graph(self, *, declares, cited=True, doc_names_script=True):
+        from gridbot.kg.query import orphans
+        g = Graph()
+        g.add_node(Node(kind="note", key="H-A1-NOTE9",
+                        attrs={"declares_instrument": declares}))
+        g.add_node(Node(kind="doc", key="docs/d.md"))
+        g.add_node(Node(kind="script", key="scripts/x.py"))
+        if cited:
+            g.add_edge(Edge(kind="cites", src="doc:docs/d.md", dst="note:H-A1-NOTE9",
+                            method="exact", source="docs/d.md"))
+        if doc_names_script:
+            g.add_edge(Edge(kind="generated_by", src="doc:docs/d.md",
+                            dst="script:scripts/x.py", method="exact",
+                            source="docs/d.md"))
+        return orphans(g)["rows_whose_docs_name_no_script"]
+
+    def test_a_claiming_row_whose_doc_names_no_script_is_FLAGGED(self):
+        """THE CHECK MUST BE ABLE TO FIRE — an audit that can only return empty
+        is indistinguishable from one that is broken."""
+        assert self._graph(declares=True, doc_names_script=False) == ["H-A1-NOTE9"]
+
+    def test_a_claiming_row_with_a_named_script_is_clean(self):
+        assert self._graph(declares=True, doc_names_script=True) == []
+
+    def test_a_row_claiming_NO_instrument_is_not_flagged(self):
+        """Policy rows — EXECUTION_RULE_CLARIFIED, BAR_RESTRUCTURE_PRE_REGISTERED
+        — pin definitions rather than numbers. Listing them would be noise that
+        trains a reader to ignore the list."""
+        assert self._graph(declares=False, doc_names_script=False) == []
+
+    def test_a_row_with_no_citing_doc_is_reported_by_the_other_check_only(self):
+        """Not double-counted: it already appears under
+        hypotheses_with_no_citing_doc."""
+        assert self._graph(declares=True, cited=False) == []
+
+    def test_the_extractor_records_whether_a_row_declares_an_instrument(self, tmp_path):
+        p = tmp_path / "registry.jsonl"
+        p.write_text(
+            json.dumps({"hypothesis_id": "H-A1", "run_ts": "2026-09-08T00:00:00Z",
+                        "status": "X", "hypothesis_text": "",
+                        "instrument": "scripts/x.py"}) + "\n"
+            + json.dumps({"hypothesis_id": "H-B2", "run_ts": "2026-09-08T00:00:00Z",
+                          "status": "X", "hypothesis_text": ""}) + "\n")
+        g = extract.extract_registry(p)
+        assert g.nodes["hypothesis:H-A1"].attrs["declares_instrument"] is True
+        assert g.nodes["hypothesis:H-B2"].attrs["declares_instrument"] is False

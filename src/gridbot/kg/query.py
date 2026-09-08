@@ -171,8 +171,31 @@ def orphans(graph: Graph) -> dict[str, list[Any]]:
         and not n.attrs.get("orientable"))
     dangling = sorted({f"{e.kind}: {e.src} -> {e.dst} ({e.source})"
                        for e in graph.dangling()})
+
+    # THE HEADLINE QUESTION (schema docstring, #1): is this number traceable?
+    # A registry row cites a doc; the doc names the script that produced it. A
+    # row whose docs name NO script states a number nobody can re-derive, which
+    # is NOTE8's rule ("no backtest number without a depth/fill model") applied
+    # to the record itself. Rows with no citing doc at all are excluded here --
+    # they are already reported above and would otherwise be counted twice.
+    no_repro = sorted(
+        n.key for n in graph.nodes.values()
+        if n.kind in ("hypothesis", "note")
+        # Only rows that CLAIM a number. A row declaring no instrument is
+        # pinning a definition or recording a rule change (statuses like
+        # EXECUTION_RULE_CLARIFIED, BAR_RESTRUCTURE_PRE_REGISTERED); it has
+        # nothing to reproduce and listing it here would be noise that trains
+        # a reader to ignore the list.
+        and n.attrs.get("declares_instrument")
+        and any(e.kind == "cites" for e in dst.get(n.id, []))
+        and not any(
+            any(x.kind == "generated_by" for x in src.get(e.src, []))
+            for e in dst.get(n.id, []) if e.kind == "cites"
+        )
+    )
     return {
         "hypotheses_with_no_citing_doc": uncited,
+        "rows_whose_docs_name_no_script": no_repro,
         "docs_citing_no_hypothesis": docs_citing_nothing,
         "scripts_no_doc_or_unit_names": scripts_unused,
         "tapes_no_code_names": tapes_untouched,
