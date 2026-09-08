@@ -117,17 +117,16 @@ observations.
 > | ≥3 ticks / 30s | 177 | 1.05/h | 3.5t | 17.5t |
 > | ≥5 ticks / 30s | 113 | 0.67/h | 6.5t | 23.5t |
 >
-> Why this matters for clause (ii): the **unconditional** clean basis is **2.0
-> ticks — AT this clause's own bar** (n≈1,400 over 13 usable books, stable at
-> 1.95–2.00 across an 1800× range of intl-freshness bounds;
-> `docs/analysis/2026-09-08-crossvenue1-basis-first-look.md` addendum 7). An
-> earlier revision of this note said 1.5 ticks and *below* the bar; that came
-> from n=41 on a single market and is corrected.
+> Why this matters for clause (ii): the **unconditional** clean basis is **1.5
+> ticks (p90 9.0) — BELOW this clause's own bar** (n=1,228 over 12 usable books
+> at a 600s freshness bound; addendum 9). This number was revised twice: 1.5 from
+> n=41 on one market, then "corrected" to 2.0 at n≈1,400, then back to 1.5 once a
+> **`pinned`** book was excluded — one holding the identical quote for 95% of its
+> observations and supplying 54% of the ≥10-tick tail.
 >
-> The conditional basis at STALE events measures **2.5 ticks with 61% ≥2t**, so
-> it does exceed the unconditional one — by **0.5 ticks, not the 1.0 the earlier
-> framing implied.** Read the bar against the *decayed* gap either way, since
-> about a third of an intl move unwinds inside a 150s order.
+> The conditional basis at STALE events measures **2.5 ticks with 60.8% ≥2t**, so
+> the signal widens the gap by a **full tick**. Read the bar against the *decayed*
+> gap regardless, since about a third of an intl move unwinds inside a 150s order.
 >
 > **A caution about the unbounded number.** The as-of join takes the last intl
 > quote at or before each PMUS sample, so with no freshness bound it will happily
@@ -151,11 +150,11 @@ favourable side.
 > the truth. EXEC1's machinery is reused for its **calibration-gate discipline**
 > only, never for its observation channel.
 
-> **Fill feasibility is now measured, and it is the binding term.** On 119
+> **Fill feasibility is now measured, and it is the binding term.** On 118
 > training STALE events (`trade_prints`, the engine's real 150s lifetime): a
-> maker resting **at the touch** is CERTAIN-filled **18.5%** of the time (33.6%
+> maker resting **at the touch** is CERTAIN-filled **17.8%** of the time (33.1%
 > including queue-dependent prints at our price); resting **one tick inside**,
-> **33.6%** certain (52.1%). 95% of events had prints in the window, so non-fills
+> **33.1%** certain (51.7%). 95% of events had prints in the window, so non-fills
 > are about price, not a dead market. Clause (iii) must therefore be rendered on
 > **filled** orders at a stated posting rule, and the posting rule is a real
 > choice: +1 tick nearly doubles the fill rate and spends 40% of a 2.5-tick

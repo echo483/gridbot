@@ -606,3 +606,72 @@ That is a property worth remembering rather than a coincidence: **an as-of join 
 only as trustworthy as the freshness of the side it reaches backwards into**, and
 which side that is depends on whose clock indexes the series.
 
+---
+
+# Addendum 9: a book can move without repricing — and it was 54% of the tail
+
+Addendum 7 corrected the unconditional basis from 1.5 ticks to 2.0 and called the
+1.5 under-powered. **That correction was itself wrong.** The 2.0 was inflated by a
+single contaminated book that `book_liveness` passed as `live`, and with it
+excluded the figure is **1.5 ticks** again.
+
+## What the distribution actually looked like
+
+Pooled |basis| is not a fat tail, it is a **mixture**:
+
+| p10 | p30 | p50 | p70 | p80 | p90 | p95 | p99 |
+|---|---|---|---|---|---|---|---|
+| 1 | 1 | 2 | 3 | **8** | **24** | 38 | 66 |
+
+Flat at 1–3 ticks through p70, then it explodes. Per market, 5 of 7 had a median
+of 1.2–2.0 ticks — and one, `aec-cs2-all-faze-2026-09-08`, had a median of
+**23.0 ticks across its entire life**. The ≥10-tick tail (18.1% of observations)
+was **93% from two markets**, 54% from that one.
+
+## The defect: reprice frequency is not reprice concentration
+
+That book held the identical quote **(0.26, 0.27) for 185 of its 189 two-sided
+observations — 95%** — while intl ranged 0.245 to 0.670. Nine transitions in and
+out of degenerate states scored **4.45 reprices/hour**, cleared the activity bar,
+and it was classified `live`.
+
+`book_liveness` asked *does the quote ever move*. It did not ask *does it move
+meaningfully, or sit at one price with occasional blips*. Frequency passed it;
+concentration does not.
+
+New verdict `pinned`, on the modal share of two-sided quotes. The threshold is
+set on a gap, not fitted: across **79 live-classified match books** the modal
+share runs p50 **0.112**, p90 **0.277**, and exactly one book exceeds 0.80 —
+at **0.954**. The bound is 0.50, roughly 1.8× the healthy p90 and far below the
+offender.
+
+## Every headline re-measured with it excluded
+
+| | before | **after** |
+|---|---|---|
+| unconditional basis (600s bound) | 1.95t, p90 24.0 | **1.50t, p90 9.0** |
+| basis at STALE events | 2.5t, 61.2% ≥2t | **2.5t, 60.8% ≥2t** |
+| STALE / INFORMED / NO_FOLLOW | 121 / 44 / 199 | **120 / 42 / 134** |
+| INFORMED share | 12.1% | **14.2%** |
+| fills at the touch | 18.5% | **17.8%** |
+| fills at +1 tick | 33.6% | **33.1%** |
+
+Two things to take from that. **NO_FOLLOW collapses from 199 to 134**, because a
+pinned book by construction never follows anything — so the "gap opens and does
+not close" finding was partly an artifact of a book that could not move.
+**INFORMED rises to 14.2%**, so the pick-off haircut is worse than reported.
+
+And the arc on the headline number is worth stating plainly: **1.5 (n=41, one
+market) → 2.0 (n≈1,400, contaminated) → 1.5 (n=1,228, clean).** The first number
+was right and the evidence for it was thin; the correction had better evidence
+and a worse population. Clause (ii)'s picture reverts with it — the unconditional
+basis is **below** the proposed 2-tick bar and the signal widens it by a **full
+tick**, not half.
+
+## Population health, whole tape
+
+| kind | n | live | wide | frozen | one-sided | **pinned** | no data |
+|---|---|---|---|---|---|---|---|
+| match | 117 | 77 | 14 | 12 | 6 | **2** | 6 |
+| map | 196 | 39 | 64 | 26 | 41 | **17** | 9 |
+

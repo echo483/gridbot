@@ -19,14 +19,22 @@ HOUR_NS = 3_600_000_000_000
 
 
 def _series(n: int, span_s: float, bid: float, ask: float,
-            reprice_every: int | None = None) -> list[tuple[int, float | None, float | None]]:
-    """n evenly spaced observations across span_s, optionally moving the quote."""
+            reprice_every: int | None = None
+            ) -> list[tuple[int, float | None, float | None]]:
+    """n evenly spaced observations across span_s, optionally moving the quote.
+
+    A repricing book WALKS its quote rather than toggling between two states.
+    That matters: a two-state fixture puts ~67% of observations at one quote,
+    which real books never do (measured modal-quote share across 79 live match
+    books: p50 0.112, p90 0.277) and which the `pinned` rule correctly rejects.
+    """
     step = int(span_s * 1e9 / max(1, n - 1))
     out = []
     for i in range(n):
         b, a = bid, ask
-        if reprice_every and i and i % reprice_every == 0:
-            bump = 0.01 * ((i // reprice_every) % 2)
+        if reprice_every and i >= reprice_every:
+            # a small bounded walk, so no single quote dominates the series
+            bump = 0.01 * (((i // reprice_every) % 7) - 3)
             b, a = round(bid + bump, 4), round(ask + bump, 4)
         out.append((i * step, b, a))
     return out
@@ -146,3 +154,57 @@ class TestSeverityOrder:
         """A book that never moves is not merely wide; it has no discovery."""
         lv = classify(_series(300, 3.5 * 3600, 0.10, 0.90))
         assert lv.verdict == "frozen"
+
+
+class TestPinned:
+    """A book that MOVES but spends almost all its life at one quote.
+
+    THE CASE. aec-cs2-all-faze-2026-09-08 held the identical quote (0.26, 0.27)
+    for 185 of 189 two-sided observations — 95% — while intl ranged 0.245 to
+    0.670. Nine transitions in and out of degenerate states scored 4.45
+    reprices/hour and passed as `live`. It then supplied 54% of the entire
+    >=10-tick tail of the cross-venue basis. Reprice FREQUENCY passed it;
+    reprice CONCENTRATION does not.
+    """
+
+    def _mostly_one_quote(self, n=200, span_s=7200.0, share=0.95):
+        step = int(span_s * 1e9 / max(1, n - 1))
+        k = int(n * share)
+        out = [(i * step, 0.26, 0.27) for i in range(k)]
+        out += [(i * step, round(0.45 + 0.01 * i, 4), round(0.46 + 0.01 * i, 4))
+                for i in range(k, n)]
+        return out
+
+    def test_a_book_pinned_to_one_quote_is_not_live(self):
+        lv = classify(self._mostly_one_quote())
+        assert lv.verdict == "pinned"
+        assert lv.tradeable is False
+        assert lv.usable_for_basis is False
+
+    def test_it_would_have_passed_on_reprice_rate_alone(self):
+        """The blips really do clear the activity bar — that is the whole point."""
+        lv = classify(self._mostly_one_quote())
+        assert lv.n_reprices > 0
+        assert lv.reprices_per_hour >= 1.0
+
+    def test_the_modal_share_is_reported(self):
+        lv = classify(self._mostly_one_quote(share=0.95))
+        assert lv.modal_quote_share == pytest.approx(0.95, abs=0.02)
+
+    def test_a_normally_varied_book_is_not_pinned(self):
+        lv = classify(_series(300, 3.5 * 3600, 0.45, 0.47, reprice_every=3))
+        assert lv.verdict == "live"
+        assert lv.modal_quote_share < 0.5
+
+    def test_the_threshold_is_an_argument(self):
+        q = self._mostly_one_quote(share=0.6)
+        assert classify(q).verdict == "pinned"
+        assert classify(q, max_modal_share=0.9).verdict != "pinned"
+
+    def test_freezing_still_outranks_pinning(self):
+        """A book with ZERO reprices is frozen, not merely pinned."""
+        assert classify(_series(300, 3.5 * 3600, 0.45, 0.47)).verdict == "frozen"
+
+    def test_one_sidedness_still_outranks_pinning(self):
+        q = [(i * 10**11, None, None) for i in range(40)]
+        assert classify(q).verdict == "one_sided"

@@ -207,15 +207,20 @@ closure was right and **understated ~4x**, and it supplies the mechanism for the
 lane's central symptom: a paper edge living entirely in orders that never filled
 (`H-MAPENTRY1-NOTE13`).
 
-**The number that matters for registration — CORRECTED at n≈1,400.** The clean
-unconditional median basis is **2.0 ticks, AT the proposed 2-tick clause (ii)
-bar**, not the 1.5 reported earlier from n=41 on a single market. It is stable at
-1.95–2.00 across an 1800× range of intl-freshness bounds. The instrument could
-also have shipped **6.50 ticks** by joining against quotes a median 32 minutes
-old; it now prints a freshness curve and cannot present one pooled figure. So the
-conditional basis at STALE events (2.5t) exceeds the unconditional one by **0.5
-ticks, not 1.0** — the lane depends on the signal less than the earlier framing
-implied, and its case is correspondingly less dramatic. Coverage remains the gate: of 46 training markets, 14 have intl data, 12
+**The number that matters for registration — settled after TWO corrections.**
+The clean unconditional median basis is **1.5 ticks (p90 9.0)**, below the
+proposed 2-tick clause (ii) bar. The arc: **1.5** (n=41, one market) → **2.0**
+(n≈1,400, but contaminated) → **1.5** (n=1,228, clean). The 2.0 was inflated by a
+single `pinned` book — one holding the identical quote (0.26, 0.27) for 95% of
+its observations while intl ranged 0.245–0.670, which nine blips let pass as
+`live` at 4.45 reprices/hour, and which supplied **54% of the entire ≥10-tick
+tail**. `book_liveness` gained a `pinned` verdict on modal-quote share
+(threshold 0.50 against a healthy p90 of 0.277 and one offender at 0.954).
+
+The instrument could also have shipped **6.50 ticks** by joining against quotes a
+median 32 minutes old; it now prints a freshness curve and cannot present one
+pooled figure. So the conditional basis at STALE events (2.5t) exceeds the
+unconditional one by a **full tick**, and the lane does depend on the signal. Coverage remains the gate: of 46 training markets, 14 have intl data, 12
 have PMUS data, and **2 have both**. Next: enable `PMUS_PREMATCH_BOOKS`, decide
 the cap, accrue full days, then measure the conditional basis.
 
@@ -284,22 +289,23 @@ exact-match selection is unambiguous.) The amendment in open decision 7 is now a
 efficiency question, not a repair.
 
 **The response read is now n=364 across 7 usable books** (coverage accrued
-overnight, 1 → 7 usable books). STALE/INFORMED/NO_FOLLOW = **121 / 44 / 199**.
+overnight, 1 → 7 usable books). STALE/INFORMED/NO_FOLLOW = **120 / 42 / 134** (after excluding a `pinned` book that by construction could never follow anything).
 **The basis at STALE events is 2.5 ticks median with 61% ≥2 ticks — it clears
 clause (ii)'s proposed 2-tick floor**, and is the first evidence the conditional
 basis exceeds the 1.5-tick unconditional one. Follow lag 35.8s median against the
-150s order TTL. **INFORMED is 12.1%** — one pick-off in eight, the −6.5pt cost
+150s order TTL. **INFORMED is 14.2%** — one pick-off in seven, the −6.5pt cost
 (NOTE6) in observable form, a real haircut on any expectancy. NO_FOLLOW remains
 modal at 55%, and persistence says a substantial share of those are intl
 reverting rather than PMUS being stale. Seven books over two days with no fill
 model is not a verdict.
 
 **A fill model now exists on those events, and it is the binding term**
-(`maker_quote` + `trade_prints`, 119 training STALE events, the engine's real
-150s lifetime). Resting **at the touch**: **18.5% CERTAIN** fill (a print traded
+(`maker_quote` + `trade_prints`, 118 training STALE events after the `pinned`
+exclusion, the engine's real 150s lifetime). Resting **at the touch**: **17.8%
+CERTAIN** fill (a print traded
 THROUGH our price — price priority guarantees it), 33.6% including
-queue-dependent prints at our price. Resting **one tick inside**: **33.6%
-certain**, 52.1% possible. **95% of events had prints in the window**, so
+queue-dependent prints at our price. Resting **one tick inside**: **33.1%
+certain**, 51.7% possible. **95% of events had prints in the window**, so
 non-fills are about price, not a dead market. Two consequences: the signal rate
 and the basis both discount hard (~10 fills/day at current coverage), and the
 posting rule is a genuine choice — **+1 tick nearly doubles the fill rate and
@@ -367,7 +373,7 @@ clock** (intl can go stale between samples), while responses and fills join on t
 **intl event clock**, where intl is fresh by construction. An as-of join is only
 as trustworthy as the freshness of the side it reaches backwards into.
 
-Tests 1268 green; `ruff check` green on everything tracked (3 findings remain in
+Tests 1275 green; `ruff check` green on everything tracked (3 findings remain in
 the still-uncommitted `src/gridbot/kg/`).
 
 ## Baseline 2026-09-04 (superseded — kept for lineage)
