@@ -55,6 +55,15 @@ are all map books, which the venue ships with only one side declared (1,436 of
 `yes_team_unresolved` is 0** — the registration's own blocking condition has
 nothing to block on.
 
+**The measurements survive their own robustness checks.** Both the response
+labels and the fill rates were re-measured under a bound on how stale our PMUS
+quote may be — a guard that matters because an unrefreshed quote looks like a
+book that has not moved, which biases *toward* the thesis. Median PMUS age at an
+event is 16.8s; squeezing the bound to 30s moves STALE from 121 to 115 and leaves
+the basis at 2.5 ticks and fills at 19.0%. Only the *unconditional* basis was
+contaminated, because it joins on the PMUS clock rather than the intl event
+clock.
+
 **And coverage reads better than it looked.** The refusal census did not record
 the intl market kind; split by it, **268 of 337 refusals are map markets**. On
 the match population the join rate is **66 of 135 = 48.9%**, not the 5% that
@@ -108,11 +117,26 @@ on markets with a usable book, since those are already 83% two-sided.
 **This must be decided before any conditional basis is measured.** After that,
 changing it turns the lane from a test into a search.
 
-## Decision 4 — clause (ii), the cost bar
+## Decision 4 — clause (ii), the cost bar (and it now needs a second number)
 
 Proposed: `median |basis| at signal ≥ 2 ticks`. Measured at STALE events: **2.5
-ticks median, 61% at or above 2**. It clears — but read it against the **decayed**
-gap, since about a third of an intl move unwinds inside a 150s order.
+ticks median, 61% at or above 2**. It clears — but two qualifications, both
+measured after the first draft of this brief.
+
+**The signal adds less than it looked.** The *unconditional* basis is **2.0
+ticks** (n≈1,400 over 13 usable books), not the 1.5 reported earlier from n=41 on
+a single market. So the signal widens 2.0 → 2.5, a gain of half a tick rather
+than a full one. The lane depends on the trigger less than the earlier framing
+implied — and its case is correspondingly less dramatic.
+
+**Clause (ii) must state a freshness bound.** The basis is an as-of join, so with
+no bound on how old the intl quote may be it will happily report **6.50 ticks**
+against quotes a median **32 minutes** stale. That is staleness, not basis. Under
+any bound from 3600s down to 2s the figure is stable at **1.95–2.00 ticks**, so
+the bound is not delicate — but it has to be named, or the number means nothing.
+
+Read all of it against the **decayed** gap: about a third of an intl move unwinds
+inside a 150s order.
 
 ## Decision 5 — clause (iii), the posting rule
 
