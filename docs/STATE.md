@@ -182,7 +182,20 @@ today's code sees. **Re-measure over several full days with capture up before
 setting clause (iv).** Draft row (NOT filed, the user files):
 `docs/experiments/DRAFT-crossvenue1-registration.md`.
 
-Tests 1114 green; `ruff check` green on everything tracked (3 findings remain in
+**The basis instrument is built and calibrating is blocked on coverage, not
+method** (`gridbot.analysis.crossvenue_basis`, 23 tests;
+`docs/analysis/2026-09-08-crossvenue1-basis-first-look.md`). As-of join on the
+PMUS clock, sign settled before the subtraction, and a holdout gate that RAISES
+and fails closed. First look on training series: 18 markets join, 14 training,
+and **only 2 of 14 had ANY PMUS overlap** — intl supplied 6,661–173,487 events
+per market against PMUS's 0–85 observations. The channel asymmetry the thesis
+needs is confirmed (intl is a WS stream, **0.2s** stale at the median when we
+sample PMUS). The pooled 3.0-tick median basis is **n=98 from two markets and is
+not to be quoted**; one of the two looks like a dead PMUS book (12.5 ticks, 95%
+≥2 ticks — NOTE8's artifact). Next: enable `PMUS_PREMATCH_BOOKS`, decide the cap,
+accrue several full days, and classify dead books before pooling anything.
+
+Tests 1137 green; `ruff check` green on everything tracked (3 findings remain in
 the still-uncommitted `src/gridbot/kg/`).
 
 ## Baseline 2026-09-04 (superseded — kept for lineage)
