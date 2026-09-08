@@ -49,6 +49,7 @@ from itertools import pairwise
 from pathlib import Path
 
 from gridbot import config
+from gridbot.analysis.book_liveness import classify
 
 try:
     from _jsonl import read_rows  # run as `python scripts/evidence_qa.py`
@@ -117,6 +118,7 @@ def books_day(path: Path) -> dict:
     nonhb = 0
     hb = 0
     slugs: set[str] = set()
+    series: dict[str, list[tuple[int, float | None, float | None]]] = {}
     per_kind_nonhb: dict[str, int] = {}
     per_kind_slugs: dict[str, set[str]] = {}
     ts_lo: int | None = None
@@ -134,6 +136,8 @@ def books_day(path: Path) -> dict:
         if isinstance(ts, int):
             ts_lo = ts if ts_lo is None else min(ts_lo, ts)
             ts_hi = ts if ts_hi is None else max(ts_hi, ts)
+            if slug:
+                series.setdefault(slug, []).append((ts, row.get("bid"), row.get("ask")))
         if row.get("heartbeat"):
             hb += 1
             continue
@@ -141,8 +145,10 @@ def books_day(path: Path) -> dict:
         if kind:
             per_kind_nonhb[kind] = per_kind_nonhb.get(kind, 0) + 1
     slate = len(slugs)
+    liveness = {slug: classify(sorted(q)).verdict for slug, q in series.items()}
     return {
         "day": _day(path),
+        "liveness": liveness,
         "total": nonhb + hb,
         "hb": hb,
         "nonhb": nonhb,
@@ -172,6 +178,7 @@ def postquote_day(path: Path) -> dict:
     """Per-day metrics for the adverse-selection diagnostic tape."""
     zero = 0
     nonnull = 0
+    per_slug: dict[str, list[int]] = {}
     for row in read_rows(path):
         if row.get("type") != "postquote":
             continue
@@ -179,9 +186,12 @@ def postquote_day(path: Path) -> dict:
         if move is None:
             continue  # fetch failure — excluded from the denominator
         nonnull += 1
+        counts = per_slug.setdefault(str(row.get("slug") or ""), [0, 0])
+        counts[1] += 1
         if move == 0.0:
             zero += 1
-    return {"day": _day(path), "zero": zero, "nonnull": nonnull}
+            counts[0] += 1
+    return {"day": _day(path), "zero": zero, "nonnull": nonnull, "per_slug": per_slug}
 
 
 def intents_day(path: Path) -> dict:
@@ -253,13 +263,51 @@ def check_venue_book_change(days: list[dict]) -> list[dict]:
     return out
 
 
-def check_postquote(days: list[dict]) -> list[dict]:
-    """Flag days whose non-null oriented_move is overwhelmingly exactly 0.0."""
+def check_postquote(days: list[dict],
+                    liveness: dict[str, dict[str, str]] | None = None) -> list[dict]:
+    """Flag days whose non-null oriented_move is overwhelmingly exactly 0.0.
+
+    A bare "72% degenerate" is an alarm, not a diagnosis: it cannot distinguish a
+    broken shadow instrument from one faithfully sampling books that never move.
+    So when the book tape is available the flag is ATTRIBUTED, by joining each
+    postquote observation to its book's ``book_liveness`` verdict.
+
+    Measured 2026-09-08 on the two flagged days: EVERY observation came from a
+    book classified frozen or wide, and not one from a live book — frozen books
+    contribute exactly 1.000 zero-moves by construction. That is
+    H-MAPENTRY1-NOTE13 (map books are 81.8% untradeable per book) surfacing
+    through a second instrument, not a fault in this one.
+    """
     out: list[dict] = []
     for d in days:
         frac = d["zero"] / d["nonnull"] if d["nonnull"] else 0.0
         flag = d["nonnull"] >= CHECK2_MIN_SAMPLES and frac > CHECK2_THRESHOLD
-        out.append({**d, "frac": frac, "flag": flag})
+        row = {k: v for k, v in d.items() if k != "per_slug"}
+        row.update(frac=frac, flag=flag)
+        # Attribute only when this day's book tape was actually read. With no
+        # verdicts at all every slug lands in "no_book_tape", which is noise
+        # wearing the shape of a diagnosis.
+        day_verdicts = (liveness or {}).get(d["day"]) or {}
+        by_verdict = _attribute(d.get("per_slug") or {}, day_verdicts) if day_verdicts else {}
+        if by_verdict:
+            row["by_book"] = by_verdict
+            sampled = sum(v["nonnull"] for v in by_verdict.values())
+            dead = sum(v["nonnull"] for k, v in by_verdict.items()
+                       if k in ("frozen", "wide", "one_sided"))
+            row["frac_from_dead_books"] = round(dead / sampled, 4) if sampled else None
+        out.append(row)
+    return out
+
+
+def _attribute(per_slug: dict[str, list[int]],
+               verdicts: dict[str, str]) -> dict[str, dict[str, int]]:
+    """Split a day's postquote counts by the liveness verdict of each book."""
+    out: dict[str, dict[str, int]] = {}
+    for slug, (zero, nonnull) in per_slug.items():
+        v = verdicts.get(slug, "no_book_tape")
+        b = out.setdefault(v, {"zero": 0, "nonnull": 0})
+        b["zero"] += zero
+        b["nonnull"] += nonnull
     return out
 
 
@@ -292,7 +340,10 @@ def build_report(books_days: list[dict], postquote_days: list[dict],
     days, and then failed the moment the calendar rolled past them.
     """
     check1 = check_venue_book_change(books_days)
-    check2 = check_postquote(postquote_days)
+    check2 = check_postquote(
+        postquote_days,
+        liveness={d["day"]: d.get("liveness", {}) for d in books_days},
+    )
     books_slate = {d["day"]: d["slate"] for d in books_days}
     check3 = check_gate_passing(intents_days, books_slate)
     reported = {
@@ -390,13 +441,21 @@ def _fmt_human(report: dict) -> str:
         )
     c2 = report["checks"]["postquote_degeneracy"]
     lines.append("check 2 postquote degeneracy — zero / non-null oriented_move")
-    lines.append("  day      zero  nonnull   frac  flag")
+    lines.append("  day      zero  nonnull   frac  flag  sampled books")
     for d in c2["days"]:
         flag = "FLAG" if d["flag"] else "ok"
+        mix = ""
+        if d.get("by_book"):
+            mix = " ".join(f"{k}:{v['nonnull']}" for k, v in
+                           sorted(d["by_book"].items(), key=lambda kv: -kv[1]["nonnull"]))
         lines.append(
             f"  {d['day']}  {d['zero']:>5}  {d['nonnull']:>7}  "
-            f"{d['frac'] * 100:5.1f}%  {flag}"
+            f"{d['frac'] * 100:5.1f}%  {flag:>4}  {mix}"
         )
+    if any(d.get("frac_from_dead_books") == 1.0 and d["flag"] for d in c2["days"]):
+        lines.append("  NOTE: a flagged day whose sample is ENTIRELY frozen/wide/one-sided")
+        lines.append("  books is the dead-book artifact (H-MAPENTRY1-NOTE13), not a fault")
+        lines.append("  in the shadow instrument. A frozen book gives 1.000 by construction.")
     c3 = report["checks"]["gate_passing"]
     lines.append("check 3 gate-passing crossings — status not starting with 'skipped:'")
     lines.append("  day      passing  slate  flag")

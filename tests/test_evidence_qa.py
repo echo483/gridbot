@@ -505,3 +505,72 @@ class TestCaptureGaps:
                               discovery_days=[("20260908", rows)])
         assert rep["flagged"] is True
         assert rep["checks"]["capture_gaps"]["days"][0]["flag"] is True
+
+
+class TestPostquoteAttribution:
+    """Check 2 must say WHY it flagged, not just that it did.
+
+    A bare "72% degenerate" cannot distinguish a broken shadow instrument from
+    one faithfully sampling books that never move. Measured on the two flagged
+    days: every observation came from a frozen or wide book and not one from a
+    live book — H-MAPENTRY1-NOTE13 surfacing through a second instrument.
+    """
+
+    def _day(self, per_slug, day="20260908"):
+        zero = sum(v[0] for v in per_slug.values())
+        nonnull = sum(v[1] for v in per_slug.values())
+        return {"day": day, "zero": zero, "nonnull": nonnull, "per_slug": per_slug}
+
+    def test_a_frozen_only_sample_is_attributed_entirely_to_dead_books(self):
+        d = self._day({"a": [400, 400], "b": [516, 516]})
+        out = eq.check_postquote([d], liveness={"20260908": {"a": "frozen", "b": "frozen"}})[0]
+        assert out["flag"] is True
+        assert out["by_book"]["frozen"] == {"zero": 916, "nonnull": 916}
+        assert out["frac_from_dead_books"] == 1.0
+
+    def test_a_mixed_sample_reports_the_mix(self):
+        d = self._day({"a": [246, 246], "b": [55, 170]})
+        out = eq.check_postquote([d], liveness={"20260908": {"a": "frozen", "b": "wide"}})[0]
+        assert out["by_book"] == {"frozen": {"zero": 246, "nonnull": 246},
+                                  "wide": {"zero": 55, "nonnull": 170}}
+        assert out["frac_from_dead_books"] == 1.0
+
+    def test_a_live_sample_is_not_attributed_to_dead_books(self):
+        d = self._day({"a": [10, 100]})
+        out = eq.check_postquote([d], liveness={"20260908": {"a": "live"}})[0]
+        assert out["frac_from_dead_books"] == 0.0
+        assert out["flag"] is False
+
+    def test_a_slug_with_no_book_tape_is_named_not_silently_dropped(self):
+        """A slug missing from an otherwise-populated book tape is its own
+        bucket — dropping it would quietly shrink the denominator."""
+        d = self._day({"known": [1, 10], "ghost": [5, 50]})
+        out = eq.check_postquote([d], liveness={"20260908": {"known": "live"}})[0]
+        assert out["by_book"]["no_book_tape"] == {"zero": 5, "nonnull": 50}
+        assert out["by_book"]["live"] == {"zero": 1, "nonnull": 10}
+        assert out["frac_from_dead_books"] == 0.0
+
+    def test_no_book_data_at_all_means_no_attribution(self):
+        """Attributing every slug to "no_book_tape" is noise wearing the shape
+        of a diagnosis."""
+        d = self._day({"ghost": [5, 50]})
+        assert "by_book" not in eq.check_postquote([d], liveness={"20260908": {}})[0]
+
+    def test_without_a_book_tape_the_check_still_works_unattributed(self):
+        """Attribution is an enrichment; the check must not depend on it."""
+        d = self._day({"a": [80, 100]})
+        out = eq.check_postquote([d])[0]
+        assert out["frac"] == pytest.approx(0.8)
+        assert "by_book" not in out
+
+    def test_the_flag_itself_is_unchanged_by_attribution(self):
+        d = self._day({"a": [80, 100]})
+        bare = eq.check_postquote([d])[0]
+        rich = eq.check_postquote([d], liveness={"20260908": {"a": "frozen"}})[0]
+        assert bare["flag"] == rich["flag"] is True
+
+    def test_per_slug_is_not_leaked_into_the_report(self):
+        """The report is read by humans and shipped as JSON; a per-slug map
+        would bloat it without being read."""
+        d = self._day({"a": [80, 100]})
+        assert "per_slug" not in eq.check_postquote([d])[0]
