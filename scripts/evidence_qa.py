@@ -22,6 +22,13 @@ keyed on days that EXIST in their tape, a tape that STOPS being written emits no
 recent day, nothing flags, and the unit goes green — silence read as health. See
 check_tape_silence().
 
+Check 5 closes the sibling hole: a tape that ran LATE rather than stopping. Check
+4 asks whether a tape spoke recently; it cannot see a hole in the middle of a day
+that otherwise looks busy. On 2026-09-07 capture was down 04:31-11:47 PDT (7h16m,
+a host suspend) and every check went green through a 440-minute gap. Check 5
+measures the largest interval between discovery-sweep heartbeats, which is the
+only tape on disk that ticks whether or not any market is live.
+
 Run: uv run python scripts/evidence_qa.py [--json] [--today YYYYMMDD]
 Exit: 0 when all checks pass, 1 when a check flags within the RECENT window
 (today or yesterday) OR a tape has gone silent. The day-keyed part is
@@ -38,6 +45,7 @@ import json
 import statistics
 import sys
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 
 from gridbot import config
@@ -274,7 +282,8 @@ def check_gate_passing(days: list[dict], books_slate: dict[str, int]) -> list[di
 
 
 def build_report(books_days: list[dict], postquote_days: list[dict],
-                 intents_days: list[dict], today: str | None = None) -> dict:
+                 intents_days: list[dict], today: str | None = None,
+                 discovery_days: list[tuple[str, list[dict]]] | None = None) -> dict:
     """Assemble the full report from parsed per-day metrics.
 
     ``today`` is injectable so the report is testable against a fixed calendar;
@@ -302,6 +311,7 @@ def build_report(books_days: list[dict], postquote_days: list[dict],
         },
         today=today,
     )
+    gaps = check_capture_gaps(discovery_days or [])
     return {
         "provisional": {
             "nights": PROVISIONAL_NIGHTS,
@@ -324,6 +334,11 @@ def build_report(books_days: list[dict], postquote_days: list[dict],
                 "metric": "newest day with rows, per tape (silence backstop)",
                 "tapes": silence,
             },
+            "capture_gaps": {
+                "metric": (f"largest gap between discovery sweeps "
+                           f"(flag > {CHECK5_GAP_S / 60:.0f}m)"),
+                "days": gaps[-REPORT_DAYS:],
+            },
         },
         # Scoped to recent days on purpose — see flagged_recently(). Silence is
         # OR'd in separately BECAUSE it is not day-scoped: a tape that stopped
@@ -336,9 +351,11 @@ def build_report(books_days: list[dict], postquote_days: list[dict],
                 today=today,
             )
             or any(t["flag"] for t in silence)
+            or any(g["flag"] for g in gaps)
         ),
         "flagged_any_day": (
             any(t["flag"] for t in silence)
+            or any(g["flag"] for g in gaps)
             or any(d["flag"] for d in reported["venue_book_change"])
             or any(d["flag"] for d in reported["postquote_degeneracy"])
             or any(d["flag"] for d in reported["gate_passing"])
@@ -395,6 +412,18 @@ def _fmt_human(report: dict) -> str:
             f"  {t['tape']:<18}  {t['newest_day'] or '—':<8}  "
             f"{t['cutoff']:<8}  {flag}"
         )
+    c5 = report["checks"].get("capture_gaps")
+    if c5 is not None:
+        lines.append("")
+        lines.append(f"check 5 capture gaps — {c5['metric']}")
+        lines.append("  day       sweeps   max gap   status")
+        for d in c5["days"]:
+            gap = "—" if d["max_gap_s"] is None else f"{d['max_gap_s'] / 60:.0f}m"
+            state = "FLAG" if d["flag"] else d["status"]
+            lines.append(f"  {d['day']:<8}  {d['n_sweeps']:>6}  {gap:>7}   {state}")
+        if all(d["status"] == "pending" for d in c5["days"]) and c5["days"]:
+            lines.append("  (pending = discovery_sweep markers absent; they begin at the")
+            lines.append("   next capture restart. PENDING IS NOT GREEN.)")
     lines.append("RESULT: " + ("FLAGGED (exit 1)" if report["flagged"]
                                else "all checks pass (exit 0)"))
     return "\n".join(lines)
@@ -448,6 +477,52 @@ def check_tape_silence(tapes: dict[str, list[tuple[str, int]]],
     return out
 
 
+# --- check 5: capture ran LATE, not just SILENT --------------------------------
+
+# grid_poller sweeps every config.DISCOVERY_CADENCE_S (900s) and, since
+# 2026-09-08, writes one discovery_sweep row per sweep whether or not it found
+# anything. That makes it the only tape on disk that ticks regardless of market
+# activity, so it is the only one a gap check can run on without false-positiving
+# every quiet overnight hour.
+SWEEP_CADENCE_S = 900
+SWEEP_GAP_FACTOR = 3          # 3 missed sweeps = 45 min; a real outage, not jitter
+CHECK5_GAP_S = SWEEP_CADENCE_S * SWEEP_GAP_FACTOR
+
+
+def sweep_gaps(rows: list[dict], gap_s: float = CHECK5_GAP_S) -> dict:
+    """Largest gap between consecutive capture heartbeats in one day.
+
+    THE HOLE THIS CLOSES. Check 4 catches a tape that STOPPED. It cannot catch a
+    tape that ran LATE: on 2026-09-07 capture was down 04:31-11:47 PDT (7h16m,
+    a host suspend) and every day file still existed with plenty of rows, so
+    every check went green through a 440-minute hole.
+
+    Status is three-valued on purpose. ``pending`` means the discovery_sweep
+    marker is not in this day's tape yet -- the code shipped 2026-09-08 and is
+    dormant until capture is restarted (rail 4). Pending is NOT green: reporting
+    health from a check that cannot run is the exact failure this file exists to
+    prevent.
+    """
+    ts = sorted(int(r["ts_ns"]) for r in rows
+                if r.get("type") == "discovery_sweep" and isinstance(r.get("ts_ns"), int))
+    if not ts:
+        return {"status": "pending", "n_sweeps": 0, "max_gap_s": None, "flag": False}
+    gaps = [(b - a) / 1e9 for a, b in pairwise(ts)]
+    worst = max(gaps) if gaps else 0.0
+    return {
+        "status": "measured",
+        "n_sweeps": len(ts),
+        "max_gap_s": round(worst, 1),
+        "flag": worst > gap_s,
+    }
+
+
+def check_capture_gaps(days: list[tuple[str, list[dict]]],
+                       gap_s: float = CHECK5_GAP_S) -> list[dict]:
+    """One row per day: did capture ever go quiet for longer than ``gap_s``?"""
+    return [{"day": day, **sweep_gaps(rows, gap_s)} for day, rows in days]
+
+
 def flagged_recently(*day_lists, today: str | None = None) -> bool:
     """Whether any check flags within the RECENT window.
 
@@ -495,7 +570,12 @@ def main() -> None:
     intents_days = [
         intents_day(p) for p in _recent_files(config.DATA_DIR / "executor", "intents")
     ]
-    report = build_report(books_days, postquote_days, intents_days, today=args.today)
+    discovery_days = [
+        (_day(path), list(read_rows(path)))
+        for path in _recent_files(config.DATA_DIR / "grid", "discovery")
+    ]
+    report = build_report(books_days, postquote_days, intents_days, today=args.today,
+                          discovery_days=discovery_days)
 
     if args.json:
         print(json.dumps(report, indent=1))

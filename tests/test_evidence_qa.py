@@ -438,3 +438,70 @@ class TestEndToEnd:
                    for k in ("venue_book_change", "postquote_degeneracy",
                              "gate_passing")
                    for d in report["checks"][k]["days"])
+
+
+class TestCaptureGaps:
+    """Check 5: a tape that ran LATE, which check 4 cannot see.
+
+    THE REGRESSION. On 2026-09-07 capture was down 04:31-11:47 PDT (7h16m, a
+    host suspend). Every day file still existed with plenty of rows, so checks
+    1-4 all went green through a 440-minute hole, and the missing markets were
+    later mis-attributed to a query window being too narrow.
+    """
+
+    def _rows(self, *offsets_s, day="20260908"):
+        base = 1788825600_000000000
+        return [{"type": "discovery_sweep", "title": "cs2",
+                 "ts_ns": base + int(o * 1e9)} for o in offsets_s]
+
+    def test_regular_sweeps_do_not_flag(self):
+        r = eq.sweep_gaps(self._rows(*[i * 900 for i in range(20)]))
+        assert r["status"] == "measured" and r["flag"] is False
+        assert r["n_sweeps"] == 20
+        assert r["max_gap_s"] == 900.0
+
+    def test_a_seven_hour_hole_flags(self):
+        r = eq.sweep_gaps(self._rows(0, 900, 1800, 1800 + 7 * 3600, 1800 + 7 * 3600 + 900))
+        assert r["flag"] is True
+        assert r["max_gap_s"] == 7 * 3600.0
+
+    def test_one_missed_sweep_is_jitter_not_an_outage(self):
+        assert eq.sweep_gaps(self._rows(0, 900, 2700, 3600))["flag"] is False
+
+    def test_the_threshold_is_three_missed_sweeps(self):
+        assert eq.sweep_gaps(self._rows(0, 3 * 900))["flag"] is False
+        assert eq.sweep_gaps(self._rows(0, 3 * 900 + 1))["flag"] is True
+
+    def test_no_markers_is_PENDING_not_green(self):
+        """The marker ships dormant (rail 4). A check that cannot run must say
+        so rather than report health -- that is the whole defect class."""
+        r = eq.sweep_gaps([{"type": "series", "id": "1", "ts_ns": 1}])
+        assert r["status"] == "pending"
+        assert r["max_gap_s"] is None
+        assert r["n_sweeps"] == 0
+
+    def test_pending_does_not_flag_but_is_visible(self):
+        r = eq.sweep_gaps([])
+        assert r["flag"] is False and r["status"] == "pending"
+
+    def test_non_sweep_rows_are_ignored_for_timing(self):
+        rows = self._rows(0, 900) + [{"type": "series", "id": "9",
+                                      "ts_ns": 1788825600_000000000 + int(5e12)}]
+        assert eq.sweep_gaps(rows)["n_sweeps"] == 2
+
+    def test_a_single_sweep_has_no_gap_to_measure(self):
+        r = eq.sweep_gaps(self._rows(0))
+        assert r["status"] == "measured" and r["max_gap_s"] == 0.0 and r["flag"] is False
+
+    def test_check_returns_one_row_per_day(self):
+        out = eq.check_capture_gaps([("20260907", self._rows(0, 900)),
+                                     ("20260908", [])])
+        assert [d["day"] for d in out] == ["20260907", "20260908"]
+        assert out[1]["status"] == "pending"
+
+    def test_a_gap_turns_the_unit_red_end_to_end(self):
+        rows = self._rows(0, 900, 900 + 8 * 3600)
+        rep = eq.build_report([], [], [], today="20260908",
+                              discovery_days=[("20260908", rows)])
+        assert rep["flagged"] is True
+        assert rep["checks"]["capture_gaps"]["days"][0]["flag"] is True
