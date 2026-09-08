@@ -18,7 +18,7 @@ registry → LIVE_FIRE.md; this file is the floor plan.
 | instruments/ | STRATEGY | detectors, mapentry recorder + verdicts, postquote sampler, shadow lanes. Each armable lane pairs with a frozen registry row. |
 | model/ | STRATEGY | roundwin training/dataset (LightGBM q). Frozen mapwin-race-v1 aggregation lives with the instruments. |
 | sizing/ | WIRING | kelly + params (quarter-Kelly caps). |
-| analysis/ | OPS | slow-loop Claude analyst (daily, managed) — LLM territory, never trade path (rail 1). Also the offline quant instruments: `exec_*` (the EXEC1 replay machinery, retained after H-MAPENTRY1-CLOSE1 as reusable execution modelling) and `crossvenue_join.py` (H-CROSSVENUE1 plumbing — resolves intl↔PMUS markets AND their Yes-side orientation; computes no basis or edge). |
+| analysis/ | OPS | slow-loop Claude analyst (daily, managed) — LLM territory, never trade path (rail 1). Also the offline quant instruments: `exec_*` (the EXEC1 replay machinery, retained after H-MAPENTRY1-CLOSE1 as reusable execution modelling) and `crossvenue_join.py` (H-CROSSVENUE1 plumbing — resolves intl↔PMUS markets AND their Yes-side orientation; computes no basis or edge), `crossvenue_basis.py` (the basis itself: as-of join on the PMUS clock, sign settled before subtraction, and a holdout gate that RAISES and fails closed — the lane is unregistered), and `trade_prints.py` (the fill-observation channel that replaced the BBO bracket, NOTE11/NOTE12). |
 | config.py / redaction.py / ratelimit.py / graphql.py | WIRING | keyring-only secrets (5s-timeout reads + last-good cache), log redaction, GRID rate budget, GQL client. |
 
 ## scripts/ (48 files) — by tier
