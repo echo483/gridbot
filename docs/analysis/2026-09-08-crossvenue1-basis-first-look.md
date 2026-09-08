@@ -393,3 +393,60 @@ label with a 2.5-tick basis is not a filled order at 2.5 ticks — fills come fr
 `trade_prints` (NOTE11/NOTE12), adverse selection is already visible at 12%, and
 the holdout has not been touched.
 
+---
+
+# Addendum 5: would a maker actually get filled? — the first execution-realistic number
+
+`crossvenue_response.maker_quote` + `gridbot.analysis.trade_prints`
+
+A 2.5-tick basis is not a filled order. NOTE8's rule is that no backtest number
+exists without a depth/fill model, and NOTE11/NOTE12 established that fills must
+come from **actual prints**, never from the BBO bracket. So: for each STALE
+event, rest the order a maker would actually have to rest, and ask the trade tape
+whether it filled inside the engine's real 150s lifetime.
+
+**Which order.** The basis is `intl (as PMUS Yes) − PMUS`. A positive basis says
+the Yes is cheap here, so we buy Yes and rest at the PMUS **bid**. A negative
+basis says the Yes is expensive, and on this venue selling Yes *is* buying No —
+`BUY_SHORT` at an our-side cost of **1 − ask**, never the ask. That asymmetry is
+NOTE7, and it is a tested function rather than two lines at a call site because
+sending the Yes price verbatim for a short got **15 of 24 shorts venue-rejected
+while the ledger read "placed"**.
+
+## Result — 119 STALE events with a postable quote (48 long, 71 short)
+
+| posting | n | **CERTAIN fill** | possible | any print in window |
+|---|---|---|---|---|
+| at the touch | 119 | **18.5%** | 33.6% | 95.0% |
+| touch + 1 tick | 119 | **33.6%** | 52.1% | 95.0% |
+
+**CERTAIN** means a print traded *through* our resting price, so price priority
+guarantees the fill — a floor, not an estimate. **possible** adds prints at
+exactly our price, where queue position decides: an upper bound.
+
+Three things follow.
+
+**The market is there.** 95% of STALE events had at least one print inside the
+order's lifetime. Non-fills are about price, not absence of trading.
+
+**Resting at the touch fills less than one time in five.** So the signal rate and
+the basis both have to be discounted hard: at ~3.5 usable books/day and ~17 STALE
+events per book, 18.5% is on the order of **10 fills/day** at current coverage.
+
+**Improving by one tick nearly doubles the fill rate — and costs 40% of the
+basis.** 18.5% → 33.6% certain, paid for out of a 2.5-tick median gap. That
+tradeoff is the execution decision this lane actually has to make, and it is now
+measurable rather than assumed.
+
+## The line this does not cross
+
+This is fill **feasibility**, not expectancy. **No PnL is computed anywhere**, and
+a fill at a 2.5-tick basis is not 2.5 ticks of profit — that requires marking
+against settlement, which is the edge claim, and H-CROSSVENUE1 is not registered
+(iron rail 2). The 12.1% INFORMED rate from addendum 4 is a haircut that sits on
+top of whatever expectancy eventually gets measured.
+
+Also inherited from NOTE11: adding our order perturbs the book it is measured
+against. The perturbation runs *toward* filling us, so the fill conclusion
+survives; the price and residual size do not.
+

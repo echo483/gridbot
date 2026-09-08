@@ -142,6 +142,16 @@ favourable side.
 > the truth. EXEC1's machinery is reused for its **calibration-gate discipline**
 > only, never for its observation channel.
 
+> **Fill feasibility is now measured, and it is the binding term.** On 119
+> training STALE events (`trade_prints`, the engine's real 150s lifetime): a
+> maker resting **at the touch** is CERTAIN-filled **18.5%** of the time (33.6%
+> including queue-dependent prints at our price); resting **one tick inside**,
+> **33.6%** certain (52.1%). 95% of events had prints in the window, so non-fills
+> are about price, not a dead market. Clause (iii) must therefore be rendered on
+> **filled** orders at a stated posting rule, and the posting rule is a real
+> choice: +1 tick nearly doubles the fill rate and spends 40% of a 2.5-tick
+> median basis.
+
 > **Calibration gate, and it must actually pass this time.** EXEC1 failed its own
 > gate at 0.4615 recall vs a 0.60 bar and rendered anyway (NOTE3). The gate here
 > is pre-registered as **blocking**: no held-out read is taken until it passes.

@@ -290,7 +290,24 @@ modal at 55%, and persistence says a substantial share of those are intl
 reverting rather than PMUS being stale. Seven books over two days with no fill
 model is not a verdict.
 
-Tests 1213 green; `ruff check` green on everything tracked (3 findings remain in
+**A fill model now exists on those events, and it is the binding term**
+(`maker_quote` + `trade_prints`, 119 training STALE events, the engine's real
+150s lifetime). Resting **at the touch**: **18.5% CERTAIN** fill (a print traded
+THROUGH our price — price priority guarantees it), 33.6% including
+queue-dependent prints at our price. Resting **one tick inside**: **33.6%
+certain**, 52.1% possible. **95% of events had prints in the window**, so
+non-fills are about price, not a dead market. Two consequences: the signal rate
+and the basis both discount hard (~10 fills/day at current coverage), and the
+posting rule is a genuine choice — **+1 tick nearly doubles the fill rate and
+spends 40% of a 2.5-tick median basis**. Sides split 71 short / 48 long, and the
+short cost is **1 − ask**, never the ask (NOTE7, now a tested function).
+
+**Still no PnL anywhere.** Fill feasibility is not expectancy; marking against
+settlement is the edge claim and the lane is unregistered (rail 2). The 12.1%
+INFORMED rate is a haircut that sits on top of whatever expectancy is eventually
+measured.
+
+Tests 1221 green; `ruff check` green on everything tracked (3 findings remain in
 the still-uncommitted `src/gridbot/kg/`).
 
 ## Baseline 2026-09-04 (superseded — kept for lineage)

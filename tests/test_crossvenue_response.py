@@ -139,3 +139,56 @@ class TestSummarise:
         s = summarise_responses(responses([_move()], pmus, "aligned"))
         assert s["median_abs_basis_ticks_STALE"] is None
         assert s["median_follow_lag_s"] is None
+
+
+class TestMakerQuote:
+    """Which side to rest, and at what OUR-SIDE cost, to take intl's side.
+
+    NOTE7 is the whole reason this is a tested function rather than two lines at
+    a call site: the venue price is ALWAYS the Yes price, a BUY_SHORT at P costs
+    1-P, and sending the Yes price verbatim for a short got 15 of 24 shorts
+    venue-rejected while the ledger read "placed".
+    """
+
+    def test_a_positive_basis_buys_the_yes_at_the_bid(self):
+        from gridbot.analysis.crossvenue_response import maker_quote
+        assert maker_quote(0.03, 0.40, 0.44) == ("long", 0.40)
+
+    def test_a_negative_basis_buys_the_NO_at_one_minus_the_ask(self):
+        """Selling Yes on this venue IS buying No; the cost is 1 - ask, never ask."""
+        from gridbot.analysis.crossvenue_response import maker_quote
+        assert maker_quote(-0.03, 0.40, 0.44) == ("short", pytest.approx(0.56))
+
+    def test_improving_the_quote_raises_our_cost(self):
+        from gridbot.analysis.crossvenue_response import maker_quote
+        assert maker_quote(0.03, 0.40, 0.44, improve_ticks=1)[1] == pytest.approx(0.41)
+        assert maker_quote(-0.03, 0.40, 0.44, improve_ticks=1)[1] == pytest.approx(0.57)
+
+    def test_the_side_we_need_being_missing_returns_None(self):
+        from gridbot.analysis.crossvenue_response import maker_quote
+        assert maker_quote(0.03, None, 0.44) is None      # want the bid
+        assert maker_quote(-0.03, 0.40, None) is None     # want the ask
+
+    def test_the_other_side_being_missing_does_not_matter(self):
+        from gridbot.analysis.crossvenue_response import maker_quote
+        assert maker_quote(0.03, 0.40, None) == ("long", 0.40)
+
+    def test_a_zero_basis_has_no_side(self):
+        from gridbot.analysis.crossvenue_response import maker_quote
+        assert maker_quote(0.0, 0.40, 0.44) is None
+
+    def test_a_cost_outside_the_unit_interval_is_refused_not_clamped(self):
+        from gridbot.analysis.crossvenue_response import maker_quote
+        assert maker_quote(0.03, 0.99, 1.0, improve_ticks=2) is None
+        assert maker_quote(0.03, 0.0, 0.02) is None
+
+    def test_the_two_sides_are_not_symmetric_in_the_yes_price(self):
+        """A long at the bid and a short at the ask are NOT the same number."""
+        from gridbot.analysis.crossvenue_response import maker_quote
+        long_cost = maker_quote(0.03, 0.40, 0.44)[1]
+        short_cost = maker_quote(-0.03, 0.40, 0.44)[1]
+        # the long rests AT the Yes bid; the short's cost is the complement of
+        # the Yes ask, so it is NOT the ask and NOT the bid
+        assert long_cost == pytest.approx(0.40)
+        assert short_cost + 0.44 == pytest.approx(1.0)
+        assert short_cost != pytest.approx(0.44)

@@ -159,3 +159,39 @@ def summarise_responses(rs: list[Response]) -> dict:
         "median_follow_lag_s": (round(pct(lags, 0.5), 1) if lags else None),
         "p90_follow_lag_s": (round(pct(lags, 0.9), 1) if lags else None),
     }
+
+
+# --- what a maker would have to rest, to take intl's side --------------------
+
+
+def maker_quote(basis: float, bid: float | None, ask: float | None,
+                improve_ticks: float = 0.0) -> tuple[str, float] | None:
+    """``(side, our-side cost)`` for a resting order taking intl's side of the gap.
+
+    The basis is ``intl (as PMUS Yes) - PMUS``, so a POSITIVE basis says intl
+    prices the Yes higher than PMUS does -- the Yes is cheap here and we want to
+    BUY it, resting at the PMUS bid. A NEGATIVE basis says the Yes is expensive,
+    and on this venue selling Yes is buying No: ``BUY_SHORT`` at an our-side cost
+    of ``1 - ask`` (H-MAPENTRY1-NOTE7 -- the venue price is ALWAYS the Yes price,
+    and a short at P costs 1-P. Sending the Yes price verbatim for a short is what
+    got 15 of 24 shorts venue-rejected while the ledger read "placed").
+
+    ``improve_ticks`` posts inside the touch by that many ticks, which raises our
+    cost and our fill probability together.
+
+    Returns ``None`` when the side we would need is missing, or when the resulting
+    cost leaves ``(0, 1)`` -- never a clamped price.
+    """
+    if basis > 0:
+        if bid is None:
+            return None
+        side, cost = "long", bid + improve_ticks * TICK
+    elif basis < 0:
+        if ask is None:
+            return None
+        side, cost = "short", (1.0 - ask) + improve_ticks * TICK
+    else:
+        return None
+    cost = round(cost, 6)
+    return None if not (0.0 < cost < 1.0) else (side, cost)
+
