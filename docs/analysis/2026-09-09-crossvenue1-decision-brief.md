@@ -1,5 +1,8 @@
 # H-CROSSVENUE1 — decision brief
 
+Registry provenance: `H-CROSSVENUE1-PRENOTE1` (the three pre-registration
+measurements), `H-MAPENTRY1-NOTE12` and `H-MAPENTRY1-NOTE13` (the corrections).
+
 **Written by the overnight loop, 2026-09-08/09. Nothing here is registered,
 armed, or live. `dry_run` is untouched; no capture unit was restarted.**
 

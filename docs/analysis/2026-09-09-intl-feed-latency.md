@@ -2,6 +2,9 @@
 
 **2026-09-09 · overnight loop · training series only · read-only, no edge claim**
 
+Registry provenance: pre-registration support for `H-CROSSVENUE1-PRENOTE1`;
+the fill-channel context is `H-MAPENTRY1-NOTE11` / `H-MAPENTRY1-NOTE12`.
+
 Reproduce: `uv run python scripts/intl_feed_latency.py --intl-jsonl FILE... --by-label`
 
 The cross-venue lane rests on acting inside the window between an intl repricing
