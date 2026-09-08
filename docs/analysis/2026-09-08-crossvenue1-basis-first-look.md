@@ -330,3 +330,66 @@ basis is measured — after that, it is a search. This is recorded as open decis
 PMUS, or any outcome is the reason it can be fixed at all without burning the
 pre-registration.
 
+---
+
+# Addendum 4: correcting addendum 3's magnitude, and the response read at n=364
+
+## The correction first
+
+Addendum 3 reported *"135 of its 229 events (59%) are one-sided — as frozen, it
+fires mostly on flicker."* **The direction holds; the magnitude was wrong and
+"mostly" is not supported.** That 59% came from a 14-market slice. Recomputed
+over the full training population, and over the subset that actually matters:
+
+| population | markets | events | repricing | one-sided | spread change |
+|---|---|---|---|---|---|
+| all training markets with an intl series | 46 | 1,685 | **54.8%** | 39.3% | 5.8% |
+| markets with a **usable PMUS book** | 7 | 419 | **83.3%** | 14.1% | 2.6% |
+
+So the frozen trigger fires **majority two-sided**, not majority flicker — and on
+the markets where we can actually trade, five events in six are genuine
+repricings. One-sided moves remain a real minority that reverts twice as much
+(addendum 3's persistence table stands), but the trigger is not the liability
+that addendum said it was.
+
+The selection is itself informative: a market liquid enough for us to capture a
+usable PMUS book is also one where intl is tight and moves two-sided.
+
+*(Checked before publishing: `move_quality` was changed to a binary search
+between the two runs. It is not the cause — **0 of 5,095,540** intl quotes share
+a timestamp with another, so exact-match selection is unambiguous and the edit is
+semantically identical.)*
+
+## The response read, now n=364 across 7 usable books
+
+Coverage accrued during the night: usable training books went **1 → 7**, and the
+STALE/INFORMED/NO_FOLLOW read is now 33× the sample addendum 1 had.
+
+| | n | STALE | INFORMED | NO_FOLLOW | \|basis\| at STALE | ≥2t | lag p50 | p90 |
+|---|---|---|---|---|---|---|---|---|
+| all events | 364 | 121 | 44 | 199 | **2.5t** | **0.61** | 35.8s | 172.5s |
+| two-sided | 318 | 108 | 42 | 168 | 2.5t | 0.60 | 35.8s | 146.1s |
+| one-sided | 46 | 13 | 2 | 31 | 3.0t | 0.69 | 39.5s | 195.8s |
+
+**The basis at STALE events clears the proposed bar.** 2.5 ticks median with
+**61% at or above 2 ticks**, against clause (ii)'s proposed floor of 2. That is
+the first evidence the conditional basis exceeds the 1.5-tick unconditional one —
+which is exactly what the lane needed and what addendum 2 put in doubt.
+
+**Follow latency fits inside the order.** 35.8s median against the engine's 150s
+maker TTL; even p90 (172.5s) is close to it.
+
+**INFORMED is 12.1%** — one event in eight is a pick-off, and that is the −6.5pt
+cost (NOTE6) in its observable form. Not fatal, but it is a real haircut that any
+expectancy calculation must carry.
+
+**NO_FOLLOW is still modal at 55%**, and addendum 2 says a substantial share of
+those are intl reverting rather than PMUS being stale.
+
+## Still not a verdict
+
+Seven books, two days, one venue pair, and no fill model anywhere in it. A STALE
+label with a 2.5-tick basis is not a filled order at 2.5 ticks — fills come from
+`trade_prints` (NOTE11/NOTE12), adverse selection is already visible at 12%, and
+the holdout has not been touched.
+

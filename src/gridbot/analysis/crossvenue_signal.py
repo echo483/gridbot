@@ -251,18 +251,35 @@ class MoveQuality:
         return self.label == REPRICING
 
 
-def move_quality(mv: Move, quotes) -> MoveQuality | None:
+def _exact(quotes, ts: list[int], t_ns: int):
+    """The two-sided quote stamped exactly ``t_ns``, or None.
+
+    Binary search, not a scan: an intl market carries millions of quotes and this
+    is called once per move, so a linear probe here is O(moves x quotes) and was
+    measurably the bottleneck on a full-corpus run.
+    """
+    i = bisect.bisect_left(ts, t_ns)
+    while i < len(ts) and ts[i] == t_ns:
+        q = quotes[i]
+        if q.bid is not None and q.ask is not None:
+            return q
+        i += 1
+    return None
+
+
+def move_quality(mv: Move, quotes, ts: list[int] | None = None) -> MoveQuality | None:
     """Classify one move from the touch at its reference and firing instants.
 
     Returns ``None`` when either endpoint has no two-sided quote -- a book we
     cannot price on both sides cannot be said to have repriced.
+
+    ``ts`` is the quotes' timestamps; pass it when classifying many moves over
+    the same series so it is built once rather than per call.
     """
-    before = after = None
-    for q in quotes:
-        if q.t_ns == mv.ref_t_ns and q.bid is not None and q.ask is not None:
-            before = q
-        if q.t_ns == mv.t_ns and q.bid is not None and q.ask is not None:
-            after = q
+    if ts is None:
+        ts = [q.t_ns for q in quotes]
+    before = _exact(quotes, ts, mv.ref_t_ns)
+    after = _exact(quotes, ts, mv.t_ns)
     if before is None or after is None:
         return None
     d_bid = (after.bid - before.bid) / TICK

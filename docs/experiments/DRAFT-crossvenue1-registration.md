@@ -206,10 +206,17 @@ an agent's, never a default.
    The GRID discovery horizon is **withdrawn** from this list — see the corrected
    warning above.
 7. **AMEND THE FROZEN TRIGGER? — decide before any conditional basis is measured.**
-   The trigger as frozen (≥2 ticks of the intl **mid** over 30s) fires mostly on
-   flicker: of its 229 training events, **135 (59%) are ONE-SIDED** — only one
-   side of the touch moved, so the mid moved half as far as the quote that
-   actually changed. Measured consequence
+   > **Corrected.** An earlier revision of this item said the trigger "fires
+   > mostly on flicker (59% one-sided)". That came from a 14-market slice. Over
+   > the full training population it is **39.3% one-sided of 1,685 events (46
+   > markets)**, and over markets with a usable PMUS book just **14.1% of 419
+   > events (7 markets)**. The trigger fires MAJORITY TWO-SIDED. The amendment
+   > below is still worth considering, but it is an efficiency question, not a
+   > repair of a broken trigger.
+
+   One-sided moves are a real minority that reverts about twice as much as
+   two-sided ones — only one side of the touch moved, so the mid moved half as far
+   as the quote that actually changed. Measured consequence
    (`docs/analysis/2026-09-08-crossvenue1-basis-first-look.md`, addendum 3):
 
    | quality | n | median retrace @150s (order TTL) | held |
@@ -222,8 +229,16 @@ an agent's, never a default.
    disguise.
 
    **Proposed amendment: require both bid and ask to move in the direction of the
-   mid.** Cost: events fall 229 → 72, so the rate falls **1.36/h → ~0.43/h** and
-   clause (iv) must be set against the lower number.
+   mid.** Cost on the full training population: events fall **1,685 → 924
+   (−45%)**; on usable-book markets only **419 → 349 (−17%)**, because those
+   markets are already overwhelmingly two-sided. Clause (iv) must be set against
+   whichever population the holdout will actually draw from.
+
+   Note the counter-argument, now that n is larger: at n=364 the basis at STALE
+   events is **2.5 ticks for two-sided and 3.0 ticks for one-sided** — the
+   one-sided events are not obviously worse *on the basis*, only on persistence.
+   The amendment buys signal quality and costs accrual, and accrual is this
+   lane's historical killer (H-MAPENTRY1 died at 39/60).
 
    This was found by a measurement that never touched the basis, PMUS, or any
    outcome — which is why it can still be fixed without burning the

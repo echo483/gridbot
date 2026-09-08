@@ -269,9 +269,26 @@ so Addendum 2's size effect was largely quality leaking through size. **A
 two-sided intl repricing is genuine information that outlives a maker order** —
 which is what the lane needs. But the frozen trigger reads the MID only, and
 **135 of its 229 events (59%) are one-sided**: as frozen it fires mostly on
-flicker. Proposed amendment (open decision 7, the user's call, and it must be made
-BEFORE any conditional basis is measured): require both bid and ask to move.
-Cost — events 229 → 72, rate **1.36/h → ~0.43/h**, so clause (iv) drops with it.
+flicker.
+
+**Corrected within the session — "mostly flicker" was a 14-market artifact.** Over
+the full training population the trigger is **39.3% one-sided of 1,685 events (46
+markets)**, and over markets with a usable PMUS book only **14.1% of 419 events**:
+it fires **majority two-sided**. (Verified the intervening `move_quality` binary-
+search edit was not the cause — 0 of 5,095,540 intl quotes share a timestamp, so
+exact-match selection is unambiguous.) The amendment in open decision 7 is now an
+efficiency question, not a repair.
+
+**The response read is now n=364 across 7 usable books** (coverage accrued
+overnight, 1 → 7 usable books). STALE/INFORMED/NO_FOLLOW = **121 / 44 / 199**.
+**The basis at STALE events is 2.5 ticks median with 61% ≥2 ticks — it clears
+clause (ii)'s proposed 2-tick floor**, and is the first evidence the conditional
+basis exceeds the 1.5-tick unconditional one. Follow lag 35.8s median against the
+150s order TTL. **INFORMED is 12.1%** — one pick-off in eight, the −6.5pt cost
+(NOTE6) in observable form, a real haircut on any expectancy. NO_FOLLOW remains
+modal at 55%, and persistence says a substantial share of those are intl
+reverting rather than PMUS being stale. Seven books over two days with no fill
+model is not a verdict.
 
 Tests 1213 green; `ruff check` green on everything tracked (3 findings remain in
 the still-uncommitted `src/gridbot/kg/`).
