@@ -247,7 +247,20 @@ readings this instrument cannot separate — PMUS stale and never correcting, or
 cheap next test is whether *intl* reverts after an unfollowed event; until it is
 run, NO_FOLLOW is evidence for neither side.
 
-Tests 1194 green; `ruff check` green on everything tracked (3 findings remain in
+**That test has now run, on n=229** (`move_persistence`; no PMUS book needed, so
+it covers the whole intl population). **intl moves substantially unwind:** median
+retrace **0.321 at 150s** (the engine's own order TTL) and **0.538 at 900s**; only
+~37–41% of moves hold at all. So NO_FOLLOW can no longer be read as "PMUS is
+stale" — in a substantial share of cases PMUS not following was PMUS being right.
+It also means the basis at signal **overstates** the tradeable gap: about a third
+of it evaporates before a 150s maker order expires, so clause (ii) should be read
+against the decayed gap. Larger moves persist better (retrace 0.297 at ≥5t vs
+0.400 below), which argues for a higher threshold — **not taken**, because moving
+the frozen trigger after seeing a measurement is the tuning the freeze exists to
+prevent. It is a decision for the user before registration. Caveat: mid-based, and
+bid-ask bounce on a 2-tick book is a live confound for the small-move end.
+
+Tests 1204 green; `ruff check` green on everything tracked (3 findings remain in
 the still-uncommitted `src/gridbot/kg/`).
 
 ## Baseline 2026-09-04 (superseded — kept for lineage)

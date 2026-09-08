@@ -34,9 +34,15 @@ from gridbot.analysis.crossvenue_io import (
     load_mappings,
 )
 from gridbot.analysis.crossvenue_join import join_markets
-from gridbot.analysis.crossvenue_signal import intl_moves, summarise_moves
+from gridbot.analysis.crossvenue_signal import (
+    intl_moves,
+    move_persistence,
+    summarise_moves,
+    summarise_persistence,
+)
 
 THRESHOLDS = (2.0, 3.0, 5.0)
+HORIZONS_S = (30, 60, 150, 300, 900)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,6 +51,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--days", nargs="+", default=["20260907", "20260908"])
     ap.add_argument("--data-dir", default=str(ROOT / "data"))
     ap.add_argument("--intl-jsonl", nargs="*", default=None)
+    ap.add_argument("--persistence", action="store_true",
+                    help="does a move HOLD or unwind? decides how to read NO_FOLLOW")
     a = ap.parse_args(argv)
     data_dir = Path(a.data_dir)
 
@@ -85,6 +93,31 @@ def main(argv: list[str] | None = None) -> int:
               f"{s['n']:>11}{s['per_hour']:>7.2f}{s.get('median_ticks', 0):>7.1f}")
     print("\nRates vary by an order of magnitude: a ~4h span is an IN-PLAY window,")
     print("a ~24h span is listing-to-settlement and is mostly dormant. Pool with care.")
+
+    if a.persistence:
+        allp = []
+        for _j, qs in series:
+            allp += move_persistence(intl_moves(qs), qs, horizons_s=HORIZONS_S)
+        s = summarise_persistence(allp, horizons_s=HORIZONS_S)
+        print(f"\nPersistence of the {s['n']} events "
+              f"(intl side only; decides how to read NO_FOLLOW):")
+        print(f"{'horizon':>9}{'n':>6}{'median retrace':>16}"
+              f"{'>=half reverted':>17}{'held (<=0)':>12}")
+        for h in HORIZONS_S:
+            b = s[f"h{h}s"]
+            if not b["n"]:
+                continue
+            print(f"{h:>8}s{b['n']:>6}{b['median_retrace']:>16.3f}"
+                  f"{b['frac_reverted_half']:>17.3f}{b['frac_held']:>12.3f}")
+        print("\nretrace 0.0 = the move fully held; 1.0 = the mid returned to its start;")
+        print("negative = the move continued. A move that unwinds was never a gap to take.")
+        for name, lo, hi in (("moves < 5 ticks", 0.0, 5.0), ("moves >= 5 ticks", 5.0, 1e9)):
+            grp = [p for p in allp if lo <= abs(p.move_ticks) < hi]
+            b = summarise_persistence(grp, horizons_s=(150,))["h150s"]
+            if b["n"]:
+                print(f"  {name:<18} n={b['n']:>4}  median retrace @150s "
+                      f"{b['median_retrace']:>6.3f}  >=half reverted "
+                      f"{b['frac_reverted_half']:>5.3f}")
     return 0
 
 

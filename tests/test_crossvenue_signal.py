@@ -136,3 +136,79 @@ class TestSummarise:
 
     def test_a_zero_span_does_not_divide_by_zero(self):
         assert summarise_moves([Move(0, 0, 0.5, 0.53)], 0.0)["per_hour"] == 0.0
+
+
+class TestPersistence:
+    """Does an intl move hold or unwind?
+
+    This is what separates the two readings of a PMUS non-response: a move that
+    HOLDS means PMUS was genuinely stale and the gap was real; a move that
+    REVERTS means intl overshot and there was never a gap to take.
+    """
+
+    def _p(self, mids, horizons=(30, 60)):
+        from gridbot.analysis.crossvenue_signal import move_persistence
+        qs = [_q(t, m) for t, m in mids]
+        mv = [Move(t_ns=int(60 * S), ref_t_ns=int(20 * S), from_mid=0.50, to_mid=0.54)]
+        return move_persistence(mv, qs, horizons_s=horizons)[0]
+
+    def test_a_move_that_holds_retraces_zero(self):
+        p = self._p([(20, 0.50), (60, 0.54), (90, 0.54), (120, 0.54)])
+        assert p.retrace[30] == pytest.approx(0.0)
+        assert p.retrace[60] == pytest.approx(0.0)
+
+    def test_a_full_reversion_retraces_one(self):
+        p = self._p([(20, 0.50), (60, 0.54), (90, 0.50), (120, 0.50)])
+        assert p.retrace[30] == pytest.approx(1.0)
+
+    def test_a_half_reversion_retraces_one_half(self):
+        p = self._p([(20, 0.50), (60, 0.54), (90, 0.52), (120, 0.52)])
+        assert p.retrace[30] == pytest.approx(0.5)
+
+    def test_continuation_is_negative(self):
+        p = self._p([(20, 0.50), (60, 0.54), (90, 0.58), (120, 0.58)])
+        assert p.retrace[30] == pytest.approx(-1.0)
+
+    def test_overshooting_back_past_the_origin_exceeds_one(self):
+        p = self._p([(20, 0.50), (60, 0.54), (90, 0.46), (120, 0.46)])
+        assert p.retrace[30] == pytest.approx(2.0)
+
+    def test_a_downward_move_uses_the_same_sign_convention(self):
+        from gridbot.analysis.crossvenue_signal import move_persistence
+        qs = [_q(20, 0.50), _q(60, 0.46), _q(90, 0.50)]
+        mv = [Move(int(60 * S), int(20 * S), 0.50, 0.46)]
+        p = move_persistence(mv, qs, horizons_s=(30,))[0]
+        assert p.retrace[30] == pytest.approx(1.0)   # fully reverted, not -1
+
+    def test_a_horizon_past_the_end_of_the_tape_is_None_not_held(self):
+        """THE SURVIVORSHIP GUARD. Scoring a missing observation as 0.0 would
+        report every truncated move as having held perfectly."""
+        p = self._p([(20, 0.50), (60, 0.54), (95, 0.54)], horizons=(30, 600))
+        assert p.retrace[30] is not None
+        assert p.retrace[600] is None
+
+    def test_a_zero_size_move_is_skipped(self):
+        from gridbot.analysis.crossvenue_signal import move_persistence
+        mv = [Move(int(60 * S), int(20 * S), 0.50, 0.50)]
+        assert move_persistence(mv, [_q(20, 0.5), _q(90, 0.5)]) == []
+
+    def test_summary_reports_reverted_and_held_shares(self):
+        from gridbot.analysis.crossvenue_signal import (
+            Persistence,
+            summarise_persistence,
+        )
+        ps = [Persistence(0, 4.0, {30: 0.0}), Persistence(1, 4.0, {30: 1.0}),
+              Persistence(2, 4.0, {30: 0.6}), Persistence(3, 4.0, {30: None})]
+        s = summarise_persistence(ps, horizons_s=(30,))
+        assert s["n"] == 4
+        assert s["h30s"]["n"] == 3            # the None is excluded, not counted as held
+        assert s["h30s"]["frac_reverted_half"] == pytest.approx(2 / 3, abs=1e-3)
+        assert s["h30s"]["frac_held"] == pytest.approx(1 / 3, abs=1e-3)
+
+    def test_summary_of_an_empty_horizon_reports_zero(self):
+        from gridbot.analysis.crossvenue_signal import (
+            Persistence,
+            summarise_persistence,
+        )
+        s = summarise_persistence([Persistence(0, 4.0, {30: None})], horizons_s=(30,))
+        assert s["h30s"] == {"n": 0}

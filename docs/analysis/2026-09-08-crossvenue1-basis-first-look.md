@@ -215,3 +215,58 @@ p90 of 141.7s sits right at that limit. This half of the mechanism looks fine.
 - **A followed gap is not a filled order.** Fills come from `trade_prints`
   (NOTE11/NOTE12), and nothing here models one.
 
+---
+
+# Addendum 2: intl moves substantially unwind — n=229
+
+`gridbot.analysis.crossvenue_signal.move_persistence` ·
+`uv run python scripts/crossvenue_signal_rate.py --persistence`
+
+Addendum 1 left NO_FOLLOW with two readings it could not separate: PMUS stale and
+never correcting, or **intl overshooting and reverting**. That test needs no PMUS
+book, so it runs on the whole intl population — **229 events across 14 training
+markets**, roughly twenty times the sample of the response test.
+
+Retrace is signed so direction is already handled: **0.0** = the move fully held,
+**1.0** = the mid returned to where the move started, **negative** = the move
+continued further.
+
+| horizon | n | median retrace | ≥half reverted | held (≤0) |
+|---|---|---|---|---|
+| 30s | 227 | 0.250 | 0.414 | 0.410 |
+| 60s | 226 | 0.286 | 0.447 | 0.403 |
+| **150s** (order TTL) | 221 | **0.321** | 0.462 | 0.367 |
+| 300s | 216 | 0.400 | 0.491 | 0.384 |
+| 900s | 191 | **0.538** | 0.524 | 0.393 |
+
+**A ≥2-tick intl repricing is substantially noise.** Inside the engine's own 150s
+order lifetime the median move has already given back **32%** of itself, and by
+15 minutes it has given back **54%**. Only ~37–41% of moves hold at all.
+
+## What this does to the earlier reads
+
+- **NO_FOLLOW is no longer readable as "PMUS is stale".** If intl gives back a
+  third of the move within the order's lifetime, then in a substantial share of
+  cases PMUS *not* following was PMUS being **right**. The two readings are still
+  not fully separated per-event, but the population is now known to contain a lot
+  of the second one.
+- **The basis at signal overstates the tradeable gap.** Clause (ii) proposes
+  `median |basis| at signal ≥ 2 ticks`. Whatever that number turns out to be, a
+  third of it is expected to evaporate before a 150s maker order expires — so the
+  bar should be read against the *decayed* gap, not the gap at the event.
+- Larger moves persist better (**median retrace 0.297 at ≥5 ticks vs 0.400 below
+  it**), which is the expected direction: more size, more information.
+
+## Stated limits
+
+- **This is mid-based, and bid-ask bounce is a live confound.** A 2-tick "move"
+  of the mid on a 2-tick-wide book can be one side of the book flickering. That
+  is the most likely reason small moves revert more than large ones, and it means
+  the small-move retrace is an upper bound on genuine reversion. Distinguishing
+  them needs the intl depth, not just the touch.
+- **It argues for a higher threshold, and the threshold is NOT being changed.**
+  ≥5 ticks persists better, and moving the frozen trigger now — after seeing a
+  measurement — is precisely the tuning the freeze exists to prevent. It is
+  recorded as a decision for the user **before** registration, not taken here.
+- No PMUS book is read anywhere in this addendum, and no edge is claimed.
+
