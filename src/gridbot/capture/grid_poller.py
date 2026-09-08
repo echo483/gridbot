@@ -65,6 +65,8 @@ class GridCapture:
         lte = (now + timedelta(seconds=config.DISCOVERY_WINDOW[1])).isoformat(timespec="seconds")
         for title_key, title_id in config.TITLE_IDS.items():
             after = None
+            n_series = n_pages = 0
+            swept = True
             while True:
                 await self.cd_limiter.acquire()
                 try:
@@ -83,11 +85,14 @@ class GridCapture:
                     self.discovery_writer.append(
                         {"type": "discovery_error", "title": title_key, "error": str(exc)[:400]}
                     )
+                    swept = False
                     break
                 conn = data.get("allSeries") or {}
+                n_pages += 1
                 for edge in conn.get("edges") or []:
                     node = edge.get("node") or {}
                     sid = str(node.get("id"))
+                    n_series += 1
                     self.discovery_writer.append({"type": "series", "title": title_key, **node})
                     if sid in config.GRID_TEST_SERIES_IDS or (
                         (node.get("tournament") or {}).get("name") == "GRID-TEST"
@@ -115,6 +120,25 @@ class GridCapture:
                 if not page.get("hasNextPage"):
                     break
                 after = page.get("endCursor")
+            # One row per sweep, ALWAYS -- including a sweep that returned zero
+            # series. Without it the discovery tape writes nothing when the window
+            # is empty, so "the sweep ran and found nothing" and "the sweep never
+            # ran" are the same observation: silence. That ambiguity cost real
+            # analysis time on 2026-09-08, when a 440-minute hole in the 09-07
+            # tape (a host suspend, already fixed in the unit's inhibitor) was
+            # first mis-attributed to DISCOVERY_WINDOW being too narrow. Uptime
+            # must be measurable directly, not inferred from row timestamps --
+            # the same rule scripts/evidence_qa.py check 4 enforces on the tapes.
+            self.discovery_writer.append({
+                "type": "discovery_sweep",
+                "title": title_key,
+                "gte": gte,
+                "lte": lte,
+                "series": n_series,
+                "pages": n_pages,
+                "ok": swept,
+                "tracked": len(self.tracked),
+            })
         self._prune(now)
         log.info("discovery: tracking %d series", len(self.tracked))
 

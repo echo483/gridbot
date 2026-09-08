@@ -449,3 +449,61 @@ async def test_a_success_resets_the_transport_error_streak(tmp_path, monkeypatch
     g.tracked["a"]["next_poll"] = 0.0
     await g.poll_due(None)
     assert g.tracked["a"]["err_streak"] == 0
+
+
+class TestDiscoverySweepMarker:
+    """Every sweep writes one row -- including a sweep that found nothing.
+
+    THE REGRESSION: the discovery tape only ever wrote per-series rows, so a
+    sweep over an empty window wrote nothing at all and was indistinguishable
+    from a sweep that never ran. On 2026-09-08 that ambiguity sent an analysis
+    down the wrong path: a 440-minute hole in the 09-07 tape (a host suspend,
+    already fixed in the unit's inhibitor) was first blamed on
+    config.DISCOVERY_WINDOW being too narrow. Uptime must be OBSERVED.
+    """
+
+    def test_a_sweep_that_finds_nothing_still_leaves_a_row(self, tmp_path, monkeypatch):
+        g = _capture(tmp_path)
+        asyncio.run(_discover(g, monkeypatch, []))
+        sweeps = [r for r in _rows(tmp_path, "disc") if r["type"] == "discovery_sweep"]
+        assert len(sweeps) == 1
+        assert sweeps[0]["series"] == 0
+        assert sweeps[0]["ok"] is True
+        assert sweeps[0]["pages"] == 1
+
+    def test_the_marker_counts_the_series_the_sweep_returned(self, tmp_path, monkeypatch):
+        g = _capture(tmp_path)
+        asyncio.run(_discover(g, monkeypatch, [_node("101"), _node("102")]))
+        sweep = next(r for r in _rows(tmp_path, "disc") if r["type"] == "discovery_sweep")
+        assert sweep["series"] == 2
+        assert sweep["tracked"] == 2
+        assert sweep["title"] == "cs2"
+
+    def test_the_marker_records_the_window_it_actually_queried(self, tmp_path, monkeypatch):
+        g = _capture(tmp_path)
+        asyncio.run(_discover(g, monkeypatch, []))
+        sweep = next(r for r in _rows(tmp_path, "disc") if r["type"] == "discovery_sweep")
+        # so a later reader can tell a narrow window from a dead sweep
+        assert sweep["gte"] < sweep["lte"]
+
+    def test_a_failed_sweep_is_marked_not_ok(self, tmp_path, monkeypatch):
+        g = _capture(tmp_path)
+
+        async def boom(client, url, query, variables=None, **kw):
+            raise GraphQLError("upstream exploded")
+
+        monkeypatch.setattr(grid_poller, "post", boom)
+        monkeypatch.setattr(config, "TITLE_IDS", {"cs2": config.TITLE_ID_CS2})
+        asyncio.run(g.discover_once(None))
+        rows = _rows(tmp_path, "disc")
+        sweep = next(r for r in rows if r["type"] == "discovery_sweep")
+        assert sweep["ok"] is False
+        assert sweep["series"] == 0
+        # the error row still lands too -- the marker does not replace it
+        assert any(r["type"] == "discovery_error" for r in rows)
+
+    def test_series_rows_are_unchanged_by_the_marker(self, tmp_path, monkeypatch):
+        g = _capture(tmp_path)
+        asyncio.run(_discover(g, monkeypatch, [_node("101")]))
+        series = [r for r in _rows(tmp_path, "disc") if r["type"] == "series"]
+        assert len(series) == 1 and series[0]["id"] == "101"

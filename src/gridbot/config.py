@@ -43,6 +43,27 @@ DISCOVERY_CADENCE_S = 900          # Central Data allSeries sweep (GRID-recommen
 DISCOVERY_WINDOW = (-4 * 3600, 1 * 3600)  # -4h/+1h scheduled window (rolling starts)
 SS_LIVE_POLL_S = 12
 SS_IDLE_POLL_S = 60                # discovered but not yet started
+
+# Poll the PMUS *match* book for a mapped series GRID is tracking but that has
+# NOT started yet. Default OFF: it is a rate-budget decision, not a code one.
+#
+# Why it is wanted: pmus_books gates on GRID `started`, while PMUS lists a market
+# a median 4.46h before kickoff, so the pre-match window -- the one the
+# CROSSVENUE1 design argues is *most* mispriced, because PMUS quotes go stale
+# against intl with no arbitrageur to close the gap -- is entirely uncaptured.
+#
+# What it costs: nothing at the venue's ceiling (measured 2026-09-07: 54 polls/min
+# = 0.9 req/s against the recorder's own 4 req/s design cap and the venue's
+# 20 req/s), but candidates per cycle rise, and MAX_SLUGS_PER_CYCLE is a
+# ROUND-ROBIN cap -- so more candidates means each slug is polled LESS often.
+# That is the real price, and it is paid in the resolution of the in-play tape.
+# Raising the cap alongside this flag is the other half of the same decision.
+#
+# No new time source is needed: GRID only tracks a series inside DISCOVERY_WINDOW,
+# so "GRID is polling it and it has not started" already means "starting soon".
+# Only the match book is polled pre-match; there is no live map yet, and NOTE9
+# retired map books anyway (p50 spread 0.07-0.12, 22% dead).
+PMUS_PREMATCH_BOOKS = os.environ.get("GRIDBOT_PMUS_PREMATCH_BOOKS", "") == "1"
 PM_DISCOVERY_CADENCE_S = 300
 PM_SNAPSHOT_CADENCE_S = 600
 

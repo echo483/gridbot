@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 
+from gridbot.capture import pmus_books as pb
 from gridbot.capture.pmus_books import (
     BookTape,
     LiveTracker,
@@ -551,3 +552,91 @@ class TestCompactDepth:
         got = compact_depth({})
         assert got["bids"] == [] and got["offers"] == []
         assert got["imbalance"] is None
+
+
+class TestPrematchBooks:
+    """The pre-match match book, behind config.PMUS_PREMATCH_BOOKS (default OFF).
+
+    pmus_books gates on GRID ``started``, so the window the CROSSVENUE1 design
+    calls most mispriced -- PMUS listed a median 4.46h before kickoff, quotes
+    going stale against intl -- was never on tape. GRID only tracks a series
+    inside DISCOVERY_WINDOW, so "tracked and not started" IS "starting soon";
+    no scheduled-time field is read.
+    """
+
+    def test_prematch_returns_tracked_but_unstarted_series(self):
+        # NOT ids 2/28/99 -- those are GRID's looping test fixtures and ingest
+        # drops them (config.GRID_TEST_SERIES_IDS).
+        t = pb.LiveTracker()
+        t.ingest(_ss(sid="7001", started=False, live_map=None, games_before=0), 100.0)
+        t.ingest(_ss(sid="7002", started=True), 100.0)
+        assert t.live_maps(100.0) == {"7002": 3}
+        assert t.prematch(100.0) == {"7001"}
+
+    def test_a_started_series_is_never_prematch(self):
+        t = pb.LiveTracker()
+        t.ingest(_ss(sid="7002", started=True), 100.0)
+        assert t.prematch(100.0) == set()
+
+    def test_live_maps_prunes_before_prematch_reads(self):
+        """A silent series must not reappear as a pre-match candidate forever."""
+        t = pb.LiveTracker(stale_s=10.0)
+        t.ingest(_ss(sid="7001", started=False, live_map=None, games_before=0), 100.0)
+        assert t.prematch(100.0) == {"7001"}
+        t.live_maps(200.0)  # prunes the stale entry
+        assert t.prematch(200.0) == set()
+
+    def test_slugs_for_adds_only_the_match_book_and_only_at_the_end(self):
+        other = _mapping(sid="9")
+        other["us_markets"]["match"]["market_slug"] = "aec-cs2-other-2026-09-03"
+        specs = pb.slugs_for({SID: 2}, {SID: _mapping(), "9": other}, prematch={"9"})
+        assert [s["slug"] for s in specs] == [
+            _map_slug(2), MATCH_SLUG, "aec-cs2-other-2026-09-03"]
+        # live specs first: a round-robin cap starves pre-match before in-play
+        assert specs[-1]["series_id"] == "9"
+        assert specs[-1]["kind"] == "match_prematch"
+        assert specs[-1]["map_number"] is None
+
+    def test_a_series_that_is_both_live_and_prematch_is_not_polled_twice(self):
+        specs = pb.slugs_for({SID: 2}, {SID: _mapping()}, prematch={SID})
+        assert [s["slug"] for s in specs] == [_map_slug(2), MATCH_SLUG]
+
+    def test_unmapped_prematch_series_are_skipped(self):
+        assert pb.slugs_for({}, {}, prematch={"404"}) == []
+
+    def test_prematch_series_with_no_match_market_is_skipped(self):
+        specs = pb.slugs_for({}, {"9": _mapping(sid="9", match=False)}, prematch={"9"})
+        assert specs == []
+
+    def test_a_duplicate_slug_across_two_series_is_polled_once(self):
+        """Two GRID series mapped to the SAME PMUS market must not double the load."""
+        specs = pb.slugs_for({}, {"9": _mapping(sid="9"), "10": _mapping(sid="10")},
+                             prematch={"9", "10"})
+        assert [s["slug"] for s in specs] == [MATCH_SLUG]
+
+    def test_recorder_defaults_to_off_and_polls_nothing_prematch(self, tmp_path):
+        client, clock = FakeClient(), FakeClock(100.0)
+        rec, _w = _recorder(tmp_path, client, clock,
+                            [_ss(started=False, live_map=None, games_before=0)],
+                            [_mapping()], prematch=False)
+        summary = rec.cycle()
+        assert summary["live"] == {} and summary["polled"] == []
+        assert client.markets.calls == []
+
+    def test_recorder_with_the_flag_on_polls_the_match_book_before_kickoff(self, tmp_path):
+        client, clock = FakeClient(), FakeClock(100.0)
+        rec, w = _recorder(tmp_path, client, clock,
+                           [_ss(started=False, live_map=None, games_before=0)],
+                           [_mapping()], prematch=True)
+        summary = rec.cycle()
+        assert summary["live"] == {}                    # still not live
+        assert summary["polled"] == [MATCH_SLUG]        # but the book is on tape
+        assert client.markets.calls == [MATCH_SLUG]
+        assert w.rows[0]["kind"] == "match_prematch"
+        assert w.rows[0]["map_number"] is None
+
+    def test_the_flag_default_tracks_config(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pb.config, "PMUS_PREMATCH_BOOKS", True)
+        client, clock = FakeClient(), FakeClock(100.0)
+        rec, _w = _recorder(tmp_path, client, clock, [_ss()], [_mapping()])
+        assert rec.prematch is True

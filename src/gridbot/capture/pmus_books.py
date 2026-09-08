@@ -84,6 +84,17 @@ class LiveTracker:
         if state.get("finished"):
             self._finished_at.setdefault(sid, seen)  # the grace clock starts at the FIRST finished row
 
+    def prematch(self, now: float) -> set[str]:
+        """Series GRID is tracking that have NOT started yet (never stale/finished).
+
+        GRID only tracks a series inside ``config.DISCOVERY_WINDOW``, so membership
+        here already means "scheduled to start soon" -- no scheduled-time field is
+        read, and none is needed. ``live_maps`` prunes; this is a pure read over
+        whatever ``live_maps`` left behind, so call it after.
+        """
+        return {sid for sid, (state, _seen) in self._states.items()
+                if not state.get("started")}
+
     def live_maps(self, now: float) -> dict[str, int]:
         out: dict[str, int] = {}
         for sid, (state, seen) in list(self._states.items()):
@@ -124,10 +135,16 @@ def live_map_number(state: dict) -> int | None:
 # --- slug selection ----------------------------------------------------------
 
 
-def slugs_for(live_maps: dict[str, int], mappings: dict[str, dict]) -> list[dict]:
+def slugs_for(live_maps: dict[str, int], mappings: dict[str, dict],
+              prematch: set[str] | frozenset[str] = frozenset()) -> list[dict]:
     """Poll specs for every live, mapped series: the live map's book, then the match book.
 
     Missing entries (unmapped series, no ``map{n}`` book, empty slug) are skipped.
+
+    ``prematch`` series contribute their MATCH book only, and are appended AFTER
+    the live specs so a round-robin cap starves the pre-match tape before it
+    starves the in-play one. There is no live map before kickoff, and NOTE9
+    retired map books regardless. Off unless ``config.PMUS_PREMATCH_BOOKS``.
     """
     out: list[dict] = []
     for sid in sorted(live_maps):
@@ -140,6 +157,16 @@ def slugs_for(live_maps: dict[str, int], mappings: dict[str, dict]) -> list[dict
             slug = (us.get(key) or {}).get("market_slug")
             if slug:
                 out.append({"slug": str(slug), "series_id": sid, "map_number": n, "kind": kind})
+    seen = {s["slug"] for s in out}
+    for sid in sorted(prematch):
+        if sid in live_maps:
+            continue  # already covered by its live specs
+        us = (mappings.get(sid) or {}).get("us_markets") or {}
+        slug = (us.get("match") or {}).get("market_slug")
+        if slug and str(slug) not in seen:
+            out.append({"slug": str(slug), "series_id": sid,
+                        "map_number": None, "kind": "match_prematch"})
+            seen.add(str(slug))
     return out
 
 
@@ -268,8 +295,12 @@ class Recorder:
                  pmus_dir: Path | None = None, from_start: bool = False,
                  clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], None] = time.sleep,
-                 cap: int = MAX_SLUGS_PER_CYCLE, prime: bool = True) -> None:
+                 cap: int = MAX_SLUGS_PER_CYCLE, prime: bool = True,
+                 prematch: bool | None = None) -> None:
         self._client = client
+        # None -> take the deployed default; an explicit bool is for tests and
+        # for a caller that has already made the rate-budget decision.
+        self.prematch = config.PMUS_PREMATCH_BOOKS if prematch is None else prematch
         self.pmus_dir = pmus_dir or (config.DATA_DIR / "pmus")
         self.writer = writer or DayWriter(self.pmus_dir, "books")
         self.clock = clock
@@ -369,11 +400,12 @@ class Recorder:
             for record in batch:
                 self.tracker.ingest(record, now)
         live = self.tracker.live_maps(now)
-        specs = slugs_for(live, self.mappings)
+        pre = self.tracker.prematch(now) if self.prematch else frozenset()
+        specs = slugs_for(live, self.mappings, pre)
         candidates = {s["slug"] for s in specs}
         if candidates != self._last_candidates:
-            log.info("poll set: %d live series, %d slug(s): %s",
-                     len(live), len(specs), sorted(candidates))
+            log.info("poll set: %d live series, %d pre-match, %d slug(s): %s",
+                     len(live), len(pre), len(specs), sorted(candidates))
             self._last_candidates = candidates
         picked = self.rr.pick(specs)
         written = errors = 0
@@ -425,8 +457,10 @@ def main() -> None:
     # lines a day for nothing the 60s stats line does not already say.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     rec = Recorder()
-    log.info("pmus book recorder up (read-only public BBO; cycle %.1fs, cap %d slugs/cycle)",
-             CYCLE_S, MAX_SLUGS_PER_CYCLE)
+    log.info("pmus book recorder up (read-only public BBO; cycle %.1fs, cap %d slugs/cycle; "
+             "pre-match match books %s)",
+             CYCLE_S, MAX_SLUGS_PER_CYCLE,
+             "ON" if rec.prematch else "off (GRIDBOT_PMUS_PREMATCH_BOOKS=1 to enable)")
     try:
         while True:
             t0 = time.monotonic()
