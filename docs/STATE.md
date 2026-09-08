@@ -339,7 +339,22 @@ are excluded by design — they pin definitions, not numbers. The check is teste
 to fire, since an audit that can only return empty is indistinguishable from a
 broken one.
 
-Tests 1260 green; `ruff check` green on everything tracked (3 findings remain in
+**Orientation risk on the tradeable population is ZERO.** Design §7 called the
+join the lane's highest-risk component. Measured via the KG: **match markets 33/33
+orientable, map markets 0/66** — and it is systematic, not sporadic (every one of
+1,436 map-book rows declares one side; every one of 722 match-book rows declares
+two). Across **403 intl CS2 markets over two days, `yes_team_unresolved` is 0**;
+the DRAFT says a non-zero count there blocks trading, and there are none.
+
+The refusal census was also misreading itself: 337 refusals against 66 joins
+looks alarming until split by intl market kind (which it did not record, and now
+does) — **268 of the 337 are map markets**. On the match population the join rate
+is **66 of 135 = 48.9%**, not the 5% that 66/1268 implies. Map pairs cannot join
+at all because intl names the kind `map` while PMUS keys books `map1`/`map2`, so
+`pmus_sides_incomplete` is unreachable for maps and survives only as the guard
+that fires if a MATCH book ever ships one-sided — now commented at the call site.
+
+Tests 1263 green; `ruff check` green on everything tracked (3 findings remain in
 the still-uncommitted `src/gridbot/kg/`).
 
 ## Baseline 2026-09-04 (superseded — kept for lineage)

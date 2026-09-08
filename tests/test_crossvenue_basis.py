@@ -21,6 +21,7 @@ from gridbot.analysis.crossvenue_basis import (
     split_by_boundary,
     summarise,
 )
+from gridbot.analysis.crossvenue_join import join_markets
 
 BEFORE = HOLDOUT_BOUNDARY_NS - 10**9
 AFTER = HOLDOUT_BOUNDARY_NS + 10**9
@@ -150,3 +151,41 @@ class TestSummarise:
     def test_reports_how_stale_the_intl_side_was(self):
         pts = [BasisPoint(1, 0.5, 0.5, 0.0, 2_000_000_000, "aligned")]
         assert summarise(pts)["median_intl_age_s"] == pytest.approx(2.0)
+
+
+class TestRefusalCensusCarriesKind:
+    """Every refusal names the intl market kind it came from.
+
+    Without it the census is unreadable: 337 refusals over 2 days look alarming
+    until you see that 268 of them are MAP markets, which NOTE9 retired and
+    which cannot join at all — intl calls the kind "map" while PMUS keys its
+    books "map1"/"map2". The match-market join rate is 48.9%, not 5%.
+    """
+
+    def _intl(self, a="Alpha", b="Beta", mapno=None, token="t1", cond="c1"):
+        """A real-shaped intl catalog row. outcomes[i] pairs positionally with
+        clob_token_ids[i], and both must be the TEAM names — a generic
+        ["Yes","No"] pair carries no identity to orient against and parses to
+        None, which is itself the behaviour parse_intl_market documents."""
+        q = f"Counter-Strike: {a} vs {b} (BO3) - EPL Series 10"
+        if mapno:
+            q += f" - Map {mapno} Winner"   # _MAP_RE wants "map N winner"
+        return {"question": q, "event_title": q,
+                "condition_id": cond, "clob_token_ids": [token, "t2"],
+                "outcomes": [a, b]}
+
+    def test_no_pmus_match_carries_the_kind(self):
+        _joined, refusals = join_markets([self._intl()], [])
+        assert refusals and refusals[0]["reason"] == "no_pmus_match"
+        assert refusals[0]["kind"] == "match"
+
+    def test_a_map_market_is_labelled_map(self):
+        _joined, refusals = join_markets([self._intl(mapno=1)], [])
+        assert refusals[0]["kind"] == "map"
+
+    def test_every_refusal_names_a_kind(self):
+        _joined, refusals = join_markets(
+            [self._intl(), self._intl("Gamma", "Delta", mapno=1, token="t3", cond="c2")], [])
+        assert len(refusals) == 2
+        assert all("kind" in r for r in refusals)
+        assert {r["kind"] for r in refusals} == {"match", "map"}

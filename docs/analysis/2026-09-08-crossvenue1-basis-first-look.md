@@ -450,3 +450,52 @@ Also inherited from NOTE11: adding our order perturbs the book it is measured
 against. The perturbation runs *toward* filling us, so the fill conclusion
 survives; the price and residual size do not.
 
+---
+
+# Addendum 6: the orientation risk is zero on the population we would trade
+
+`uv run python -m gridbot.kg build && uv run python -m gridbot.kg --json orphans`
+
+Design §7 calls the join *"the highest-risk component: if intl's Yes resolves to
+team A and PMUS's Yes to team B, every number is exactly backwards and looks
+excellent."* The knowledge graph now measures that risk instead of asserting it.
+
+| PMUS market kind | orientable | refused |
+|---|---|---|
+| **match** | **33** | **0** |
+| map1 | 0 | 33 |
+| map2 | 0 | 33 |
+
+Every refusal is `pmus_sides_incomplete`, and it is systematic rather than
+sporadic: across the 2026-09-08 mapping file, **every one of 1,436 map-book rows
+declares exactly one side**, and **every one of 722 match-book rows declares
+two**. The venue simply does not name the short side of a map book.
+
+**Across 403 intl CS2 markets over two days, `yes_team_unresolved` is ZERO.** The
+DRAFT registration says a non-zero count there "is a sign-convention event and
+blocks trading until explained". There are none to explain.
+
+## And the refusal census was misreading itself
+
+337 refusals against 66 joins looks alarming until it is split by the intl market
+kind — which the census did not record, and now does:
+
+| intl kind | reason | n |
+|---|---|---|
+| map | no_pmus_book_of_kind | 150 |
+| map | no_pmus_match | 118 |
+| match | no_pmus_match | 60 |
+| match | no_pmus_book_of_kind | 9 |
+
+**268 of the 337 refusals are map markets**, which NOTE9 retired and NOTE13
+measured at 81.8% untradeable. On the population that matters the join rate is
+**66 of 135 intl match markets = 48.9%**, not the 5% that `66/1268` implies.
+
+Map markets also cannot join *at all*, for a reason worth writing down: intl
+names the kind `map` while PMUS keys its books `map1`/`map2`, so the kind
+comparison never matches and every map pair is refused one step earlier than the
+orientation check. A consequence is that **`pmus_sides_incomplete` is unreachable
+for map books in practice** — it is kept as a live guard because it is the one
+that fires if a *match* book ever ships one-sided, and that is now commented at
+the call site rather than left as a trap for the next reader.
+

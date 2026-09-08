@@ -183,7 +183,8 @@ def join_markets(
                 hit = mapping
                 break
         if hit is None:
-            refusals.append({"reason": "no_pmus_match", "question": market.question})
+            refusals.append({"reason": "no_pmus_match", "question": market.question,
+                             "kind": market.kind})
             continue
 
         books = [b for b in _pmus_books(hit) if b[0] == market.kind]
@@ -198,8 +199,16 @@ def join_markets(
         if len(longs) != 1 or len(shorts) != 1:
             # A one-sided book carries no Yes team to orient against. Refuse:
             # guessing here is precisely how a sign inversion gets shipped.
+            # UNREACHABLE FOR MAP BOOKS IN PRACTICE, and the reason matters:
+            # intl market kind is "map" while PMUS keys its books "map1"/"map2",
+            # so a map pair is always refused above at no_pmus_book_of_kind and
+            # never arrives here. Every PMUS map book declares exactly one side
+            # (1,436 of 1,436 rows on 2026-09-08) and would be refused here if it
+            # did. Kept as a live guard because it is the one that fires if a
+            # MATCH book ever ships one-sided.
             refusals.append({"reason": "pmus_sides_incomplete",
-                             "question": market.question, "slug": slug})
+                             "question": market.question, "slug": slug,
+                             "kind": market.kind})
             continue
         pmus_yes = longs[0]
 
@@ -209,7 +218,8 @@ def join_markets(
             orientation = "inverted"
         else:
             refusals.append({"reason": "yes_team_unresolved",
-                             "question": market.question, "slug": slug})
+                             "question": market.question, "slug": slug,
+                             "kind": market.kind})
             continue
 
         joined.append(JoinedMarket(
