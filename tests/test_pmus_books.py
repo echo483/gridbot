@@ -10,6 +10,7 @@ from gridbot.capture.pmus_books import (
     LiveTracker,
     Recorder,
     RoundRobin,
+    compact_depth,
     slugs_for,
 )
 
@@ -256,6 +257,45 @@ class TestBookTape:
         assert w.rows[-1]["heartbeat"] is True
         assert len(w.rows) == 4
 
+    def test_depth_rides_along_on_a_written_row(self):
+        """The ladder is free (parse_book already computed it) and queue position
+        needs it: top-of-book size answers the queue question only for an order
+        resting AT the touch."""
+        clock, w = FakeClock(0.0), FakeWriter()
+        tape = BookTape(w, clock=clock, heartbeat_s=30.0)
+        depth = {"bids": [[0.47, 12.0], [0.46, 40.0]], "offers": [[0.55, 9.0]],
+                 "bid_top5_total": 52.0, "ask_top5_total": 9.0, "imbalance": 0.8525}
+        assert tape.observe(SPEC, 0.47, 0.55, REQ_NS, 83, 12.0, 9.0, depth) is True
+        row = w.rows[-1]
+        assert row["bids"] == [[0.47, 12.0], [0.46, 40.0]]
+        assert row["offers"] == [[0.55, 9.0]]
+        assert row["imbalance"] == 0.8525
+        assert row["bid_size"] == 12.0  # the touch is still there, unchanged
+
+    def test_depth_alone_never_triggers_a_write(self):
+        """Depth is on exactly the same terms as sizes: it rides along, it does not
+        trigger. Making it a trigger turns a change-only tape into a firehose,
+        because levels churn every poll."""
+        clock, w = FakeClock(0.0), FakeWriter()
+        tape = BookTape(w, clock=clock, heartbeat_s=30.0)
+        d1 = {"bids": [[0.47, 12.0]], "offers": [], "bid_top5_total": 12.0,
+              "ask_top5_total": 0.0, "imbalance": 1.0}
+        d2 = {"bids": [[0.47, 999.0]], "offers": [], "bid_top5_total": 999.0,
+              "ask_top5_total": 0.0, "imbalance": 1.0}
+        assert tape.observe(SPEC, 0.47, 0.55, REQ_NS, 83, 12.0, None, d1) is True
+        clock.t = 5.0
+        # Same BBO, wildly different ladder -> still suppressed.
+        assert tape.observe(SPEC, 0.47, 0.55, REQ_NS + 1, 83, 999.0, None, d2) is False
+        assert len(w.rows) == 1
+
+    def test_a_row_without_depth_is_unchanged(self):
+        """Backward compatibility: the tape is append-only and every existing row
+        predates depth, so omitting it must add no keys at all."""
+        clock, w = FakeClock(0.0), FakeWriter()
+        tape = BookTape(w, clock=clock)
+        assert tape.observe(SPEC, 0.47, 0.55, REQ_NS, 83) is True
+        assert "bids" not in w.rows[-1] and "imbalance" not in w.rows[-1]
+
     def test_slugs_are_tracked_independently(self):
         clock, w = FakeClock(0.0), FakeWriter()
         tape = BookTape(w, clock=clock)
@@ -446,3 +486,68 @@ class TestRecorderCycle:
                      [_ss(live_map=3, req_ns=REQ_NS + 1)])
         assert rec.cycle()["polled"] == [_map_slug(3), MATCH_SLUG]
         rec.close()
+
+
+class TestRecorderDepth:
+    def test_the_ladder_reaches_the_written_row(self, tmp_path):
+        """End to end through the REAL parse_book: markets.book already returns the
+        ladder, so the tape must carry it. Zero extra API calls — same one poll."""
+        def multi(bids, offers) -> dict:
+            def lv(px, qty):
+                return {"px": {"value": px, "currency": "USD"}, "qty": qty}
+            return {"marketData": {"marketSlug": "m",
+                                   "bids": [lv(p_, q) for p_, q in bids],
+                                   "offers": [lv(p_, q) for p_, q in offers]}}
+        payload = multi([("0.47", "12.0"), ("0.45", "40.0"), ("0.44", "8.0")],
+                        [("0.55", "9.0"), ("0.57", "31.0")])
+        client, clock = FakeClient({MATCH_SLUG: payload}), FakeClock(100.0)
+        rec, w = _recorder(tmp_path, client, clock, [_ss(live_map=2)], [_mapping()])
+        rec.cycle()
+        row = {r["slug"]: r for r in w.rows}[MATCH_SLUG]
+        assert row["bid"] == 0.47 and row["ask"] == 0.55       # touch unchanged
+        assert row["bids"] == [[0.47, 12.0], [0.45, 40.0], [0.44, 8.0]]
+        assert row["offers"] == [[0.55, 9.0], [0.57, 31.0]]
+        assert row["bid_top5_total"] == 60.0
+        assert row["ask_top5_total"] == 40.0
+        # The size at bid+1 tick is now answerable, which is the point: a maker
+        # posting inside the spread has a queue that top-of-book cannot describe.
+        assert dict(row["bids"]).get(0.45) == 40.0
+
+    def test_a_one_sided_book_still_writes_a_usable_row(self, tmp_path):
+        """22% of map books are dead or one-sided (NOTE9); the row must stay
+        iterable rather than carrying a None the consumer has to guard."""
+        payload = {"marketData": {"marketSlug": "m", "bids": [], "offers": []}}
+        client, clock = FakeClient({MATCH_SLUG: payload}), FakeClock(100.0)
+        rec, w = _recorder(tmp_path, client, clock, [_ss(live_map=2)], [_mapping()])
+        rec.cycle()
+        row = {r["slug"]: r for r in w.rows}[MATCH_SLUG]
+        assert row["bid"] is None and row["ask"] is None
+        assert row["bids"] == [] and row["offers"] == []
+
+
+class TestCompactDepth:
+    """The ladder compaction. Free depth, so the only job is not to lie about it."""
+
+    def test_levels_become_price_size_pairs(self):
+        book = {
+            "depth": {"bids": [{"price": 0.47, "size": 12.0},
+                               {"price": 0.46, "size": 40.0}],
+                      "offers": [{"price": 0.55, "size": 9.0}]},
+            "bid_top5_total": 52.0, "ask_top5_total": 9.0, "imbalance": 0.8525,
+        }
+        got = compact_depth(book)
+        assert got["bids"] == [[0.47, 12.0], [0.46, 40.0]]
+        assert got["offers"] == [[0.55, 9.0]]
+        assert got["bid_top5_total"] == 52.0
+        assert got["imbalance"] == 0.8525
+
+    def test_an_absent_side_is_an_empty_list_not_none(self):
+        """A consumer must be able to iterate without a guard; 22% of map books
+        are dead or one-sided."""
+        got = compact_depth({"depth": {"bids": [], "offers": None}})
+        assert got["bids"] == [] and got["offers"] == []
+
+    def test_a_bookless_payload_does_not_raise(self):
+        got = compact_depth({})
+        assert got["bids"] == [] and got["offers"] == []
+        assert got["imbalance"] is None

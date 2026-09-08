@@ -175,11 +175,29 @@ class BookTape:
 
     def observe(self, spec: dict, bid: float | None, ask: float | None,
                 req_ns: int, latency_ms: int,
-                bid_size: float | None = None, ask_size: float | None = None) -> bool:
+                bid_size: float | None = None, ask_size: float | None = None,
+                depth: dict | None = None) -> bool:
         """Write when (bid, ask) changed, else at most one heartbeat per window. True if written.
 
         Sizes ride along on every written row (they are not a change trigger: top
         sizes churn every poll and would turn the change-only tape into a firehose).
+        DEPTH rides along on exactly the same terms, for exactly the same reason.
+
+        Why depth is here at all: ``markets.book`` already returns the full ladder
+        and ``mapentry.parse_book`` already parses 10 levels a side, and the
+        recorder was throwing all of it away and keeping the touch. It is free —
+        zero extra API calls, zero extra rate budget.
+
+        Why it matters: with the trades tape live, a maker fill model's remaining
+        unknown is QUEUE POSITION — how much size sat ahead of us at our price.
+        Top-of-book size answers that only for an order resting AT the touch; a
+        strategy posting inside the spread or at bid+1 tick needs the size at THAT
+        level, which is exactly what the ladder carries. See
+        H-MAPENTRY1-NOTE11 and the CROSSVENUE1 design §12.
+
+        The tradeoff is inherited, not new: a change deeper in the book that does
+        not move the BBO is still suppressed by the heartbeat window, the same way
+        a pure size change already was.
         """
         now = self.clock()
         prev = self._last.get(spec["slug"])
@@ -199,6 +217,7 @@ class BookTape:
             "heartbeat": not changed,
             "bid_size": bid_size,
             "ask_size": ask_size,
+            **(depth or {}),
         })
         self._last[spec["slug"]] = ((bid, ask), now)
         return True
@@ -212,6 +231,33 @@ class BookTape:
             "kind": spec["kind"],
             "error": type(exc).__name__,
         })
+
+
+def compact_depth(book: dict) -> dict:
+    """Ladder + aggregates from a parsed book, as compactly as the tape allows.
+
+    Levels become ``[price, size]`` pairs rather than ``{"price":…, "size":…}``:
+    the tape is append-only and every byte is paid ~2,600 times a day per slug,
+    and the key names carry no information a reader does not already have from
+    the field name. Absent sides yield empty lists, never None, so a consumer can
+    iterate without a guard.
+
+    Only fields ``parse_book`` already computed are carried. This function adds
+    no venue calls and makes no decisions — a capture module never interprets
+    (``grid_poller`` docstring).
+    """
+    d = book.get("depth") or {}
+
+    def pairs(side: str) -> list[list[float]]:
+        return [[lv["price"], lv["size"]] for lv in (d.get(side) or [])]
+
+    return {
+        "bids": pairs("bids"),
+        "offers": pairs("offers"),
+        "bid_top5_total": book.get("bid_top5_total"),
+        "ask_top5_total": book.get("ask_top5_total"),
+        "imbalance": book.get("imbalance"),
+    }
 
 
 # --- recorder ----------------------------------------------------------------
@@ -290,13 +336,18 @@ class Recorder:
         self._mappings_loaded = now
 
     def fetch(self, slug: str) -> tuple[float | None, float | None, int, int,
-                                       float | None, float | None]:
-        """(bid, ask, req_ns, latency_ms, bid_size, ask_size) — req_ns is taken right before the call.
+                                       float | None, float | None, dict]:
+        """(bid, ask, req_ns, latency_ms, bid_size, ask_size, depth) — req_ns taken pre-call.
 
         Since 2026-09-04 the recorder reads the full book (``markets.book``), not the
         BBO endpoint: the maker fill bracket (analysis.exec_fills) needs the displayed
         size at the touch, and a sizeless tape cannot compute its lower bound
         (deepseek-pro review of the EXEC1 brief, findings #1/#2/#8).
+
+        Since 2026-09-08 the LADDER is kept too. ``parse_book`` already computed it
+        on every poll and the recorder discarded everything but the touch — free
+        depth at zero API cost (CROSSVENUE1 design §10, "Free depth, zero extra API
+        calls"). See ``Tape.observe`` for why queue position needs it.
         """
         client = self._get_client()
         req_ns = time.time_ns()
@@ -305,7 +356,7 @@ class Recorder:
         latency_ms = round((time.perf_counter() - t0) * 1000)
         book = mapentry.parse_book(payload)
         return (book["bid"], book["ask"], req_ns, latency_ms,
-                book.get("bid_size"), book.get("ask_size"))
+                book.get("bid_size"), book.get("ask_size"), compact_depth(book))
 
     def cycle(self, now: float | None = None) -> dict:
         """One poll cycle: ingest ss rows, derive the poll set, fetch, write. Never raises."""
@@ -330,13 +381,15 @@ class Recorder:
             if i:
                 self.sleep(REQUEST_SPACING_S)
             try:
-                bid, ask, req_ns, latency_ms, bid_size, ask_size = self.fetch(spec["slug"])
+                (bid, ask, req_ns, latency_ms, bid_size, ask_size,
+                 depth) = self.fetch(spec["slug"])
             except Exception as exc:
                 log.warning("book fetch failed for %s: %s", spec["slug"], type(exc).__name__)
                 self.tape.error(spec, exc)
                 errors += 1
                 continue
-            if self.tape.observe(spec, bid, ask, req_ns, latency_ms, bid_size, ask_size):
+            if self.tape.observe(spec, bid, ask, req_ns, latency_ms, bid_size,
+                                 ask_size, depth):
                 written += 1
         self._stats["polls"] += len(picked)
         self._stats["written"] += written
