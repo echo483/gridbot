@@ -94,6 +94,42 @@ the spread it must cross stated alongside every number (NOTE8). PENDING USER
 CONFIRMATION: proposed bar `median |basis| at signal ≥ 2 ticks` on qualifying
 observations.
 
+> **The trigger is frozen here, deliberately before it can be tuned.** "At
+> signal" now has a definition, and it was fixed from the intl side's own
+> dynamics with no PMUS book in scope and no basis computable from anything the
+> instrument could see (`gridbot.analysis.crossvenue_signal`, 21 tests;
+> `scripts/crossvenue_signal_rate.py`):
+>
+> **An intl repricing event fires when the intl mid moves ≥ 2 ticks against the
+> intl quote as of 30s earlier, with a 60s cooldown so one repricing is one
+> event.** Causal by construction, and it fails closed for the first 30s of a
+> market rather than measuring over whatever history exists.
+>
+> The parameters are round numbers with stated provenance, not fitted ones: 2
+> ticks because that is this clause's own cost floor, 30s because it is the order
+> of the measured GRID round-end lead (13–27s), 60s because a repricing should
+> count once. Measured on the 14 training markets with an intl series, over 168.8
+> market-hours:
+>
+> | threshold | events | rate | median size | p90 |
+> |---|---|---|---|---|
+> | ≥2 ticks / 30s | 229 | **1.36/h** | 2.5t | 14.0t |
+> | ≥3 ticks / 30s | 177 | 1.05/h | 3.5t | 17.5t |
+> | ≥5 ticks / 30s | 113 | 0.67/h | 6.5t | 23.5t |
+>
+> Why this matters for clause (ii): the **unconditional** clean basis is **1.5
+> ticks**, below this clause's own 2-tick bar
+> (`docs/analysis/2026-09-08-crossvenue1-basis-first-look.md`). The lane
+> therefore rests entirely on the conditional basis at these events exceeding the
+> unconditional one. That is the single measurement that decides the lane, it has
+> **not** been taken, and freezing the trigger now is what keeps it a test rather
+> than a search.
+>
+> Rates are per market-hour and vary by an order of magnitude (0.00–13.67/h): a
+> ~4h span is an in-play window, a ~24h span is listing-to-settlement and mostly
+> dormant. Clause (iv) must be derived from IN-PLAY hours with a live PMUS book,
+> not from pooled market-hours.
+
 **(iii) Execution.** Fill-modelled PnL per contract, **depth-limited,
 quote-lifetime aware, series-clustered**, with 95% CI excluding zero on the
 favourable side.
@@ -150,7 +186,16 @@ an agent's, never a default.
 2. **Clause (ii) bar**: is 2 ticks the right cost floor?
 3. **Clause (iii) calibration gate**: what recall/precision bar, given NOTE3's
    lesson that a soft gate gets rendered past?
-4. **Clause (iv)**: set after re-measurement.
+4. **Clause (iv)**: set after re-measurement. The arithmetic is now partly
+   known: intl supplies **~1.36 signal events per market-hour** at the frozen
+   threshold, so an in-play match (~4h) offers roughly 5–25 events. The binding
+   term is not the signal rate but the fraction of those hours carrying a **live**
+   PMUS book — today 3 of 46 training markets have both venues at all, and only
+   ~64% of match books are live (`H-MAPENTRY1-NOTE13`). Clause (iv) should be set
+   from `observable in-play hours × 1.36 × P(live book)` once coverage is real.
+6. **Is the frozen trigger the right one?** It is deliberately unfitted. If you
+   want a different definition, change it **now** — changing it after the
+   conditional basis is measured turns the lane into a search.
 5. **One capture widening is a policy call**, not two. Subscribing PMUS books
    from listing rather than kickoff is live behind `config.PMUS_PREMATCH_BOOKS`
    (default off). The venue ceiling is not the constraint — measured 0.9 req/s

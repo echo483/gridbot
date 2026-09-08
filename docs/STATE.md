@@ -213,9 +213,25 @@ falsification — clause (ii) is about the basis *at a signal* and no signal exi
 yet — but the lane now visibly lives or dies on whether a signal selects the
 tail. Coverage remains the gate: of 46 training markets, 14 have intl data, 12
 have PMUS data, and **2 have both**. Next: enable `PMUS_PREMATCH_BOOKS`, decide
-the cap, accrue full days, then build the signal.
+the cap, accrue full days, then measure the conditional basis.
 
-Tests 1155 green; `ruff check` green on everything tracked (3 findings remain in
+**The trigger is now frozen, before it could be tuned**
+(`gridbot.analysis.crossvenue_signal`, 21 tests): an intl repricing event is a
+**≥2-tick move of the intl mid against the quote 30s earlier, 60s cooldown** —
+causal, and failing closed for a market's first 30s. Parameters are round numbers
+with provenance (2 ticks = the clause (ii) cost floor; 30s = the order of the
+measured GRID lead; 60s = one repricing counts once), fixed from the intl side
+alone with no PMUS book in scope. Measured over 168.8 training market-hours:
+**1.36 events/h** at ≥2t (1.05 at ≥3t, 0.67 at ≥5t), median size 2.5t, p90 14.0t.
+
+This sets up the one measurement that decides the lane: the unconditional clean
+basis is **1.5 ticks, below the 2-tick bar**, so CROSSVENUE1 lives or dies on the
+**conditional** basis at these events exceeding it. That measurement has **not**
+been taken — freezing the trigger first is what keeps it a test rather than a
+search (Quantopian L22). Rates vary 0.00–13.67/h per market: a ~4h span is
+in-play, a ~24h span is listing-to-settlement and mostly dormant.
+
+Tests 1176 green; `ruff check` green on everything tracked (3 findings remain in
 the still-uncommitted `src/gridbot/kg/`).
 
 ## Baseline 2026-09-04 (superseded — kept for lineage)
