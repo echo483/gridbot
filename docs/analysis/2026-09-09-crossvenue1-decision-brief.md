@@ -27,15 +27,20 @@ except the last.
 | intl reprices | **1.36 events/h** (≥2t/30s, 168.8 market-hours) | works |
 | the move is real, not flicker | **54.8% two-sided** overall; **83.3%** on tradeable markets | works |
 | real moves carry information | two-sided retrace **−0.000 @150s** (52% held) vs one-sided **0.500** (27%) | works |
-| PMUS is stale at those moments | **120 STALE / 42 INFORMED / 134 NO_FOLLOW** (n=296) | partial |
+| PMUS is stale at those moments | **101 STALE / 38 INFORMED / 61 NO_FOLLOW** (n=200) | partial |
 | the gap is worth crossing | basis at STALE **2.5 ticks**, **61% ≥2t** | clears the proposed bar |
 | PMUS reacts slowly enough to rest | follow lag **35.8s** p50 vs a **150s** order | works |
-| a maker actually gets filled | **17.8%** at the touch, **33.1%** one tick inside | binding constraint |
+| a maker actually gets filled | **19.2%** at the touch, **35.4%** one tick inside | binding constraint |
 | **the fill is profitable** | **NOT MEASURED** — that is the edge claim, and it needs registration first | **open** |
 
-Two haircuts sit on top of anything that follows: **14.2% of events are INFORMED**
-(PMUS moved first — the −6.5pt pick-off, NOTE6, in observable form), and
-**NO_FOLLOW is 45%**, of which a substantial share is intl reverting rather than
+One haircut dominates everything that follows: **19.0% of events are INFORMED** —
+PMUS moved first and we are the one being picked off. That is the −6.5pt
+fill-selection cost (NOTE6) in observable form, and **it has worsened at every
+correction tonight: 12.1% → 14.2% → 19.0%**, as measurement artifacts were
+removed. A number that moves against you each time you look at it more carefully
+is the one to weight most heavily.
+
+NO_FOLLOW is 30.5%, and a substantial share of that is intl reverting rather than
 PMUS being stale.
 
 ### Two risks measured after this brief was first written, both favourable
@@ -45,7 +50,7 @@ feed runs at a **median 83.3ms** venue-stamp to receive (7,092,340 messages) —
 0.2% of the 35.8s window. Split by outcome, the medians are *identical*: **82.5ms
 on the events that picked us off, 82.1ms on the ones that did not.** Constant
 clock skew cancels out of that comparison, which is why it carries a conclusion
-the absolute number cannot. The 14.2% is genuine adverse selection: **a cost to
+the absolute number cannot. The 19.0% is genuine adverse selection: **a cost to
 price, not a bug to fix with faster infrastructure.**
 
 **Orientation risk — the design's named highest-risk component — is zero on the
@@ -54,6 +59,12 @@ are all map books, which the venue ships with only one side declared (1,436 of
 1,436 rows) and which NOTE9 retired anyway. Across **403 intl CS2 markets,
 `yes_team_unresolved` is 0** — the registration's own blocking condition has
 nothing to block on.
+
+**There are no big intermittent gaps to hunt.** The basis distribution looked
+like it had a long right tail — p90 of 24 ticks against a 1.5-tick median — and
+all of it was books dying mid-match. Applying liveness *pointwise* rather than
+once per book takes the p90 from **9.0 to 3.5 ticks** and leaves the median
+untouched. The cross-venue gap is small and consistent, not occasionally huge.
 
 **The measurements survive their own robustness checks.** Both the response
 labels and the fill rates were re-measured under a bound on how stale our PMUS
@@ -141,15 +152,15 @@ inside a 150s order.
 ## Decision 5 — clause (iii), the posting rule
 
 This is a genuine tradeoff and it is now quantified: **+1 tick nearly doubles the
-fill rate (17.8% → 33.1% certain) and spends 40% of a 2.5-tick median basis.**
+fill rate (19.2% → 35.4% certain) and spends 40% of a 2.5-tick median basis.**
 Clause (iii) has to name one posting rule and be rendered on filled orders only,
 computed from `trade_prints` — never `exec_fills`, whose bracket does not contain
 the truth (NOTE11).
 
 ## Decision 6 — clause (iv), the starvation floor
 
-At current coverage: ~3.5 usable books/day × ~17 STALE events × 17.8% fill ≈
-**10 fills/day**. H-MAPENTRY1 died accruing 39 against a bar of 60. Set the floor
+At current coverage: ~3.5 usable books/day × ~17 STALE events × 19.2% fill ≈
+**11 fills/day**. H-MAPENTRY1 died accruing 39 against a bar of 60. Set the floor
 from a rate you have actually measured **after** decisions 1 and 2, and make it
 reachable inside a stated window.
 
