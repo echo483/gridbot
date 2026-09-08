@@ -38,6 +38,28 @@ Two haircuts sit on top of anything that follows: **12.1% of events are INFORMED
 **NO_FOLLOW is modal at 55%**, of which a substantial share is intl reverting
 rather than PMUS being stale.
 
+### Two risks measured after this brief was first written, both favourable
+
+**The pick-off is not our latency, so it cannot be engineered away.** Our intl
+feed runs at a **median 83.3ms** venue-stamp to receive (7,092,340 messages) —
+0.2% of the 35.8s window. Split by outcome, the medians are *identical*: **82.5ms
+on the events that picked us off, 82.1ms on the ones that did not.** Constant
+clock skew cancels out of that comparison, which is why it carries a conclusion
+the absolute number cannot. The 12.1% is genuine adverse selection: **a cost to
+price, not a bug to fix with faster infrastructure.**
+
+**Orientation risk — the design's named highest-risk component — is zero on the
+tradeable population.** Match markets are **33/33 orientable**; the 66 refusals
+are all map books, which the venue ships with only one side declared (1,436 of
+1,436 rows) and which NOTE9 retired anyway. Across **403 intl CS2 markets,
+`yes_team_unresolved` is 0** — the registration's own blocking condition has
+nothing to block on.
+
+**And coverage reads better than it looked.** The refusal census did not record
+the intl market kind; split by it, **268 of 337 refusals are map markets**. On
+the match population the join rate is **66 of 135 = 48.9%**, not the 5% that
+66/1268 implies.
+
 **The honest summary: no link is broken, and no link is strong.** The lane is
 plausible and underpowered, and the thing that decides it — expectancy on filled
 orders — is exactly the thing that cannot be measured before you register it.
@@ -59,7 +81,7 @@ the design calls most mispriced stops being invisible.
 **Ask:** enable the flag, and decide whether to raise the cap alongside it. The
 measurement says there is headroom; spending it is your call.
 
-## Decision 2 — restart capture to activate three dormant changes (rail 4)
+## Decision 2 — restart capture to activate four dormant changes (rail 4)
 
 Nothing was restarted tonight. Three shipped changes are dormant until you do:
 
@@ -69,6 +91,10 @@ Nothing was restarted tonight. Three shipped changes are dormant until you do:
   distinguishable from a sweep that never ran (this ambiguity produced a wrong
   published cause tonight — see `H-MAPENTRY1-NOTE12`);
 - **`PMUS_PREMATCH_BOOKS`**, if you enable it.
+
+Until that restart, `evidence_qa` check 5 (capture gaps) reports **pending** for
+every day — it watches the `discovery_sweep` heartbeat, which does not exist yet.
+Pending is deliberately not green.
 
 ## Decision 3 — amend the frozen trigger, or leave it
 
