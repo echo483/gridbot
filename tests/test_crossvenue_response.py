@@ -192,3 +192,41 @@ class TestMakerQuote:
         assert long_cost == pytest.approx(0.40)
         assert short_cost + 0.44 == pytest.approx(1.0)
         assert short_cost != pytest.approx(0.44)
+
+
+class TestPmusFreshnessBound:
+    """A PMUS quote we have not refreshed looks like a book that has not moved.
+
+    That pushes events toward the STALE label and inflates the basis measured
+    against it — the thesis-favouring direction, which is the one worth guarding.
+    The sibling basis instrument WAS contaminated this way (it joins on the PMUS
+    clock, so intl can go stale between samples); this one joins on the intl
+    event clock, where intl is fresh by construction. Measured: bounding PMUS age
+    at 30s moves STALE 121 -> 115 and leaves the basis at 2.5 ticks.
+    """
+
+    def test_age_is_recorded_on_every_response(self):
+        pmus = [_q(40, 0.50), _q(100, 0.50), _q(130, 0.53)]
+        r = responses([_move()], pmus, "aligned")[0]
+        assert r.pmus_age_ns == 0          # a quote stamped exactly at the event
+        assert r.pmus_age_s == 0.0
+
+    def test_a_stale_quote_reports_its_age(self):
+        pmus = [_q(40, 0.50), _q(130, 0.53)]   # nothing at t=100
+        r = responses([_move()], pmus, "aligned")[0]
+        assert r.pmus_age_s == pytest.approx(60.0)
+
+    def test_a_quote_older_than_the_bound_drops_the_event(self):
+        pmus = [_q(40, 0.50), _q(130, 0.53)]
+        assert responses([_move()], pmus, "aligned", max_pmus_age_ns=30 * S) == []
+        assert len(responses([_move()], pmus, "aligned", max_pmus_age_ns=90 * S)) == 1
+
+    def test_unbounded_is_the_default_because_the_bound_is_a_registration_choice(self):
+        pmus = [_q(40, 0.50), _q(130, 0.53)]
+        assert len(responses([_move()], pmus, "aligned")) == 1
+
+    def test_the_summary_surfaces_the_age_distribution(self):
+        pmus = [_q(40, 0.50), _q(130, 0.53)]
+        s = summarise_responses(responses([_move()], pmus, "aligned"))
+        assert s["median_pmus_age_s"] == pytest.approx(60.0)
+        assert s["p90_pmus_age_s"] == pytest.approx(60.0)

@@ -358,7 +358,16 @@ at all because intl names the kind `map` while PMUS keys books `map1`/`map2`, so
 `pmus_sides_incomplete` is unreachable for maps and survives only as the guard
 that fires if a MATCH book ever ships one-sided — now commented at the call site.
 
-Tests 1263 green; `ruff check` green on everything tracked (3 findings remain in
+The same staleness guard was applied to `crossvenue_response` (it had the hole
+too, biased **toward** the thesis) and both it and the fill measurement are
+**robust**: median PMUS age at an event is 16.8s, and a 30s bound moves STALE
+121→115 with the basis unchanged at 2.5t and fills 18.5%→19.0%. Only the basis
+was contaminated, and the reason is structural — the basis joins on the **PMUS
+clock** (intl can go stale between samples), while responses and fills join on the
+**intl event clock**, where intl is fresh by construction. An as-of join is only
+as trustworthy as the freshness of the side it reaches backwards into.
+
+Tests 1268 green; `ruff check` green on everything tracked (3 findings remain in
 the still-uncommitted `src/gridbot/kg/`).
 
 ## Baseline 2026-09-04 (superseded — kept for lineage)

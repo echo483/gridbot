@@ -557,3 +557,52 @@ to 2.5, against a 2-tick cost floor and an 18.5% fill rate.
 - Still no PnL. A 2.0-tick gap crossed at an 18.5% fill rate with a 12.1%
   pick-off rate is not 2.0 ticks of profit, and nothing here computes what it is.
 
+---
+
+# Addendum 8: the same staleness guard, applied to the sibling instruments — and why only one was contaminated
+
+Addendum 7 found the basis instrument capable of reporting staleness as edge. The
+obvious next question is whether `crossvenue_response` had the same hole. It did —
+it took the PMUS quote as-of each intl event with no bound on how old that quote
+could be — and the bias runs **toward the thesis**: a PMUS quote we have not
+refreshed looks like a book that has not moved, which pushes events toward the
+STALE label and inflates the basis measured against it.
+
+So the bound was added, the age is now recorded on every `Response`, and the
+numbers were re-measured under it.
+
+| max PMUS age | n | STALE | INF | NO_FOLLOW | \|b\| STALE | ≥2t | lag p50 | age p50 |
+|---|---|---|---|---|---|---|---|---|
+| unbounded | 364 | 121 | 44 | 199 | 2.5t | 0.61 | 35.8s | 16.8s |
+| 600s | 363 | 121 | 44 | 198 | 2.5t | 0.61 | 35.8s | 16.7s |
+| 60s | 357 | 118 | 44 | 195 | 2.5t | 0.60 | 35.8s | 16.4s |
+| 30s | 345 | 115 | 43 | 187 | 2.5t | 0.60 | 35.7s | 15.5s |
+
+| PMUS age cap | posting | n | CERTAIN | possible |
+|---|---|---|---|---|
+| unbounded | at the touch | 119 | 18.5% | 33.6% |
+| **60s** | at the touch | 116 | **19.0%** | 34.5% |
+| unbounded | touch +1 tick | 119 | 33.6% | 52.1% |
+| **60s** | touch +1 tick | 116 | **34.5%** | 53.4% |
+
+**Both instruments are robust.** Median PMUS age at an event is **16.8s**, and
+squeezing the bound to 30s moves STALE from 121 to 115 while leaving the basis at
+2.5 ticks and the follow lag at 35.7s. The guard confirms the numbers rather than
+overturning them.
+
+## Why the basis was contaminated and these were not
+
+It is the clock each instrument joins on.
+
+- **The basis joins on the PMUS clock** — one observation per PMUS sample, over
+  the whole life of the book. Intl can stop updating (market settled, extraction
+  window ended) while PMUS keeps being polled, so an as-of intl quote drifts to
+  hours old and the pooled figure becomes staleness.
+- **Responses and fills join on the intl event clock.** An event only exists
+  because intl printed a quote, so the intl side is fresh *by construction*, and
+  the PMUS side is polled frequently on exactly the books `book_liveness` admits.
+
+That is a property worth remembering rather than a coincidence: **an as-of join is
+only as trustworthy as the freshness of the side it reaches backwards into**, and
+which side that is depends on whose clock indexes the series.
+

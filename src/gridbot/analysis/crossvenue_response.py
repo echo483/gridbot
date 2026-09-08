@@ -44,6 +44,13 @@ from gridbot.analysis.crossvenue_signal import TICK, Move
 
 DEFAULT_HORIZON_NS = 300_000_000_000   # 5 min; a stale quote that outlives this is not "lagging"
 DEFAULT_MIN_PMUS_TICKS = 1.0           # one venue tick is the smallest observable follow
+# How old the PMUS quote at the event may be. Unbounded by default because the
+# bound is a pre-registration parameter, but note WHICH WAY it biases: a PMUS
+# quote we have not refreshed looks like a book that has not moved, which pushes
+# events toward the STALE label and inflates the basis against it. That is the
+# thesis-favouring direction, so the age is recorded on every Response and any
+# reported number should state the bound it was measured under.
+DEFAULT_MAX_PMUS_AGE_NS: int | None = None
 
 STALE = "stale"
 INFORMED = "informed"
@@ -61,6 +68,7 @@ class Response:
     pmus_lag_ns: int | None         # forward-looking: time until PMUS followed
     pmus_led: bool                  # backward-looking: PMUS had already moved
     label: str
+    pmus_age_ns: int = 0            # how stale our PMUS quote was at the event
 
     @property
     def basis_ticks(self) -> float:
@@ -70,10 +78,19 @@ class Response:
     def pmus_lag_s(self) -> float | None:
         return None if self.pmus_lag_ns is None else self.pmus_lag_ns / 1e9
 
+    @property
+    def pmus_age_s(self) -> float:
+        return self.pmus_age_ns / 1e9
+
 
 def _mid_at(quotes: list[Quote], t_ns: int) -> float | None:
     q = as_of(quotes, t_ns)
     return None if q is None else q.mid
+
+
+def _quote_at(quotes: list[Quote], t_ns: int) -> Quote | None:
+    q = as_of(quotes, t_ns)
+    return None if q is None or q.mid is None else q
 
 
 def responses(
@@ -83,6 +100,7 @@ def responses(
     *,
     horizon_ns: int = DEFAULT_HORIZON_NS,
     min_pmus_ticks: float = DEFAULT_MIN_PMUS_TICKS,
+    max_pmus_age_ns: int | None = DEFAULT_MAX_PMUS_AGE_NS,
 ) -> list[Response]:
     """Label each intl event by what PMUS did before and after it.
 
@@ -94,8 +112,12 @@ def responses(
     out: list[Response] = []
     thresh = min_pmus_ticks * TICK - 1e-12
     for mv in moves:
-        pm = _mid_at(pmus, mv.t_ns)
-        if pm is None:
+        q_at = _quote_at(pmus, mv.t_ns)
+        if q_at is None:
+            continue
+        pm = q_at.mid
+        age = mv.t_ns - q_at.t_ns
+        if max_pmus_age_ns is not None and age > max_pmus_age_ns:
             continue
         # BOTH endpoints restated before any direction is taken (NOTE7).
         to_pmus = intl_price_as_pmus_yes(mv.to_mid, orientation)
@@ -130,6 +152,7 @@ def responses(
             pmus_lag_ns=lag,
             pmus_led=led,
             label=label,
+            pmus_age_ns=age,
         ))
     return out
 
@@ -145,6 +168,7 @@ def summarise_responses(rs: list[Response]) -> dict:
     def pct(xs: list[float], q: float) -> float | None:
         return xs[min(len(xs) - 1, max(0, int(q * len(xs))))] if xs else None
 
+    ages = sorted(r.pmus_age_s for r in rs)
     stale = [r for r in rs if r.label == STALE]
     stale_b = sorted(abs(r.basis_ticks) for r in stale)
     return {
@@ -158,6 +182,10 @@ def summarise_responses(rs: list[Response]) -> dict:
         ),
         "median_follow_lag_s": (round(pct(lags, 0.5), 1) if lags else None),
         "p90_follow_lag_s": (round(pct(lags, 0.9), 1) if lags else None),
+        # Surfaced because a stale PMUS quote biases toward STALE and a larger
+        # basis -- the thesis-favouring direction.
+        "median_pmus_age_s": round(pct(ages, 0.5) or 0.0, 1),
+        "p90_pmus_age_s": round(pct(ages, 0.9) or 0.0, 1),
     }
 
 
