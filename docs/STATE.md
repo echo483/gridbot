@@ -199,7 +199,13 @@ only live/sluggish books moves median |basis| **3.0 → 1.5 ticks** and p90
 points. Population health, 2026-09-06/08: **match books 59.2% usable, map books
 9.4%** — an independent corroboration of NOTE9's map-book retirement, and a
 qualification of its headline (0.02 is the ROW median; per book the same tape
-carries 0.31–0.94 spreads).
+carries 0.31–0.94 spreads). Over the **whole** tape (09-03…09-08): match books
+**64.3%** usable, map books **18.2%**. `H-MAPENTRY1-CLOSE1` closed that lane
+partly on the map book being illiquid, citing "22% dead/one-sided" — that was the
+row-level rule only, and per book the untradeable fraction is **81.8%**. The
+closure was right and **understated ~4x**, and it supplies the mechanism for the
+lane's central symptom: a paper edge living entirely in orders that never filled
+(`H-MAPENTRY1-NOTE13`).
 
 **The number that matters for registration:** the clean *unconditional* median
 basis is **1.5 ticks, below the DRAFT's proposed 2-tick clause (ii) bar**. Not a

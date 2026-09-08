@@ -56,6 +56,23 @@ NOTE9's decision to retire map books, arrived at by a different route: per book,
 > untradeable minority entirely — the same shape of error as summing a per-event
 > quantity from column medians.
 
+### What this says about the lane that already closed
+
+Extending the classifier to the whole book tape (2026-09-03…09-08, per slug-day):
+
+| book kind | n | live | wide | one-sided | frozen | no data | **usable** |
+|---|---|---|---|---|---|---|---|
+| match | 98 | 63 | 13 | 6 | 11 | 5 | **64.3%** |
+| map | 159 | 29 | 62 | 38 | 22 | 8 | **18.2%** |
+
+`H-MAPENTRY1-CLOSE1` closed that lane partly because it traded the **map** book,
+citing *"22% dead/one-sided"*. That 22% was the **row-level** one-sided rule and
+counted neither frozen nor pathologically wide books. Per book the untradeable
+fraction is **81.8%**. The closure was right and **understated by roughly four
+times** — corroboration, not a reversal — and it supplies a mechanism for the
+lane's central symptom, a paper edge that lived entirely in orders that never
+filled. You cannot fill against a book that never moves. (`H-MAPENTRY1-NOTE13`.)
+
 ## The measurement
 
 46 training markets after pinning the population (below); holdout **not read**.
