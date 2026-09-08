@@ -117,13 +117,22 @@ observations.
 > | ≥3 ticks / 30s | 177 | 1.05/h | 3.5t | 17.5t |
 > | ≥5 ticks / 30s | 113 | 0.67/h | 6.5t | 23.5t |
 >
-> Why this matters for clause (ii): the **unconditional** clean basis is **1.5
-> ticks**, below this clause's own 2-tick bar
-> (`docs/analysis/2026-09-08-crossvenue1-basis-first-look.md`). The lane
-> therefore rests entirely on the conditional basis at these events exceeding the
-> unconditional one. That is the single measurement that decides the lane, it has
-> **not** been taken, and freezing the trigger now is what keeps it a test rather
-> than a search.
+> Why this matters for clause (ii): the **unconditional** clean basis is **2.0
+> ticks — AT this clause's own bar** (n≈1,400 over 13 usable books, stable at
+> 1.95–2.00 across an 1800× range of intl-freshness bounds;
+> `docs/analysis/2026-09-08-crossvenue1-basis-first-look.md` addendum 7). An
+> earlier revision of this note said 1.5 ticks and *below* the bar; that came
+> from n=41 on a single market and is corrected.
+>
+> The conditional basis at STALE events measures **2.5 ticks with 61% ≥2t**, so
+> it does exceed the unconditional one — by **0.5 ticks, not the 1.0 the earlier
+> framing implied.** Read the bar against the *decayed* gap either way, since
+> about a third of an intl move unwinds inside a 150s order.
+>
+> **A caution about the unbounded number.** The as-of join takes the last intl
+> quote at or before each PMUS sample, so with no freshness bound it will happily
+> report **6.50 ticks** against quotes a median 32 minutes old. That is staleness,
+> not basis. Clause (ii) must state the freshness bound it is measured under.
 >
 > Rates are per market-hour and vary by an order of magnitude (0.00–13.67/h): a
 > ~4h span is an in-play window, a ~24h span is listing-to-settlement and mostly

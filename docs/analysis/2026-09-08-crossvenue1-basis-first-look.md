@@ -499,3 +499,61 @@ for map books in practice** — it is kept as a live guard because it is the one
 that fires if a *match* book ever ships one-sided, and that is now commented at
 the call site rather than left as a trap for the next reader.
 
+---
+
+# Addendum 7: the unconditional basis is 2.0 ticks, not 1.5 — and the first number was staleness waiting to happen
+
+Coverage grew overnight from 1 usable book to **13**, so the headline figure was
+re-measured on ~1,400 points instead of 41 from a single market. Two things came
+out of it, and the second is a defect in this instrument.
+
+## The instrument could report staleness as edge
+
+An as-of join takes the last intl quote at or before each PMUS sample. When intl
+stops updating — the market settled, or the extraction window ended — that quote
+can be **hours** old, and the "basis" it produces is staleness, not a gap anyone
+could trade. `basis_series` has a `max_intl_age_ns` bound and this script left it
+`None`, on the reasoning that what counts as stale is a pre-registration
+parameter rather than an implementation detail. That reasoning was right about
+the *parameter* and wrong about the *report*:
+
+| max intl age | n | median \|basis\| | p90 | ≥2t | median intl age |
+|---|---|---|---|---|---|
+| **unbounded** | 2,959 | **6.50 ticks** | 29.0 | 0.73 | **1,933s** |
+| 3600s | 1,643 | 2.00 | 23.0 | 0.56 | 0.5s |
+| 600s | 1,422 | 1.95 | 24.0 | 0.50 | 0.3s |
+| 60s | 1,408 | 2.00 | 24.0 | 0.50 | 0.3s |
+| 10s | 1,374 | 2.00 | 24.0 | 0.51 | 0.3s |
+| 2s | 1,136 | 2.00 | 26.0 | 0.53 | 0.1s |
+
+The unbounded row is joining against quotes a median **32 minutes** old. Printing
+one pooled figure would have shipped **6.50 ticks** as the basis. The script now
+prints the curve and cannot present a single number; the bound stays
+unparameterised because it genuinely is a registration choice.
+
+## The corrected figure, and what it does to clause (ii)
+
+**Once staleness is excluded the basis is remarkably stable: 1.95–2.00 ticks
+across an 1800× range of freshness bounds**, with 50–56% of observations at or
+above 2 ticks. That is the number to use.
+
+> **Correction to a claim repeated several times tonight.** Addendum 2 onward
+> reported the clean unconditional basis as **1.5 ticks, below clause (ii)'s
+> proposed 2-tick bar**, and built an argument on it: that the lane "lives or
+> dies on whether a signal selects the tail". That 1.5 came from **n=41 on one
+> market**. At n≈1,400 across 7 markets the unconditional basis is **2.0 ticks —
+> at the bar, not below it.**
+
+The conditional basis at STALE events (2.5 ticks, 61% ≥2t) therefore still
+exceeds the unconditional one, but by **0.5 ticks rather than 1.0**. The lane's
+case is less dependent on the signal than the earlier framing implied, and
+correspondingly less dramatic: an unconditional 2-tick gap that a signal widens
+to 2.5, against a 2-tick cost floor and an 18.5% fill rate.
+
+## Stated limits
+
+- 13 usable books over two days, and the p90 of 24–29 ticks says the
+  distribution has a long tail that a median hides.
+- Still no PnL. A 2.0-tick gap crossed at an 18.5% fill rate with a 12.1%
+  pick-off rate is not 2.0 ticks of profit, and nothing here computes what it is.
+

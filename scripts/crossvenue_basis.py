@@ -60,6 +60,9 @@ from gridbot.analysis.crossvenue_io import (
 )
 from gridbot.analysis.crossvenue_join import join_markets
 
+# None first so the artifact is visible next to the bounded rows, not hidden.
+AGE_BOUNDS_S = (None, 3600, 600, 60, 10, 2)
+
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
@@ -90,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"{'market':<32} {'intl evts':>9} {'pmus obs':>8} {'book':>9} {'n':>5} "
           f"{'|basis|t':>9} {'>=2t':>5} {'age s':>7}")
     pooled, clean, covered = [], [], 0
+    clean_series: list = []
     for j in train:
         iq = intl.get(j.intl.yes_token, [])
         pq = pmus.get(j.pmus_market_slug, [])
@@ -100,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         pooled += pts
         if lv.usable_for_basis:
             clean += pts
+            clean_series.append((j, iq, pq))
         s = summarise(pts)
         if s["n"]:
             covered += 1
@@ -123,9 +128,34 @@ def main(argv: list[str] | None = None) -> int:
     print("\nPOOLED, ALL BOOKS (contaminated -- shown only so the difference is visible):")
     for k, v in summarise(pooled).items():
         print(f"   {k:<26} {v}")
-    print("\nPOOLED, LIVE/SLUGGISH BOOKS ONLY (descriptive -- no edge claim, no verdict):")
-    for k, v in summarise(clean).items():
-        print(f"   {k:<26} {v}")
+
+    # A SWEEP, NEVER A SINGLE POOLED NUMBER. An as-of join takes the last intl
+    # quote at or before each PMUS sample, so when intl stops updating -- the
+    # market settled, or the extraction window ended -- that quote can be HOURS
+    # old and the "basis" it produces is staleness, not edge. Measured
+    # 2026-09-09: unbounded gives 7.00 ticks at a median intl age of 1,868s,
+    # while ANY bound from 3600s down to 2s gives a stable 1.95-2.00 ticks at a
+    # median age under a second. Printing one pooled figure here would have
+    # shipped the 7.00.
+    print("\nLIVE/SLUGGISH BOOKS ONLY, by intl-quote freshness bound")
+    print("(descriptive -- no edge claim, no verdict):")
+    print(f"{'max intl age':>14}{'n':>7}{'|basis| ticks':>15}{'p90':>8}"
+          f"{'>=2t':>7}{'age p50 s':>11}")
+    for cap_s in AGE_BOUNDS_S:
+        cap = int(cap_s * 1e9) if cap_s else None
+        pts = []
+        for j, iq, pq in clean_series:
+            pts += basis_series(pq, iq, j.orientation, cap)
+        st = summarise(pts)
+        if not st["n"]:
+            continue
+        label = f"{cap_s}s" if cap_s else "unbounded"
+        print(f"{label:>14}{st['n']:>7}{st['median_abs_basis_ticks']:>15.2f}"
+              f"{st['p90_abs_basis_ticks']:>8.1f}{st['frac_abs_ge_2_ticks']:>7.2f}"
+              f"{st['median_intl_age_s']:>11.1f}")
+    print("\nAn unbounded row whose age p50 is large is measuring STALENESS. The bound")
+    print("itself is a pre-registration parameter, which is why this reports a curve")
+    print("rather than picking one.")
     return 0
 
 

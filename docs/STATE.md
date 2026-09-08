@@ -207,11 +207,15 @@ closure was right and **understated ~4x**, and it supplies the mechanism for the
 lane's central symptom: a paper edge living entirely in orders that never filled
 (`H-MAPENTRY1-NOTE13`).
 
-**The number that matters for registration:** the clean *unconditional* median
-basis is **1.5 ticks, below the DRAFT's proposed 2-tick clause (ii) bar**. Not a
-falsification — clause (ii) is about the basis *at a signal* and no signal exists
-yet — but the lane now visibly lives or dies on whether a signal selects the
-tail. Coverage remains the gate: of 46 training markets, 14 have intl data, 12
+**The number that matters for registration — CORRECTED at n≈1,400.** The clean
+unconditional median basis is **2.0 ticks, AT the proposed 2-tick clause (ii)
+bar**, not the 1.5 reported earlier from n=41 on a single market. It is stable at
+1.95–2.00 across an 1800× range of intl-freshness bounds. The instrument could
+also have shipped **6.50 ticks** by joining against quotes a median 32 minutes
+old; it now prints a freshness curve and cannot present one pooled figure. So the
+conditional basis at STALE events (2.5t) exceeds the unconditional one by **0.5
+ticks, not 1.0** — the lane depends on the signal less than the earlier framing
+implied, and its case is correspondingly less dramatic. Coverage remains the gate: of 46 training markets, 14 have intl data, 12
 have PMUS data, and **2 have both**. Next: enable `PMUS_PREMATCH_BOOKS`, decide
 the cap, accrue full days, then measure the conditional basis.
 
