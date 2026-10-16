@@ -10,6 +10,23 @@ the short side was posted at the WRONG venue price for every armed night
 see gotchas), the fail-open ledger-read window (1e-M3) is closed, nightly
 analysis notes no longer truncate silently, the hermes builder profile runs
 the doctrine model, and the timing-chain instrument is specced/in build.
+**Updated 2026-10-16 — working baseline (clean clone verified):** `uv run ruff
+check .` green; `uv run pytest` = **1009 passed / 1 failed / 1 skipped**. The
+one failure is `tests/test_postshock_lag.py::test_real_day_file_smoke`, which
+fails BY DESIGN because `data/` is gitignored and absent on a fresh clone — the
+corpus still lives on the old workstation (restore = WB0 in
+`docs/WORKBLOCKS.md`). NEW: **`src/gridbot/scorecard/`** (1,136 lines, 110
+tests) — the statistical kernel, one implementation each of Wilson, the
+series-clustered bootstrap, Brier/ECE/Murphy, executable-edge pricing and
+Kelly/barrier/Monte-Carlo risk, behind a `Score` contract that cannot be built
+without `n` and `n_series`. It is **PURELY ADDITIVE**: nothing imports it yet,
+so no published number moved and no verdict changed. The reason it exists, and
+the reason it is the first thing to land, is `docs/WORKBLOCKS.md` § Kernel
+findings — the clustered bootstrap was hand-rolled in TEN files and "ECE
+(quintile bins)" meant three different things in three files, one of which
+gates clause (i). Forward plan, ownership split and the blocking decisions are
+now in **`docs/WORKBLOCKS.md`** (which supersedes `docs/DECISIONS.md` as the
+live plan; DECISIONS.md stays as the 09-04 snapshot).
 **Fresh agent? Read in this order:** `CLAUDE.md` (iron rails — merge-blocking),
 this file, `docs/experiments/registry.jsonl` (every frozen hypothesis),
 `docs/LIVE_FIRE.md` (arming + runbook). The memory directory

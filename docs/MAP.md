@@ -8,7 +8,7 @@ docs/analysis — read them, rerun them, never rewrite them), and **OPS**
 (keeping the machine alive). Orientation order stays: CLAUDE.md → STATE.md →
 registry → LIVE_FIRE.md; this file is the floor plan.
 
-## src/gridbot — the system (49 files)
+## src/gridbot — the system (55 files)
 
 | package | tier | what it is |
 |---|---|---|
@@ -17,6 +17,7 @@ registry → LIVE_FIRE.md; this file is the floor plan.
 | executor/ | WIRING+STRATEGY | engine.py (cycle loop, gates, dedup), intents.py (price/size + band + drift gates), pmus.py (wire), ledger/limits/fills/reconcile (accounting + caps + venue truth), us_mapping.py. The gate CONSTANTS and qualification rule are strategy; the order lifecycle is wiring. |
 | instruments/ | STRATEGY | detectors, mapentry recorder + verdicts, postquote sampler, shadow lanes. Each armable lane pairs with a frozen registry row. |
 | model/ | STRATEGY | roundwin training/dataset (LightGBM q). Frozen mapwin-race-v1 aggregation lives with the instruments. |
+| scorecard/ | EVIDENCE | the statistical kernel: Wilson, series-clustered bootstrap, Brier/ECE/Murphy, executable-edge pricing, Kelly/barrier/Monte-Carlo risk. One implementation per primitive, behind a `Score` contract that cannot exist without n and n_series. Pure functions, stdlib-only, no corpus/network/keyring. |
 | sizing/ | WIRING | kelly + params (quarter-Kelly caps). |
 | analysis/ | OPS | slow-loop Claude analyst (daily, managed) — LLM territory, never trade path (rail 1). |
 | config.py / redaction.py / ratelimit.py / graphql.py | WIRING | keyring-only secrets (5s-timeout reads + last-good cache), log redaction, GRID rate budget, GQL client. |
@@ -68,9 +69,11 @@ migration, routing-layer analysis) — history, not guidance.
   append-only; nothing trades without a row.
 - **docs/analysis/**: dated evidence reports. docs/learnings/: nightly ops
   notes. docs/superpowers/specs/: design briefs.
-- **tests/** (872): hermetic — no network, no keyring, no live D-Bus; nothing
+- **tests/** (1009): hermetic — no network, no keyring, no live D-Bus; nothing
   writes outside tmp_path. `uv run ruff check .` is green repo-wide (the
   deliberate idioms are encoded in pyproject, not suppressed inline).
+  The one non-green test is `test_postshock_lag.py::test_real_day_file_smoke`,
+  which fails by design when the gitignored `data/` corpus is absent.
 
 ## Forking for a new strategy (the intended seam)
 
