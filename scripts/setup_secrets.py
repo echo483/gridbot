@@ -14,11 +14,13 @@ from gridbot.config import KEYRING_SERVICE
 SECRETS = {
     "GRID_API_KEY": "GRID Open Access x-api-key",
     "SUPABASE_SERVICE_ROLE_KEY": "Supabase sb_secret write key (corpus mirror)",
-    "ANTHROPIC_API_KEY": "Claude API key (slow-loop analysis only — never the trade path)",
-    # P2 (live arming) only — leave blank to skip. Polymarket US API keys
+    # P2 (live arming) only — leave blank to skip. Polymarket [ADDRESS] API keys
     # come from https://polymarket.us/developer (Ed25519; secret shown ONCE).
     "POLYMARKET_US_KEY_ID": "Polymarket US API Key ID (P2 only)",
-    "POLYMARKET_US_SECRET_KEY": "Polymarket US API Secret Key (P2 only; shown once at creation)",
+    "POLYMARKET_US_SECRET_KEY": "Polymarket [ADDRESS] API Secret Key (P2 only; shown once at creation)",
+    # Optional: HMAC secret for the health-escalation webhook. Only needed if
+    # GRIDBOT_ESCALATE_URL is set; without it escalation is skipped.
+    "GRIDBOT_ESCALATE_SECRET": "HMAC secret for the health escalation webhook",
 }
 
 ALLOWED_BACKENDS = ("SecretService", "Kwallet", "KWallet", "libsecret")

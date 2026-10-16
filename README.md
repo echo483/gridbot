@@ -32,7 +32,7 @@ the executor never arms itself.
 
 ```
 uv run ruff check .   # All checks passed
-uv run pytest         # 1009 passed, 1 failed, 1 skipped
+uv run pytest         # 995 passed, 1 failed, 1 skipped
 ```
 
 The single failure is `tests/test_postshock_lag.py::test_real_day_file_smoke`.
@@ -42,7 +42,7 @@ so. Restoring the corpus is workblock WB0 in `docs/WORKBLOCKS.md`.
 
 ## Read in this order
 
-1. `CLAUDE.md` — the iron rails (merge-blocking)
+1. `docs/ENGINEERING.md` — the binding rules
 2. `docs/STATE.md` — what is proven, what is dead, what is running
 3. `docs/WORKBLOCKS.md` — the current plan, ownership, and open decisions
 4. `docs/experiments/registry.jsonl` — every frozen hypothesis (append-only)

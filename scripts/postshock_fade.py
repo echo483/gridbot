@@ -3,7 +3,7 @@
 █ STATUS 2026-09-03: RECONCILED 2026-09-03 to the amended brief; funnel
 matches the spec-literal reference. █
 The 2026-09-01 WIP state is superseded: the AMENDMENT 2026-09-03 block atop
-docs/superpowers/specs/2026-09-01-postshock-fade-design.md voids the old
+docs/specs/2026-09-01-postshock-fade-design.md voids the old
 108/70/32 anchors and pins the SPEC-LITERAL funnel
 (docs/analysis/2026-09-01-postshock-anchor-trace.md §3) as the reference.
 This file now implements that funnel stage-for-stage: every §1.2 clause-1
@@ -16,7 +16,7 @@ anchor-trace format.  Still STRICTLY DESCRIBE-ONLY: no registry edit, no
 src/, no orders.
 
 Operationalizes the frozen design brief
-docs/superpowers/specs/2026-09-01-postshock-fade-design.md EXACTLY — every
+docs/specs/2026-09-01-postshock-fade-design.md EXACTLY — every
 constant, gate, dedup rule, cutoff, and statistic is pinned there.  No tuning,
 no substitution.  STRICTLY DESCRIBE-ONLY: no registry edit, no src/, no orders.
 

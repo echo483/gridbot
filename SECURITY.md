@@ -19,8 +19,9 @@ ever written to disk in this repo, printed, logged, committed, or shown to an LL
   every log record; `config` registers each secret on read.
 - GRID auth is `x-api-key` **header** over HTTPS only — never a URL param
   (`graphql.post` refuses non-HTTPS). Errors are secret-free by construction.
-- **LLMs never see keys.** Hermes/Claude agents work on data files and summaries;
-  the capture and (future) execution paths read secrets directly from keyring.
+- **Nothing that reasons sees a key.** No model, report generator, or analysis
+  script is handed a secret; only the capture and execution paths read the
+  keyring, and they read it directly.
 
 ## Repo hygiene
 

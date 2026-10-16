@@ -1,9 +1,0 @@
-[Unit]
-Description=Run gridbot daily Claude analysis at 22:30
-
-[Timer]
-OnCalendar=*-*-* 22:30:00
-Persistent=false
-
-[Install]
-WantedBy=timers.target

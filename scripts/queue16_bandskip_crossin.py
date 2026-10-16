@@ -1,6 +1,6 @@
 """Queue 16 band-skip cross-in measurement (analysis only, read-only).
 
-Question (docs/superpowers/specs/2026-08-27-entry-gate-loosening.md, Queue 16):
+Question (docs/specs/2026-08-27-entry-gate-loosening.md, Queue 16):
 67% of raw H-MAPENTRY1 intents die at the executor band gate (P_map outside
 0.50-0.80, US_BAND_GATE). For each band-skipped evaluation, does the market
 CROSS INTO the accepted band within 60-120s of the skip? A non-trivial cross-in

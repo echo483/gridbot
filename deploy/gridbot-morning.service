@@ -1,8 +1,9 @@
 # gridbot morning report — oneshot, fired daily at 08:00 by gridbot-morning.timer.
-# Deterministic overnight digest (no LLM, local files + systemctl only),
-# delivered to Telegram via hermes send. The ONE message the user wakes to.
+# Deterministic overnight digest: local files + systemctl only, no model calls.
+# The ONE message the operator wakes to. Delivery via gridbot.notify
+# (GRIDBOT_NOTIFY_WEBHOOK); without it configured, stdout only.
 [Unit]
-Description=gridbot consolidated morning digest (Telegram)
+Description=gridbot consolidated morning digest
 
 [Service]
 Type=oneshot

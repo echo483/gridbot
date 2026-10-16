@@ -1,8 +1,8 @@
 # Workblocks — the live plan, and who writes what
 
-**Baseline:** 2026-10-16. Supersedes `docs/DECISIONS.md` as the forward plan
-(that file stays as the 2026-09-04 snapshot; decisions D1–D7 are folded in
-here where they are still live).
+**Baseline:** 2026-10-16. This file is the ONLY live plan. The 2026-09-04
+`docs/DECISIONS.md` snapshot it superseded was folded in here (its still-live
+decisions are *Open decisions* below) and removed in the same cleanup pass.
 
 **Purpose of this file:** unblock the build and keep it explainable. Every
 workblock is small enough to finish, has one named owner, and carries a list of

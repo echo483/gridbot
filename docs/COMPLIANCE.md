@@ -16,7 +16,7 @@ Every entry is dated; the go-live gates reference this file.
   is not used for orders. ELIGIBILITY CONFIRMED: YES (the arming gate requires
   this exact affirmation line).
 - **Standing go-live gates (unchanged)**: `dry_run=True` until a pre-registered
-  PASS; flipping live is the user's own act — never Claude's, never an agent's;
+  PASS; flipping live is the user's own act — never an automated process's;
   single account per platform; first live test sized at $1.
 
 Open items: Polymarket account credentials pending (user setting up desktop

@@ -1,7 +1,7 @@
 """Tests for scripts.roundwin2_poolb (Pool B drift-first, describe-only).
 
 Analysis only (slow loop, iron rail 1): locks in the Pool B join semantics per
-docs/superpowers/specs/2026-08-28-roundwin-v2-design.md §2.2 — the mapentry ↔
+docs/specs/2026-08-28-roundwin-v2-design.md §2.2 — the mapentry ↔
 postquote key (naming trap: market_slug vs slug), same-book orientation
 isolation (§2.3.3), the strictly-earlier as-of rule (§2.3.1), the inherited F1
 leak filter on round-level rows, the engine's fail-closed drift gate as the
