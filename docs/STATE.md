@@ -422,7 +422,7 @@ is green repo-wide with the deliberate idioms encoded in pyproject; every
 merged branch is deleted; all six live units are active and the nightly
 timing-chain timer is enabled; the registry parses (31 rows, NOTE8 is the
 newest). The decisions this baseline hands the user are in
-`docs/DECISIONS.md` — read that next.
+`docs/DECISIONS.md` (since removed — folded into `docs/WORKBLOCKS.md`).
 
 Where the strategy stands, in one breath: no lane has a pre-registered PASS;
 H-MAPENTRY1's paper edge lives in orders that never fill; the map book prices

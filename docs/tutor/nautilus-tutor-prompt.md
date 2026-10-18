@@ -26,7 +26,7 @@ say "that's wrong, here's the counterexample" and show it.
 `/home/ops/gridbot` is a live experiment factory trading esports prediction
 markets (Polymarket) on GRID esports data. Read, in this order:
 
-1. `CLAUDE.md` — the iron rails
+1. `docs/ENGINEERING.md` — the iron rails
 2. `docs/STATE.md` — what's proven, what runs, the signal path, the gotchas
 3. `docs/MAP.md` — the codebase floor plan
 4. `docs/experiments/registry.jsonl` — the law: every strategy is a frozen,

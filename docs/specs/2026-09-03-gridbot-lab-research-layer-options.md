@@ -3,7 +3,8 @@
 **Status:** decision memo, 2026-09-03. Written after the user chose "research
 layer first" for gridbot-lab. Nothing here is built; the design is approved
 section by section when the user is back, then a spec is written, then a
-plan. Per CLAUDE.md the next repo takes gridbot's LESSONS, not its code.
+plan. Per `CLAUDE.md` (now `docs/ENGINEERING.md`) the next repo takes gridbot's
+LESSONS, not its code.
 
 ## What "research layer" has to mean here
 

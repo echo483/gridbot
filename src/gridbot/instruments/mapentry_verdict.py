@@ -34,7 +34,7 @@ This module is REPORTING ONLY. It reads no engine state and changes no gate.
 
 COST NOTE (measured 2026-08-30): load_map_winners re-parses every
 series_state file — 10.4s over 1.22 GiB. `verdict.compact_summary` is called
-by morning_report, eod_report and analysis/daily, so that cost lands in three
+by morning_report and eod_report, so that cost lands in two
 nightly jobs and grows linearly with a corpus that gains ~250 MB/day forever.
 Bounding the oracle to date-matched files was considered and REJECTED: a
 series starting 23:50 and resolving 00:10 spans two capture files, so
