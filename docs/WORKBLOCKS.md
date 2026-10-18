@@ -112,6 +112,13 @@ from it, which is what makes it safe to version, cache and throw away.
 - **Do:** `rsync` the whole `data/` tree from the old workstation preserving
   mtimes. Nothing else. Do not filter, do not prune, do not "clean it up on the
   way over".
+- **Status 2026-10-18 — DONE, with one deliberate exception.** The corpus was
+  restored, then the 385 GiB raw `data/pm` WS tape was reduced to the lake cut
+  (2.15 GB, 190x) and the original deleted, because the workstation had 83 GB
+  free. That exception was the user's call and it is recorded, not silent: see
+  `docs/CORPUS.md` § *What the data actually is now* for exactly what was kept,
+  what was lost, and why the loss is permanent. The "do not prune" rule still
+  holds for every remaining stream.
 - **Deliverable:** `data/` present; `tests/test_postshock_lag.py::test_real_day_file_smoke`
   green; a row-count and gap inventory written to `data/analysis/`.
 - **Whiteboard:** why the corpus outranks any refactor; what a capture gap
