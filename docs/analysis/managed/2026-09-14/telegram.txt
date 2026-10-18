@@ -1,0 +1,7 @@
+gridbot deep-analysis DRAFT (dry_run; no orders, no registry edits)
+
+MOST DECISION-RELEVANT: H-PISTOLCARRY1 is the lane on the bar. verdict.json's cell CIs are row-level Wilson, not series-clustered (I reproduced all 8 to 0.0003) - yet the same file's mapentry notes say intervals resample series. Correcting for clustering (corpus ICC 0.018, 3.73 rows/series) moves its lower bound 0.8019 -> 0.8014 against a 0.80 bar: margin +0.14pt. Live 0.8220 also runs 3.3pt below corpus 0.8553, decaying toward the bar.
+
+NEXT ACTION: publish the r1-vs-r13 split of the 1,512 captured instances (corpus: 0.894 vs 0.828). It decides whether that margin is real or a mix artifact.
+
+Full: analysis.md
