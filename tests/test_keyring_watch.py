@@ -253,7 +253,22 @@ def test_check_collection_label_routes_probe(monkeypatch, state_file, sent):
 
 def test_probe_locked_unknown_label_fails_loud(monkeypatch):
     """_probe_locked_once with an unknown label raises (locked path), and
-    probe_locked surfaces it as ProbeError."""
+    probe_locked surfaces it as ProbeError.
+
+    The bus opener is stubbed. This test deliberately exercises the real
+    _probe_locked_once, but without the stub it first calls
+    open_dbus_connection(), so on any runner with no session bus jeepney raises
+    KeyError from the environment and the label logic is never reached — the
+    assertion then fails for a reason that has nothing to do with the code
+    under test. Stubbing keeps the file's hermetic promise true.
+    """
+    import jeepney.io.blocking as jeepney_blocking
+
+    monkeypatch.setattr(
+        jeepney_blocking,
+        "open_dbus_connection",
+        lambda *a, **k: types.SimpleNamespace(close=lambda: None),
+    )
     fake_ss = types.SimpleNamespace(
         get_default_collection=lambda bus: None,
         get_all_collections=lambda bus: [
