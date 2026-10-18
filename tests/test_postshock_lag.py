@@ -519,10 +519,18 @@ def test_real_day_file_smoke(tmp_path):
     root = Path(__file__).resolve().parent.parent
     days = sorted(root.glob("data/shadow/mapentry-*.jsonl"))
     if not days:
-        pytest.fail(  # fail loudly rather than silently skipping coverage
-            "no data/shadow/mapentry-*.jsonl present — capture corpus is "
-            "gone; cannot run end-to-end smoke over real data"
-        )
+        # data/ is gitignored, so a CI checkout has no corpus at all. A blanket
+        # fail makes CI red for something that is not a regression; a blanket
+        # skip would go silent on a machine that is supposed to hold the corpus
+        # and quietly lose this coverage. Split the two cases: absence skips by
+        # default, and is a hard failure when the environment declares it owns a
+        # corpus (dev boxes, pre-release checks).
+        if os.environ.get("GRIDBOT_REQUIRE_CORPUS") == "1":
+            pytest.fail(
+                "GRIDBOT_REQUIRE_CORPUS=1 but no data/shadow/mapentry-*.jsonl "
+                "present — the capture corpus this smoke test runs over is gone"
+            )
+        pytest.skip("no capture corpus in this checkout (data/ is gitignored)")
     day = days[-1]  # most recent day file
 
     from scripts.postshock_lag import main
