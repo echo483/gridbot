@@ -25,6 +25,11 @@ jobs:
           enable-cache: true
 
       - name: Set up Python
+        # Pinned via .python-version. Without the pin uv installs the newest
+        # interpreter, which for scipy 1.18.1 has no wheel — the runner then
+        # tries a source build and fails on a missing OpenBLAS. CI must resolve
+        # the same wheels a developer does, or the lock file stops meaning
+        # anything.
         run: uv python install
 
       - name: Install dependencies (locked)
