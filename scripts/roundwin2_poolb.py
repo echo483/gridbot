@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """roundwin-v2 Pool B (drift head) — drift-first accumulation/evaluation.
 
-ANALYSIS LANE ONLY (design: docs/superpowers/specs/2026-08-28-roundwin-v2-design.md,
+ANALYSIS LANE ONLY (design: docs/specs/2026-08-28-roundwin-v2-design.md,
 Pool B definition §2.2, anti-leakage protocol §2.3). Describe-only: no registry
 edits, no src/ changes, no arming logic, no orders.
 
@@ -713,7 +713,7 @@ def build_report(doc: dict) -> str:
         "# roundwin-v2 Pool B — drift-first accumulation (describe-only)",
         "",
         (f"Run: {doc['generated_utc']} · days: {', '.join(doc['params']['days']) or 'all'} · "
-        f"design: docs/superpowers/specs/2026-08-28-roundwin-v2-design.md (§2.2 Pool B, §2.3 protocol)"),
+        f"design: docs/specs/2026-08-28-roundwin-v2-design.md (§2.2 Pool B, §2.3 protocol)"),
         "",
         "ANALYSIS LANE ONLY — describe-only metrics, no registry edit, no",
         "arming, no trade path. Drift-first rule = the engine's own gate",

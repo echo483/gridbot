@@ -28,11 +28,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import threading
 import time
 from pathlib import Path
 from typing import cast
+
+from gridbot import notify
 
 PROBE_TIMEOUT_S = 5.0  # hard bound via reaper thread (config._secret pattern)
 RE_ALERT_S = 900  # 15-min re-alert cadence while locked
@@ -163,23 +164,15 @@ def _now() -> float:
 
 
 def _send(msg: str) -> bool:
-    """Telegram alert via the hermes CLI; best-effort, never raises.
+    """Deliver an alert; best-effort, never raises.
 
-    Returns True only when the send actually succeeded: a broken alert
-    channel must NOT be reported as "alerted" (exit 2), so health_check's
-    generic red summary still fires and the outage stays loud.
+    Returns True only when the message actually left the process. With no
+    transport configured the message prints locally and this returns False, so
+    a locked keyring with no reachable channel still reads as "not alerted"
+    (exit 3) and health_check's generic red summary fires. A broken alert
+    channel must never be reported as a working one.
     """
-    try:
-        r = subprocess.run(
-            ["/home/ops/.local/bin/hermes", "send", "-t", "telegram", msg],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-        return r.returncode == 0
-    except Exception:
-        return False
+    return notify.send(msg, level="alert")
 
 
 def _load_state(state_path: Path = STATE_FILE) -> dict:

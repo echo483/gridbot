@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """timing_chain.py — how long after a GRID round end does the PMUS book move?
 
-Timing-chain instrument, part B (docs/superpowers/specs/2026-09-03-timing-chain.md).
+Timing-chain instrument, part B (docs/specs/2026-09-03-timing-chain.md).
 Analysis only (slow loop, iron rail 1): local day files in, markdown + json
 out, no network, no orders, no keys. It registers nothing and recommends
 nothing — it produces the number a future rail-B (latency / model-momentum)

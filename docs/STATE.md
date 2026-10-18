@@ -8,24 +8,52 @@ running PnL should be read.
 the short side was posted at the WRONG venue price for every armed night
 (registry H-MAPENTRY1-NOTE7 — 20 of 48 venue-verified orders never rested;
 see gotchas), the fail-open ledger-read window (1e-M3) is closed, nightly
-analysis notes no longer truncate silently, the hermes builder profile runs
-the doctrine model, and the timing-chain instrument is specced/in build.
-**Fresh agent? Read in this order:** `CLAUDE.md` (iron rails — merge-blocking),
-this file, `docs/experiments/registry.jsonl` (every frozen hypothesis),
-`docs/LIVE_FIRE.md` (arming + runbook). The memory directory
-(`~/.claude/projects/-home-ops-gridbot/memory/`) carries the cross-session
-narrative; this file is the repo-side snapshot.
+analysis notes no longer truncate silently, and the timing-chain instrument is
+specced/in build.
+**Updated 2026-10-16 — working baseline (clean clone verified):** `uv run ruff
+check .` green; `uv run pytest` = **995 passed / 1 failed / 1 skipped**. The
+one failure is `tests/test_postshock_lag.py::test_real_day_file_smoke`, which
+fails BY DESIGN because `data/` is gitignored and absent on a fresh clone — the
+corpus still lives on the old workstation (restore = WB0 in
+`docs/WORKBLOCKS.md`).
+Two changes landed in this baseline. **1. `src/gridbot/scorecard/`** (1,136
+lines, 110 tests) — the statistical kernel, one implementation each of Wilson,
+the series-clustered bootstrap, Brier/ECE/Murphy, executable-edge pricing and
+Kelly/barrier/Monte-Carlo risk, behind a `Score` contract that cannot be built
+without `n` and `n_series`. It is **PURELY ADDITIVE**: nothing imports it yet,
+so no published number moved and no verdict changed. Its justification is
+`docs/WORKBLOCKS.md` § Kernel findings — the clustered bootstrap was hand-rolled
+in TEN files and "ECE (quintile bins)" meant three different things in three
+files, one of which gates clause (i).
+**2. Hard cleanup.** The LLM-orchestration layer is **removed**, not disabled:
+`src/gridbot/analysis/` (the Claude analyst), the dispatch/agent-lane tooling,
+`agents/`, `.hermes/`, `.claude/`, `CLAUDE.md`, the overnight agent protocol,
+`docs/archive/` (superseded AWS/routing plans) and the four deploy units that
+ran the analyst. `anthropic` and its four transitive deps left the lockfile.
+Notifications and escalation now go through `gridbot.notify`, whose transport is
+configuration — no binary at a hardcoded path, no chat transport, no framework
+dependency at runtime. The rules those files carried are rewritten for a
+plain engineering audience in **`docs/ENGINEERING.md`** (which replaces
+CLAUDE.md), the ledger/venue-truth knowledge from the agent skills is preserved
+in **`docs/LEDGER.md`**, and `docs/superpowers/specs/` is now `docs/specs/`.
+`docs/DECISIONS.md` was folded into `docs/WORKBLOCKS.md` and removed. Test count
+fell 1009 → 995 because three test files covered the deleted pipeline.
+
+**Fresh agent? Read in this order:** `docs/ENGINEERING.md` (the binding rules),
+this file, `docs/WORKBLOCKS.md` (the live plan), `docs/MAP.md` (the floor plan),
+`docs/experiments/registry.jsonl` (every frozen hypothesis), `docs/LIVE_FIRE.md`
+(the arming runbook).
 
 ## What this is
 
 An experiment factory trading esports prediction markets (Polymarket US)
 on GRID Open Access data. The edge claim: GRID reports CS2 round outcomes
 **13–27s before books reprice** (median; threshold-crossings lead by ~40s).
-Everything else is discipline around that: calibrated quant model (q — never
-an LLM, rail 1), pre-registered hypotheses with frozen falsification bars
-(rail 2), dry_run until a PASS with live-small clips as execution evidence
-(rail 3), capture continuity as the moat (rail 4). LLMs live in the slow
-loop only: analysis, reviews, reports, hypothesis drafts.
+Everything else is discipline around that: a calibrated quant model (`q`), a
+deterministic trade path with no model calls in it (rail 1), pre-registered
+hypotheses with frozen falsification bars (rail 2), dry_run until a PASS with
+live-small clips as execution evidence (rail 3), capture continuity as the moat
+(rail 4).
 
 ## Baseline 2026-09-07 (START HERE — supersedes the 09-04 baseline below)
 
@@ -386,7 +414,7 @@ as trustworthy as the freshness of the side it reaches backwards into.
 Tests 1283 green; `ruff check` green on everything tracked (3 findings remain in
 the still-uncommitted `src/gridbot/kg/`).
 
-## Baseline 2026-09-04 (superseded — kept for lineage)
+## Baseline 2026-09-04 (historical — superseded by the 2026-10-16 addendum)
 
 Clean baseline, cut the morning after the 09-03 overnight loop: main is
 pushed and the tree is empty; 872 hermetic tests pass; `uv run ruff check .`
@@ -522,8 +550,8 @@ in-sample CIs exclude zero) — do NOT re-cut on same-night data.
 | gridbot-pmus-map.timer (15m) | GRID↔PMUS mapping snapshots |
 | gridbot-timing-chain.timer (17:30 local = 00:30 UTC) | nightly scripts/timing_chain.py on the UTC day just closed → data/analysis/timing_chain-YYYYMMDD.{json,md}; citable at ≥5 nights / ≥1,000 moved events |
 | gridbot-ingest (1h) / gridbot-backup (05:10) | corpus → Supabase; raw offsite |
-| gridbot-analysis (22:30) / gridbot-morning (08:00) | slow-loop Claude analyst; morning digest (hermes→Telegram) |
-| gridbot-health (5m) + hermes crons | self-heal + escalation webhook + capture QA + spend guard |
+| gridbot-morning.timer (08:00) | `scripts/morning_report.py --send` — deterministic overnight digest (no model calls). Delivery via `gridbot.notify` |
+| gridbot-health.timer (5m) | self-heal: data-freshness + unit restart, keyring-wedge restart rule, disk headroom. Alerts via `gridbot.notify` |
 
 ## Signal path (the whole trade, one line each)
 
@@ -562,10 +590,7 @@ doesn't bind on realized PnL; risk is bounded by stake×max_open instead.
   Thursday 2–6am ET maintenance cancels all orders. 20 req/s.
 - **Never install `dev-polymarket/clob-client-v2`** — typosquat. Official:
   `polymarket-us` (PyPI), Polymarket org repos. Intl CLOB is close-only for
-  US IPs; py-clob-client v1 died 2026-04-28.
-- **Claude 5 API**: thinking is on by default and counts against max_tokens —
-  a long prompt with max_tokens 1500 can return 200 OK with ZERO text
-  (observed; fixed in analysis.daily with 3000 + retry + loud failure).
+  [ADDRESS] IPs; py-clob-client v1 died 2026-04-28.
 - **systemd**: daemons can't block OS sleep — capture wraps in
   `systemd-inhibit --what=sleep`. KDE idle-suspend once cost 10.8h of
   capture. Keyring-needing units anchor to graphical-session.target.
@@ -573,11 +598,6 @@ doesn't bind on realized PnL; risk is bounded by stake×max_open instead.
   transition snapshots; every pre-filter calibration number is suspect).
 - **Creates are NEVER retried** (double-order risk); cancels ARE (×3).
   Ambiguous 2xx = "error:ambiguous_ack", never "rejected".
-- **Hermes**: kanban create needs explicit `assign` + `set-model` after;
-  a hook blocks env-dump-looking command bodies (rephrase); telegram sends
-  work standalone via `hermes send -t telegram`. Judge dispatched agents
-  by ARTIFACTS, not transcripts — the `-z` transcript channel renders
-  mojibake for several models while the files they write are clean.
 - **Secret Service is a single point of failure that fails BOTH ways**
   (2026-08-26): gnome-keyring crashed (killed the armed engine), came
   back LOCKED (reads BLOCK forever; wedged daemon, tests, gh/git-push,
@@ -749,7 +769,7 @@ Only the quintile figure is the bar.
    change needed: join mapentry rows to instance rows on
    (src_hypothesis_id, series_id, map_number, round_number, dedup_extra);
    clock_seconds lives on the instance row.
-11b. Queue 13+14 spec (docs/superpowers/specs/2026-08-27-entry-gate-loosening.md,
+11b. Queue 13+14 spec (docs/specs/2026-08-27-entry-gate-loosening.md,
    drafted by the hermes gateway agent from user directives night 2, owner
    Claude): 13 = fill-acceptance widening — user observation elevated to
    primary: quote distance must consider the ACTIVE book, not just frozen
@@ -837,7 +857,7 @@ Only the quintile figure is the bar.
    Locked decisions: pipelines write facts / agents only propose (staging
    + promotion); full rebuildability from repo sources (DB gitignored,
    schema+pipelines versioned). SPEC:
-   docs/superpowers/specs/2026-08-27-knowledge-graph-design.md; kickoff
+   docs/specs/2026-08-27-knowledge-graph-design.md; kickoff
    prompt for the user's tutor session:
    2026-08-27-kg-kickoff-prompt.md (same dir). The USER drives the build
    in a separate session — ops sessions must NOT build ahead in this
@@ -850,7 +870,7 @@ Only the quintile figure is the bar.
    fork) for the graph; gridbot gets cleaned first, no KG build here.
 13. TIMING CHAIN (user goal 2026-09-03: "a genuine timing comparison to show
    our latency and data edge over the books and find a way to beat it"):
-   spec docs/superpowers/specs/2026-09-03-timing-chain.md — keyless PMUS BBO
+   spec docs/specs/2026-09-03-timing-chain.md — keyless PMUS BBO
    recorder (new unit gridbot-pmus-books) + scripts/timing_chain.py joining
    GRID round ends to the first book move, with our own pipe legs. Every
    lead number quoted above was measured against the INTL venue; this is

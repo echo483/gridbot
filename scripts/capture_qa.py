@@ -1,6 +1,6 @@
 """Deterministic capture-QA fingerprint: stable stdout, changes only on state flips.
 
-Timestamp-free by design — hermes' monitor-script cron hashes the exact bytes
+Timestamp-free by design — the monitor cron hashes the exact bytes
 and wakes an agent only when the fingerprint changes. Freshness is bucketed
 (OK/STALE), error counts are today's totals, disk is rounded — so steady
 healthy growth produces identical output every run.

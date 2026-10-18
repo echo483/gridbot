@@ -1,26 +1,30 @@
-"""Self-healing watchdog: verify capture health, restart once on failure,
-alert Telegram on STATE TRANSITIONS only (no spam).
+"""Self-healing watchdog: verify capture health, restart once on failure, and
+alert on STATE TRANSITIONS only (no spam).
 
 Checks: service active; data freshness (pm + grid); disk headroom.
 State persists in data/.health_state.json. Run every 5 min by
-gridbot-health.timer. Deterministic, no LLM, no secrets.
+gridbot-health.timer. Deterministic, no model calls, no secrets in code.
+Alerts go through `gridbot.notify`; escalation is a webhook gated on
+GRIDBOT_ESCALATE_URL.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from gridbot import config
+from gridbot import config, notify
 
 STATE_FILE = config.DATA_DIR / ".health_state.json"
 PM_FRESH_S = 15 * 60      # REST snapshots every 10 min guarantee writes
 GRID_FRESH_S = 25 * 60    # discovery every 15 min guarantees writes
 MIN_FREE_GIB = 5
+ESCALATE_URL_ENV = "GRIDBOT_ESCALATE_URL"
 
 
 def _newest_mtime(directory: Path) -> float:
@@ -56,11 +60,16 @@ def _restart(service: str) -> bool:
 
 
 def _escalate(service: str, detail: str) -> None:
-    """POST the hermes webhook (HMAC-V2) so a triage agent investigates.
+    """POST the escalation webhook (HMAC-V2 signed) after self-heal has failed.
 
-    Fires only after deterministic self-heal has already failed; the agent
-    diagnoses and may restart gridbot units, nothing else.
+    Transport is configuration: set GRIDBOT_ESCALATE_URL to an https endpoint
+    to enable it. Unset means a no-op, so the watchdog never depends on an
+    endpoint that may not exist. Whatever consumes the webhook lives outside
+    this repo.
     """
+    url = os.environ.get(ESCALATE_URL_ENV, "").strip()
+    if not url.startswith("https://"):
+        return
     try:
         import hashlib
         import hmac
@@ -75,14 +84,14 @@ def _escalate(service: str, detail: str) -> None:
         # below would not catch it, so the 5-minute watchdog would wedge
         # permanently at exactly the moment it is needed. config._secret runs
         # the read in a 5s reaper thread with a bounded last-good cache.
-        secret = gconfig._secret("HERMES_WEBHOOK_GRIDBOT_HEALTH_SECRET")
+        secret = gconfig._secret("GRIDBOT_ESCALATE_SECRET")
         if not secret:
             return
         ts = str(int(time.time()))
         body = json.dumps({"service": service, "detail": detail})
         sig = hmac.new(secret.encode(), f"{ts}.{body}".encode(), hashlib.sha256).hexdigest()
         httpx.post(
-            "http://127.0.0.1:8644/webhooks/gridbot-health",
+            url,
             content=body,
             headers={
                 "Content-Type": "application/json",
@@ -96,13 +105,8 @@ def _escalate(service: str, detail: str) -> None:
 
 
 def _send(msg: str) -> None:
-    subprocess.run(
-        ["/home/ops/.local/bin/hermes", "send", "-t", "telegram", msg],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
+    """Best-effort alert on a state transition. Never raises."""
+    notify.send(msg, level="alert")
 
 
 def _watch_keyring() -> int | None:

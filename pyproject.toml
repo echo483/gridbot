@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Experiment factory for esports prediction markets on GRID Open Access data"
 requires-python = ">=3.12"
 dependencies = [
-    "anthropic>=1.0.0",
     "httpx>=0.27",
     "keyring>=25",
     "lightgbm>=4.7.0",
@@ -38,7 +37,7 @@ line-length = 100
 
 [tool.ruff.lint]
 # Repo-wide `ruff check .` is green by construction; these are the DELIBERATE
-# idioms (docs/MAP.md, .claude/skills/verify-and-land), not suppressions:
+# idioms (docs/ENGINEERING.md, docs/MAP.md), not suppressions:
 # BLE001/S110/S112 — fail-soft catches in ops and analysis code (a bad row or a
 # dead venue call skips, never crashes a recorder); TRY004 — instruments raise
 # ValueError for wrong-shaped inputs and callers/tests depend on that type.

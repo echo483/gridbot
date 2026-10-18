@@ -28,6 +28,7 @@ def test_escalate_reads_its_secret_through_the_hardened_path(monkeypatch):
     carries the timeout + bounded cache, NOT via a raw keyring call."""
     from gridbot import config as gconfig
 
+    monkeypatch.setenv("GRIDBOT_ESCALATE_URL", "https://example.invalid/webhooks/gridbot-health")
     seen: list[str] = []
 
     def fake_secret(name: str):
@@ -45,17 +46,27 @@ def test_escalate_reads_its_secret_through_the_hardened_path(monkeypatch):
 
     health_check._escalate("gridbot-capture.service", "unit not active after restart")
 
-    assert seen == ["HERMES_WEBHOOK_GRIDBOT_HEALTH_SECRET"]
+    assert seen == ["GRIDBOT_ESCALATE_SECRET"]
+
+
+def test_escalate_is_skipped_without_a_configured_url(monkeypatch):
+    """No transport configured -> escalation is a no-op, not a crash."""
+    from gridbot import config as gconfig
+
+    monkeypatch.delenv("GRIDBOT_ESCALATE_URL", raising=False)
+    monkeypatch.setattr(gconfig, "_secret", lambda name: "s3cr3t-under-test")
+    health_check._escalate("gridbot-capture.service", "detail")  # must not raise
 
 
 def test_escalate_posts_a_signed_webhook_when_the_secret_resolves(monkeypatch):
-    """With a readable secret the webhook fires, HMAC-V2 signed."""
+    """With a URL and a readable secret the webhook fires, HMAC-V2 signed."""
     import hashlib
     import hmac
     import json as _json
 
     from gridbot import config as gconfig
 
+    monkeypatch.setenv("GRIDBOT_ESCALATE_URL", "https://example.invalid/webhooks/gridbot-health")
     monkeypatch.setattr(gconfig, "_secret", lambda name: "s3cr3t-under-test")
 
     posted: dict = {}

@@ -1,8 +1,8 @@
-"""Consolidated overnight morning digest for Telegram.
+"""Consolidated overnight morning digest.
 
-Deterministic (no LLM, no network, no writes). Stdout is the message body —
-keep it under ~3500 chars. Covers the overnight window (default 10h).
-Run: uv run python scripts/morning_report.py [--since-hours N]
+Deterministic (no LLM, no network reads, no writes). Stdout is the message
+body — keep it under ~3500 chars. Covers the overnight window (default 10h).
+Run: uv run python scripts/morning_report.py [--since-hours N] [--send]
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from gridbot import config
+from gridbot import config, notify
 
 
 def window_start(now: datetime, since_hours: float) -> datetime:
@@ -246,17 +246,12 @@ def build_report(since_hours: float, now: datetime, data_dir: Path) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--since-hours", type=float, default=10.0, help="window length (default 10)")
-    ap.add_argument("--send", action="store_true", help="also deliver the digest to Telegram")
+    ap.add_argument("--send", action="store_true", help=f"also deliver via {notify.WEBHOOK_ENV}")
     args = ap.parse_args()
     body = build_report(args.since_hours, datetime.now(UTC), config.DATA_DIR)
     print(body)
     if args.send:
-        subprocess.run(
-            ["/home/ops/.local/bin/hermes", "send", "-t", "telegram", body[:3500]],
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
+        notify.send(body, level="digest")
 
 
 if __name__ == "__main__":

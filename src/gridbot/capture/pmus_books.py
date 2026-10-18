@@ -1,6 +1,6 @@
 """PMUS book recorder — a read-only BBO tape of the books we actually trade.
 
-Timing-chain instrument, part A (docs/superpowers/specs/2026-09-03-timing-chain.md).
+Timing-chain instrument, part A (docs/specs/2026-09-03-timing-chain.md).
 Diagnostic, not a strategy: no registry bar, no trading, no keys. Every
 `CYCLE_S` it polls the public Polymarket US gateway for the LIVE map's book
 and the match book of each live, mapped GRID series and appends change-only

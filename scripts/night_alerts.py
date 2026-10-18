@@ -1,15 +1,16 @@
-"""Telegram push alerts for the armed night session. Read-only tail of the
-intents ledger; sends via `hermes send -t telegram`. Alerts on the rows that
-matter (placed / likely-fill / cancel-failure / reconcile anomalies) and
-stays silent on dry_run, band-gate skips, and clean TTL cancels."""
+"""Push alerts for an armed night session. Read-only tail of the intents
+ledger. Alerts on the rows that matter (placed / likely-fill / cancel-failure
+/ reconcile anomalies) and stays silent on dry_run, band-gate skips, and clean
+TTL cancels. Transport is configuration — see `gridbot.notify`."""
 
 from __future__ import annotations
 
 import json
-import subprocess
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+
+from gridbot import notify
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 POLL_S = 3.0
@@ -17,8 +18,8 @@ HEARTBEAT_S = 3600.0
 
 
 def send(msg: str) -> None:
-    subprocess.run(["hermes", "send", "-t", "telegram", msg[:900]],
-                   capture_output=True, timeout=30)
+    """Deliver an alert. With no transport configured this prints locally."""
+    notify.send(msg[:900], level="alert")
 
 
 def alert_key(r: dict) -> str:
