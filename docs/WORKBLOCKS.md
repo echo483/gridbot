@@ -38,6 +38,11 @@ Declared intent, recorded so it does not drift:
   data plumbing and the tests.
 - **AI authors** the scorecard rewiring (mechanical, equivalence-tested) and the
   presentation drafts.
+- **AI-drafted, USER to own (2026-10-28):** `lab/fills.py` (the touch fill
+  model) and `lake/gates.py` (data-quality gates) arrived as working scaffolds
+  with the lake/lab integration. They are USER artifacts by the rules above:
+  read them, keep or rewrite them, and change the bias statements in their
+  docstrings to your own words before any number from them is published.
 
 ---
 
@@ -310,7 +315,7 @@ Re-confirm before any armed session (`docs/COMPLIANCE.md`).
 ```
 uv sync                                   # install
 uv run ruff check .                       # must be green
-uv run pytest                             # 711 passed, 1 skipped (2026-10-28)
+uv run pytest                             # 778 passed, 1 skipped (2026-10-28)
 uv run pytest tests/test_scorecard_*.py   # the kernel, 110 tests, ~1s
 ```
 

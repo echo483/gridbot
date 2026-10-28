@@ -168,10 +168,15 @@ def _gate_key_nulls(con: duckdb.DuckDBPyConnection, has_events: bool) -> Gate:
         rate = nulls / total
         if rate > worst_rate:
             worst_col, worst_rate = col, rate
+    detail = (
+        f"no nulls in {', '.join(KEY_COLUMNS)} over {total} rows"
+        if worst_rate == 0.0
+        else f"worst key column {worst_col} is {worst_rate:.4%} null over {total} rows"
+    )
     return Gate(
         "key_nulls",
         worst_rate == 0.0,
-        f"worst key column {worst_col} is {worst_rate:.4%} null over {total} rows",
+        detail,
         n=int(total),
     )
 

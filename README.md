@@ -18,6 +18,8 @@ Measured lead p50 +13.1 s (lower bound) on 293 book moves over 682 round ends.
 | scorecard | `src/gridbot/scorecard/` | the statistical kernel: one implementation each of Wilson, series-clustered bootstrap, Brier / ECE / Murphy decomposition, executable-edge pricing, Kelly + barrier + Monte-Carlo risk |
 | instruments | `src/gridbot/instruments/` | pre-registered hypothesis lanes and the verdict engine |
 | executor | `src/gridbot/executor/` | order lifecycle, gates, caps, ledger, venue reconciliation |
+| lake | `src/gridbot/lake/` | raw JSONL → lossless Parquet → typed event/result tables → quality gates (DuckDB) |
+| lab | `src/gridbot/lab/` | hypotheses as data, one scan engine, fill model, clustered + deflated metrics, HTML report |
 | model | `src/gridbot/model/` | LightGBM round-win model (`q`), calibrated live |
 | sizing | `src/gridbot/sizing/` | fractional-Kelly stake sizing |
 | evidence | `scripts/`, `docs/analysis/` | measurement instruments and the dated reports they produced |
@@ -40,7 +42,7 @@ and live, with a published latency budget
 
 ```
 uv run ruff check .   # All checks passed
-uv run pytest         # 711 passed, 1 skipped
+uv run pytest         # 778 passed, 1 skipped
 ```
 
 The suite is hermetic: no network, no secrets, no capture data needed.

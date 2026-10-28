@@ -44,8 +44,11 @@ being redesigned for it (`docs/specs/2026-10-28-buildout-spec.md`, M1).
 
 - All Python. The C++ decision core is planned (spec M4); no Rust exists or
   is planned.
-- `uv run ruff check .` green; `uv run pytest` = **711 passed, 1 skipped,
+- `uv run ruff check .` green; `uv run pytest` = **778 passed, 1 skipped,
   0 failed** on a clean tree without data.
+- The Parquet/DuckDB lake (`lake/`) and the research control plane (`lab/`)
+  are in, tested on synthetic capture only. They have not yet seen the T7
+  corpus (`docs/specs/2026-10-28-research-platform-spec.md` § 8).
 - Secrets come from one permission-checked file (`SECURITY.md`); the desktop
   keyring and the Supabase mirror are gone.
 

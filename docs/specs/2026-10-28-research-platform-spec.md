@@ -1,7 +1,8 @@
 # Spec — the research control plane: a hypothesis factory, not a hypothesis
 
-**Date:** 2026-10-28 · **Branch:** `research/lab-v1` (worktree `~/devlabs/gridbot-lab`)
-**Status:** DRAFT — the scaffold is built and tested; § Open decisions gates the rest.
+**Date:** 2026-10-28 · **Built on:** `research/lab-v1`, integrated onto `main` the same day
+(§ 8 lists what integration changed) · **Status:** DRAFT. The scaffold is built and tested;
+§ Open decisions gates the rest.
 **Companion to:** `docs/specs/2026-10-28-buildout-spec.md` (that one builds the
 plumbing: capture v2, C++ core, host). This one builds the *search* on top of it.
 
@@ -85,8 +86,9 @@ verdict pills, equity curves, interval bars, and the two facts a reader must not
 hunt for — the search size (which deflates every Sharpe on the page) and the fill
 rate.
 
-**Verification.** 60 new hermetic tests; repo total **1055 passed / 1 failed / 1
-skipped**, the single failure being the known corpus-absent smoke test. `ruff
+**Verification (as built, before integration).** 60 new hermetic tests; repo total
+**1055 passed / 1 failed / 1 skipped** on the pre-prune tree, the single failure being
+the known corpus-absent smoke test. After integration: see § 8. `ruff
 check .` green. End-to-end demo: synthetic capture → lake → gates → join → fill
 model → scan → HTML, with a real `PASS` (mean +0.26, CI [+0.064, +0.409],
 n=280/20 series) and a real `FAIL` on an unmet bar.
@@ -191,3 +193,34 @@ No PnL. No lane passed on real data — the demo numbers are synthetic and are
 labelled as such. The platform's contribution is that it makes a false edge hard
 to publish: every number on the report carries its n, its series-clustered
 interval, its fill rate and the size of the search that produced it.
+
+## 8. Integration onto `main` (2026-10-28)
+
+The branch was built in parallel with the prune and without its context. Folding it
+in changed the following; each change has a test.
+
+| defect | effect on real data | fix |
+|---|---|---|
+| bronze stored DuckDB-inferred structs | keys outside the inference sample silently dropped, `1.5` cast to `BIGINT`, strings in numeric fields turned NULL — invisible to the row-count reconciliation | bronze keeps each line as JSON text + `type`/`ts_ns` (`read_ndjson_objects`); typing is silver's job |
+| stream = file stem | `pm/books` and `pmus/books` wrote the same partition; one overwrote the other | stream = `<dir>.<stem>` (`grid.series_state`, `pmus.books`) |
+| join read `stream=pmus_bbo` | no such stream exists (that is the row `type`); every real join returned zero rows | join reads `pmus.books` through `bronze_glob` |
+| map winner from the last snapshot's score | a second oracle; wrong when capture stops mid-overtime | `map_results` built from `gridbot.corpus.winners`, the oracle every instrument already uses (moved out of `scripts/grid_winners.py`, which is now its CLI) |
+| `markets()` keyed by tape slot | slot `a` is whoever is CT and sides swap at halftime, so outcomes flip for half the map | keyed by team name: `markets(slug, series_id, map_number, team)` |
+| short payoff `(1 - outcome) - price` | outcome was already our side's, so every short's PnL had the wrong sign | payoff is `outcome - price` for both sides |
+| manifest written in place, always at the env lake dir | a crash corrupts it; a `base=` ingest wrote its ledger elsewhere | atomic replace, follows `base` |
+
+Still open, deliberately not fixed here (they are the backtest core and the statistics
+the operator owns):
+
+1. **Observations are not trades.** `scan_input` has one row per snapshot. Intervals are
+   clustered and stay honest, but the point estimate, `n`, the min detectable effect and
+   the deflated Sharpe treat forty snapshots of one map as forty trades. An entry rule
+   (first qualifying row per series/map/side) has to be part of every population.
+2. **Deflated Sharpe and MDE assume iid returns.** `deflated_sharpe` now also reports the
+   bound with `T = n_series`; the MDE docstring gives the design-effect correction.
+3. **The fill model is a touch rule on a polled BBO**, not trades or queue position. Its
+   direction of bias is documented in `lab/fills.py`.
+4. **`build_events` holds the whole tape in memory.** Fine for the synthetic and
+   probably for the T7 corpus; measure it on the real data before changing it.
+
+Suite after integration: **778 passed, 1 skipped**, ruff clean.

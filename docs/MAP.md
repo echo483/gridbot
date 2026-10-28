@@ -21,11 +21,13 @@ inward; a lower layer never imports a higher one.
 | shared | `redaction.py` | keeps resolved secrets out of logs |
 | shared | `notify.py` | the single egress point for alerts; transport is configuration |
 | data | `capture/` | GRID poller, venue book/discovery capture, day-file supervisor, the PMUS BBO tape recorder. **The corpus moat — never break continuity.** |
-| data | `corpus/` | raw day files → derived training rows (`build`, `rows`, `ingest`) |
+| data | `corpus/` | raw day files → derived training rows (`build`, `rows`, `ingest`), and `winners`, the one map-winner oracle |
+| data | `lake/` | the analytical lake: raw JSONL → lossless bronze Parquet (`ingest`) → typed silver tables `events` / `round_results` / `map_results` (`events`) → quality `gates`; `inventory` is read-only. `python -m gridbot.lake all` |
 | research | `scorecard/` | the statistical kernel: Wilson, series-clustered bootstrap, Brier/ECE/Murphy, executable-edge pricing, Kelly/barrier/Monte-Carlo risk. One implementation per primitive, behind a `Score` contract that cannot be built without `n` and `n_series` |
 | research | `instruments/` | detectors, the mapentry recorder and its verdict engine, the postquote sampler, shadow lanes. Each armable lane pairs with a frozen registry row |
 | research | `model/` | round-win training + dataset (LightGBM `q`). The frozen map-vs-race aggregation lives with the instruments |
 | research | `sizing/` | fractional-Kelly stake sizing |
+| research | `lab/` | the research control plane: registry v2 (hypotheses as data), `joins` (events × books, bounded as-of, team-keyed), `fills` (touch fill model, USER-owned), `scan` (one engine for every registered hypothesis), `metrics` (clustered Sharpe, beta/alpha, deflated Sharpe, MDE), `report` (HTML). `python -m gridbot.lab` |
 | execution | `executor/` | `engine.py` (cycle loop, gates, dedup), `intents.py` (price/size + band + drift gates), `pmus.py` (the wire), `ledger/limits/fills/reconcile` (accounting, caps, venue truth), `us_mapping.py`. **The only place a wire call happens**, and the seam the C++ decision core plugs into |
 
 ## scripts/ — measurement instruments and operator tooling
