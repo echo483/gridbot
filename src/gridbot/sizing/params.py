@@ -1,6 +1,6 @@
 """Sizing parameters: versioned config + env overrides, fail-closed validation.
 
-Implements the H-SIZING0 spec (docs/specs/2026-08-25-sizing-layer.md).
+Implements the H-SIZING0 spec (docs/history/specs/2026-08-25-sizing-layer.md).
 Sizing consumes the served model artifact only — no LLM ever touches this path.
 All parameters are runtime-adjustable via env (GRIDBOT_SIZING_*) without code
 changes; every override is echoed in ``.as_log_dict`` so stakes are exactly

@@ -1,6 +1,10 @@
 # Workblocks — the live plan, and who writes what
 
-**Baseline:** 2026-10-16. This file is the ONLY live plan. The 2026-09-04
+**Baseline:** 2026-10-16, **amended 2026-10-28**: closed-lane instruments
+pruned to tag `evidence-2026-10`, keyring and Supabase removed, Rust replaced
+by C++, the homelab chosen as the always-on host. The milestone design these
+workblocks implement is `docs/specs/2026-10-28-buildout-spec.md`. This file is
+the ONLY live plan. The 2026-09-04
 `docs/DECISIONS.md` snapshot it superseded was folded in here (its still-live
 decisions are *Open decisions* below) and removed in the same cleanup pass.
 
@@ -25,9 +29,10 @@ whole value is that its numbers are defensible.
 
 Declared intent, recorded so it does not drift:
 
-- **Rust fire path is USER, entirely.** The point is to get good at low-latency
-  execution. AI supplies a semantics reference and a benchmark harness, and
-  reviews for UB/data races. It does not write the hot path.
+- **C++ decision core is USER, entirely.** The point is to get good at
+  low-latency C++. AI supplies the build, the test and benchmark harnesses, the
+  semantics reference and the parity test, and reviews for UB and data races.
+  It does not write the core.
 - **ML is USER, entirely.** Same reasoning.
 - **Backtest core and fill model are USER.** AI scaffolds the harness, the
   data plumbing and the tests.
@@ -87,14 +92,14 @@ Short answer: **both, split by access pattern — and you already own both.**
 
 | need | right tool | why |
 |---|---|---|
-| research + backtest over the tick streams | **Parquet + DuckDB** | columnar scans and predicate pushdown over tens of millions of rows with no server; files are immutable snapshots, so a number computed in March is reproducible in October; `read_json_auto` ingests the existing day-file JSONL directly; zero-copy into Arrow/Polars; plays with a Rust reader later |
+| research + backtest over the tick streams | **Parquet + DuckDB** | columnar scans and predicate pushdown over tens of millions of rows with no server; files are immutable snapshots, so a number computed in March is reproducible in October; `read_json_auto` ingests the existing day-file JSONL directly; zero-copy into Arrow/Polars; readable from C++ via Arrow later |
 | transactional runtime state (live ledger, dedup keys, caps, position state, reconcile) | **Postgres** — or keep the current append-only JSONL ledger | ACID, unique constraints for dedup, concurrent writers, crash recovery, point updates. DuckDB is single-writer and immutable-file-shaped; it is the wrong shape for an order lifecycle |
-| cross-device durability / archive | **Supabase (Postgres)** — already wired | `gridbot-ingest` pushes the corpus hourly and `gridbot-backup` writes raw offsite daily. You are not choosing between them; Postgres is already in the stack as the archive. |
+| durability / archive | **a copy of raw JSONL** (T7 + offsite, restic or rsync) | Supabase was removed 2026-10-28: a second database holding the same data is a second thing to keep consistent. A backup is a copy, not a store. |
 
-**Recommendation, KISS:** add Parquet + DuckDB as a local analytical lake and
-change nothing else. Do **not** introduce a new Postgres instance for research.
+**Decision, KISS:** Parquet + DuckDB as the local analytical lake. Do **not**
+introduce Postgres for research.
 Revisit Postgres for runtime state only when one of these is true: (a) more than
-one process must write the ledger concurrently, (b) the Rust fire path needs a
+one process must write the ledger concurrently, (b) the C++ live path needs a
 durable state store with transactional recovery, or (c) the JSONL ledger read
 becomes the measured bottleneck. Until then it is a new dependency and a new
 failure mode for no measured gain.
@@ -109,16 +114,20 @@ from it, which is what makes it safe to version, cache and throw away.
 
 ### WB0 — restore the corpus · **USER** (AI writes the inventory)
 
-- **Do:** `rsync` the whole `data/` tree from the old workstation preserving
-  mtimes. Nothing else. Do not filter, do not prune, do not "clean it up on the
-  way over".
-- **Deliverable:** `data/` present; `tests/test_postshock_lag.py::test_real_day_file_smoke`
-  green; a row-count and gap inventory written to `data/analysis/`.
+- **Do:** `rsync` the whole `data/` tree from the T7 onto the homelab host,
+  preserving mtimes. Confirm `data/analysis/training_rounds.jsonl` is present
+  with the historical rows. They came from the Supabase mirror, which is being
+  decommissioned, so the T7 copy will be the only one; the pull script runs
+  from tag `evidence-2026-10` while the project still exists. Nothing else.
+  Do not filter, do not prune, do not "clean it up on the way over".
+- **Deliverable:** `data/` present; a row-count and gap inventory written to
+  `data/analysis/`; a real-data smoke test added (the old one left with its
+  lane).
 - **Whiteboard:** why the corpus outranks any refactor; what a capture gap
   costs (three prior losses: two keyring, one power-off — and the difference
   between a *volume* gap and a *join* gap, where orphaned books with no game
   state can never produce a row).
-- **Acceptance:** `uv run pytest` = 1010 passed, 0 failed.
+- **Acceptance:** the inventory's per-stream counts match the T7 source.
 - **Not doing:** deleting old-format files, reformatting anything in place.
 
 ### WB1 — evidence lake (Parquet + DuckDB) · **USER+AI**
@@ -171,37 +180,43 @@ artifact, and `H-CROSSIN1`'s edge did not survive repricing to the ask.
 
 ### WB3 — rewire `scripts/` onto the kernel · **AI** (after one decision)
 
-- **Do:** point the ten legacy implementations at `gridbot.scorecard`, deleting
-  the duplicates. Each rewiring keeps its legacy convention via an explicit
+- **Do:** point the legacy implementations still on `main` (`mapentry_verdict`,
+  `verdict`, `timing_chain`, `quant_eval`, `model/train`) at `gridbot.scorecard`,
+  deleting the duplicates. The other five left `main` with their lanes. Each rewiring keeps its legacy convention via an explicit
   argument (`method="nearest_rank"`, `forecast="midpoint"`) so **behavior does
   not change in this block**.
-- **Deliverable:** ~10 scripts slimmer; identical published numbers; the
+- **Deliverable:** those modules slimmer; identical published numbers; the
   equivalence tests already written in
   `tests/test_scorecard_consolidation.py` extended to each script.
 - **Blocked on:** *Open decision 1* below.
 - **Not doing:** changing any convention here. Behavior freeze first, then the
   convention decision as its own pre-registered change.
 
-### WB4 — Rust fire path · **USER, entirely**
+### WB4 — C++ decision core · **USER, entirely** (AI scaffolds)
 
-- **Do:** a Rust crate that takes the book + game state, computes the signal,
-  and emits an order intent — with a deterministic replay that matches the
-  Python reference, and criterion benchmarks.
-- **AI provides:** the semantics reference (what the Python does, exactly), the
-  benchmark harness, and a review for data races and UB. No hot-path code.
-- **Deliverable:** `rust/gridbot-fire/` with `cargo bench` output published as a
-  latency table; a cross-validation test against the Python reference.
+- **Do:** a C++20 library (`cpp/libgridcore`) that takes book + game state,
+  computes the signal, and emits an order intent. Callable from the
+  backtester (nanobind) and from the live path, with a deterministic replay
+  that matches the Python reference.
+- **AI provides:** CMake/Ninja, warnings-as-teaching flags, ASan/UBSan preset,
+  GoogleTest, Google Benchmark, the nanobind stub, the golden-tape parity test,
+  CI, and the semantics reference (what the Python does, exactly). No core code.
+- **Deliverable:** benchmark output published as a latency table (p50/p99/p999,
+  n events, methodology); the parity test green on a real tape.
 - **Whiteboard:** SPSC ring buffers and why single-producer/single-consumer
   removes the lock; memory ordering (acquire/release) and what breaks without
   it; false sharing and cache-line padding; why allocation and syscalls in the
-  hot path destroy tail latency; L2 book reconstruction and what to do with
-  out-of-order updates; measuring p50/p99/p999 and the difference between
-  throughput and tail latency; why a deterministic replay is a correctness tool
-  and not just a benchmark.
-- **Acceptance:** identical outputs to the Python reference on the same tape,
-  byte for byte; a published p99 with the measurement methodology beside it.
-- **Not doing:** rewriting the capture, the executor, or the analysis in Rust.
-  The hot path is the seam.
+  hot path destroy tail latency; L2 book reconstruction and out-of-order
+  updates; p50/p99/p999 versus throughput; why a deterministic replay is a
+  correctness tool and not just a benchmark; **why microseconds here do not
+  move PnL** when the edge is a 13 s lead behind a 12 s poll and a 400 ms
+  HTTPS round trip, and what it buys instead (parity, determinism, a tail you
+  can defend).
+- **Acceptance:** identical intents to the Python reference on the same tape,
+  byte for byte; a published p99 with the methodology beside it.
+- **Not doing:** rewriting the capture, the executor's ledger/reconcile, or the
+  analysis in C++. The decision is the seam; the wire follows only if the
+  latency budget (spec M5) says it matters.
 
 ### WB5 — risk engine · **USER+AI**
 
@@ -280,9 +295,13 @@ a round, and the post-shock diagnostics show the only apparent edge sat in books
 with no depth. Recommendation: close it, and carry forward the two reusable
 parts — the depth-limited fill gate and the artifact checks.
 
-**4. The always-on host.** Two of the three prior capture losses came from
-workstation session lifecycle, zero from code. This is the highest-value ops
-decision outstanding and it is cheap relative to another multi-hour capture gap.
+**4. ~~The always-on host.~~ DECIDED 2026-10-28:** the homelab M720q
+(Proxmox VE). Capture is being redesigned for it (spec M1), with secrets from
+one permission-checked file instead of the desktop keyring.
+
+**5. Polymarket US eligibility at the current location.** The compliance
+affirmation was given for California; the operator is now in Florida.
+Re-confirm before any armed session (`docs/COMPLIANCE.md`).
 
 ---
 
@@ -291,16 +310,17 @@ decision outstanding and it is cheap relative to another multi-hour capture gap.
 ```
 uv sync                                   # install
 uv run ruff check .                       # must be green
-uv run pytest                             # 1010 passed, 0 failed (after WB0)
+uv run pytest                             # 711 passed, 1 skipped (2026-10-28)
 uv run pytest tests/test_scorecard_*.py   # the kernel, 110 tests, ~1s
 ```
 
 ## Document maintenance (anti-staleness)
 
-- `docs/STATE.md` gets a dated `**Updated YYYY-MM-DD**` addendum per baseline.
-  Never rewritten in place — it is the narrative.
+- `docs/STATE.md` describes the current system and is rewritten when it
+  changes. The pre-2026-10-28 narrative is `docs/history/STATE-…md`, never edited.
+- `docs/FALSIFICATION.md` gains a row whenever a lane closes.
 - `docs/WORKBLOCKS.md` (this file) is the only **live** plan. When a workblock
-  closes, strike it here in place and record it in STATE.md.
+  closes, strike it here in place and update STATE.md.
 - `docs/analysis/` is immutable evidence. Superseded numbers get a new dated
   document that cites the old one; the old one is never edited.
 - `README.md` carries the status line and the verified-baseline block. If you

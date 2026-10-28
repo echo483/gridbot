@@ -3,9 +3,10 @@
 Binding rules for this repository, plus the standards that keep it readable at
 size. Read this before changing anything under `src/`, `scripts/`, or `deploy/`.
 
-Orientation order: **this file → `docs/STATE.md` (what is proven, what is dead,
-what runs) → `docs/WORKBLOCKS.md` (the live plan) → `docs/experiments/registry.jsonl`
-(the frozen hypotheses) → `docs/MAP.md` (the floor plan).**
+Orientation order: **this file → `docs/STATE.md` (what is proven, what runs) →
+`docs/FALSIFICATION.md` (what died and why) → `docs/WORKBLOCKS.md` (the live
+plan) → `docs/experiments/registry.jsonl` (the frozen hypotheses) →
+`docs/MAP.md` (the floor plan).**
 
 ## The rules (merge-blocking)
 
@@ -26,9 +27,11 @@ what runs) → `docs/WORKBLOCKS.md` (the live plan) → `docs/experiments/regist
    number in `docs/analysis/` is derived from it. Never break a running
    recorder to land a change.
 5. **One account per platform.** Scaling axes are titles × venues × capital.
-6. **Secrets live in the OS keyring only**, service `gridbot`, written by
-   `scripts/setup_secrets.py`. Never in files, code, logs, or commits — see
-   `SECURITY.md`. The pre-commit scanner enforces this at the repo boundary:
+6. **Secrets live in one permission-checked file and nowhere else** — not in
+   the environment, code, logs, or commits. `gridbot.config` refuses a file
+   that is group/world-accessible, a symlink, or owned by another user, and
+   then every secret reads as absent (fail closed). See `SECURITY.md`. The
+   pre-commit scanner and CI enforce the repo boundary:
    `git config core.hooksPath .githooks`.
 7. **No runtime dependency on an agent framework.** Development may use
    whichever tools help, but nothing that *runs* may require an LLM platform,
@@ -37,7 +40,7 @@ what runs) → `docs/WORKBLOCKS.md` (the live plan) → `docs/experiments/regist
 
 ## Layers
 
-The codebase is split by plane so the future Rust fire path has a clean seam.
+The codebase is split by plane so the C++ decision core has a clean seam.
 Dependencies point inward; a lower plane never imports a higher one.
 
 | plane | packages | rule |
@@ -46,14 +49,16 @@ Dependencies point inward; a lower plane never imports a higher one.
 | **research** | `scorecard/`, `instruments/`, `model/`, `sizing/` | measurement and estimation. Pure or file-reading; never places orders. |
 | **execution** | `executor/` | order lifecycle, gates, ledger, reconciliation. The only place a wire call happens. |
 | **shared** | `config`, `jsonl`, `ratelimit`, `graphql`, `redaction`, `notify` | cross-cutting primitives, no domain knowledge. |
-| **evidence** | `scripts/` | frozen measurement instruments. Their outputs are cited by the registry — read them, rerun them, don't rewrite them. |
+| **evidence** | `scripts/` | measurement instruments. Their outputs are cited by the registry — read them, rerun them, don't rewrite them. An instrument whose lane is closed leaves `main` and stays runnable from its evidence tag. |
 | **ops** | `deploy/`, `scripts/` operator tools | keeping the machine alive. |
 
-**Where Rust goes.** The fire path becomes `rust/` alongside `src/`, with the
+**Where C++ goes.** The decision core becomes `cpp/` alongside `src/`, with the
 Python executor as the reference semantics. The seam is the order-intent
 boundary in `executor/`: everything upstream of it is data + signal, everything
-downstream is wire. Rust must reproduce the reference bit-for-bit on the same
-tape before it is trusted.
+downstream is wire. The same core is called by the backtester and by the live
+path, so a backtest exercises the code that trades. It must reproduce the
+Python reference byte-for-byte on the same tape before it is trusted
+(`docs/specs/2026-10-28-buildout-spec.md`, M4).
 
 ## Standards
 
@@ -73,7 +78,7 @@ the count of independent *series*. Rows inside a series are correlated; an
 interval that resamples rows will be wrong and will look convincing. If a
 number cannot state its `n_series`, it is not a number.
 
-**Tests are hermetic.** No network, no OS keyring, no live D-Bus, nothing
+**Tests are hermetic.** No network, no real secrets file, nothing
 written outside `tmp_path`. A test that needs the world is a test that will fail
 for the wrong reason. The suite must be runnable and green on a fresh clone
 except where it deliberately fails loudly to signal absent real data.
@@ -81,7 +86,9 @@ except where it deliberately fails loudly to signal absent real data.
 **Docs have an owner and a lifecycle.**
 - `docs/analysis/` is immutable evidence. Superseded numbers get a new dated
   document that cites the old one; the old one is never edited.
-- `docs/STATE.md` accumulates dated addenda. It is the narrative, not a scratchpad.
+- `docs/STATE.md` describes the system as it is now and is rewritten when that
+  changes. Dated narrative goes to `docs/history/`, which is never edited.
+- `docs/FALSIFICATION.md` gains a row whenever a lane closes.
 - `docs/WORKBLOCKS.md` is the only live plan.
 - `README.md` carries the status line and the verified-baseline block. If you
   run the commands and get different numbers, fixing it is part of the change.

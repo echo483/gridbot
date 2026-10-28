@@ -661,9 +661,10 @@ def _sync_manual_exits(
 ) -> list[dict]:
     """Release settle rows for filled keys the venue reports FLAT.
 
-    Live failure 08-27, STATE.md item 11c: the user sells a filled
-    position on the venue UI; no ``POSITION_RESOLUTION`` ever names the
-    key, so without this pass its slot leaks forever.
+    Live failure 08-27 (docs/history/STATE-2026-08-26-to-2026-10-16.md,
+    item 11c): the user sells a filled position on the venue UI; no
+    ``POSITION_RESOLUTION`` ever names the key, so without this pass its slot
+    leaks forever.
 
     A slug is released ONLY when every proof lines up this pass:
 
