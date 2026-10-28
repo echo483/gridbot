@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 # Ensure the project root is on sys.path so `scripts` is importable (pytest
-# only adds tests/ to sys.path; mirror the existing test_wave_detect.py).
+# only adds tests/ to sys.path).
 _project_root = Path(__file__).resolve().parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))

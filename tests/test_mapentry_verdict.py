@@ -1,7 +1,7 @@
 """H-MAPENTRY1 verdict wiring — the three frozen clauses + starvation.
 
 Every test here encodes a trap from
-docs/specs/2026-08-30-mapentry-verdict-wiring.md. They are written
+docs/history/specs/2026-08-30-mapentry-verdict-wiring.md. They are written
 to FAIL against the pre-build tree (the module does not exist), and each one
 names the production change that makes it pass.
 """

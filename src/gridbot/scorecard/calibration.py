@@ -13,8 +13,8 @@ three mutually incompatible things under that name:
   the MEAN forecast in the bin.
 * ``src/gridbot/instruments/mapentry_verdict.py`` — EQUAL-WIDTH bins, bin
   forecast = the bin MIDPOINT ``(i + 0.5) / bins``.
-* ``src/gridbot/model/train.py`` / ``scripts/mapentry2_score.py`` — more
-  variants again.
+* ``src/gridbot/model/train.py`` / ``scripts/mapentry2_score.py`` (the latter
+  removed with its closed lane; tag ``evidence-2026-10``) — more variants again.
 
 "Quintile" means equal-count. The midpoint convention answers a different
 question entirely: for a bin spanning [0.6, 0.8) it assumes every forecast in

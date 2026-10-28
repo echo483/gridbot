@@ -12,14 +12,15 @@ Before this module the repo carried at least six hand-rolled copies of the
 clustered bootstrap (``mapentry_verdict``, ``verdict``, ``mapentry2_score``,
 ``roundwin2_poolb``, ``crossin_backtest``, ``queue16_phase2_outcomes``,
 ``queue16_bandskip_crossin``, ``timing_chain``, ``postshock_fade``,
-``pcal_fit``) that disagreed on the percentile index convention and on whether
+``pcal_fit``; most were removed with their closed lanes and remain at tag
+``evidence-2026-10``) that disagreed on the percentile index convention and on whether
 the drop-out of undefined reps rescaled the index or not. Two of them indexed
 against the requested rep count and the rest against the surviving count, so
 for identical inputs they returned different intervals. Nothing in the tree
 could detect that.
 
 Deliberately stdlib-only: no numpy. The kernel stays trivially embeddable and
-its outputs stay bit-reproducible, which matters when a Rust port has to
+its outputs stay bit-reproducible, which matters when the C++ core has to
 reproduce them exactly.
 """
 

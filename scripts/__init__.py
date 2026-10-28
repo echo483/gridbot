@@ -1,1 +1,1 @@
-# scripts package — enables `from scripts.mapentry2_score import ...` in tests
+# scripts package — enables `from scripts.grid_winners import ...` in tests
