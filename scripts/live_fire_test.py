@@ -7,8 +7,8 @@ limit so a fill is effectively impossible, and measures each leg's latency.
 This is a PLUMBING test, not a strategy: no instrument, no hypothesis, no
 registry claim. It runs the same pmus wire layer the engine uses.
 
-Gating (iron rail 3): without the user-armed gate (GRIDBOT_LIVE=1 + keyring
-keys + compliance record) it stops after the server-side PREVIEW — which
+Gating (iron rail 3): without the user-armed gate (GRIDBOT_LIVE=1 + keys in
+the secrets file + compliance record) it stops after the server-side PREVIEW — which
 already validates auth, schema, and margin without creating anything.
 
 SIDE CHECK (added 2026-09-03, registry H-MAPENTRY1-NOTE7): the 08-25 first
@@ -31,8 +31,7 @@ import math
 import time
 from dataclasses import dataclass
 
-import keyring
-
+from gridbot import config
 from gridbot.executor import limits
 from gridbot.executor.pmus import wire_price
 
@@ -72,8 +71,8 @@ def _client():
     from polymarket_us import PolymarketUS
 
     return PolymarketUS(
-        key_id=keyring.get_password("gridbot", "POLYMARKET_US_KEY_ID"),
-        secret_key=keyring.get_password("gridbot", "POLYMARKET_US_SECRET_KEY"),
+        key_id=config.require("POLYMARKET_US_KEY_ID"),
+        secret_key=config.require("POLYMARKET_US_SECRET_KEY"),
     )
 
 

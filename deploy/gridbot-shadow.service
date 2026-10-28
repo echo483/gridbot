@@ -3,14 +3,10 @@
 # Tails capture day files, detects registered trigger states (H-MANADV1,
 # H-ECONBUY1, H-PISTOLCARRY1), records hypothetical entries + time-aligned
 # book tops to data/shadow/. Places NO orders, holds NO keys, calls no LLM.
-# Anchored to graphical-session like capture: data only flows while capture
-# runs there anyway.
 
 [Unit]
 Description=gridbot shadow engine (hypothesis instance recorder; no trading)
-After=network-online.target graphical-session.target
-PartOf=graphical-session.target
-Requisite=graphical-session.target
+After=network-online.target
 StartLimitIntervalSec=600
 StartLimitBurst=20
 
@@ -25,4 +21,4 @@ RestartSec=15
 NoNewPrivileges=true
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=default.target

@@ -5,8 +5,8 @@ status "dry_run" — the byte-identical decision path a live session takes,
 minus the wire call. live (armed only): the same intent goes through the
 Polymarket US wire layer (pmus.py) and the ack/error is recorded next to it.
 
-The engine re-checks the arming gate EVERY cycle: pulling keys from the
-keyring or unsetting GRIDBOT_LIVE mid-flight drops it back to dry_run on
+The engine re-checks the arming gate EVERY cycle: removing keys from the
+secrets file or unsetting GRIDBOT_LIVE mid-flight drops it back to dry_run on
 the next tick. It never mutates arming state itself (iron rail 3).
 
 Run: uv run python -m gridbot.executor.engine [--once]
@@ -62,8 +62,8 @@ def recent_postquote_moves(
     - SIDE: ``oriented_move`` is signed with respect to the side that was
       TAKEN at sample time, and real books carry samples for BOTH sides of
       one slug (5 such slugs on 08-28). Pooling them inverts the sign of the
-      opposite side's evidence — the STATE.md rule "never pool unoriented
-      across sides".
+      opposite side's evidence — the postquote analysis rule "never pool
+      unoriented across sides".
     - HORIZON: one entry is sampled at 30/60/120s; only the frozen
       ``DRIFT_HORIZON_S`` bar counts, so three views of one moment can never
       masquerade as three confirmations.
@@ -848,7 +848,7 @@ def main() -> None:
             engine.cycle()
         except Exception:
             # An armed session may hold resting orders; nothing transient
-            # (keyring D-Bus outage, wire hiccup, bad ledger line) may kill
+            # (wire hiccup, bad ledger line, unreadable secrets file) may kill
             # the process, or the TTL sweep dies with it.
             log.exception("cycle failed; engine continues")
         if deadline and time.monotonic() > deadline:

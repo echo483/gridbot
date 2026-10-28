@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -78,12 +77,7 @@ def _escalate(service: str, detail: str) -> None:
 
         from gridbot import config as gconfig
 
-        # Read through config._secret, NEVER a raw keyring.get_password: a
-        # locked Secret Service makes raw D-Bus reads BLOCK FOREVER (2026-08-26
-        # and again 2026-08-31), and a hang is not an exception — the `except`
-        # below would not catch it, so the 5-minute watchdog would wedge
-        # permanently at exactly the moment it is needed. config._secret runs
-        # the read in a 5s reaper thread with a bounded last-good cache.
+        # The one secrets source; absent or unsafe file -> no escalation.
         secret = gconfig._secret("GRIDBOT_ESCALATE_SECRET")
         if not secret:
             return
@@ -109,76 +103,21 @@ def _send(msg: str) -> None:
     notify.send(msg, level="alert")
 
 
-def _watch_keyring() -> int | None:
-    """Run the keyring lock watchdog (scripts/keyring_watch.py --notify).
-
-    Best-effort: any nonzero exit or crash must never break the 5-minute
-    timer. Returns the watchdog's exit code (2 = locked + alert delivered,
-    3 = locked-path with nothing delivered, 0 = unlocked/ok), or None when
-    the watchdog itself could not be run.
-    """
-    script = Path(__file__).resolve().parents[1] / "scripts" / "keyring_watch.py"
-    try:
-        r = subprocess.run(
-            [sys.executable, str(script), "--notify"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=45,
-        )
-        return r.returncode
-    except subprocess.TimeoutExpired:
-        return None
-    except Exception:
-        return None
-
-
-KEYRING_PROBLEM_PREFIX = "keyring locked/unreachable"
-
-
-def _keyring_summary_decision(
-    keyring_rc: int | None, problems: list[str]
-) -> tuple[list[str], list[str], bool]:
-    """Pure decision helper (FIX-1/FIX-4): fold the keyring result into the
-    problem list and decide the red-summary outcome.
-
-    Returns (problems, summary_problems, suppress_summary):
-      - rc 2: a keyring problem line is recorded, but the keyring's own alert
-        already reached Telegram, so it is excluded from the summary text and
-        the summary is suppressed ONLY when the keyring is the sole problem
-        this cycle (FIX-4: unrelated problems still fire the summary).
-      - rc 3: keyring problem present with NOTHING delivered — the line is
-        recorded AND included in the summary; never suppressed.
-      - rc 0 / None: no keyring line, summary unchanged.
-    """
-    keyring_line = None
-    if keyring_rc == 2:
-        keyring_line = f"{KEYRING_PROBLEM_PREFIX} (watchdog alert delivered)"
-    elif keyring_rc == 3:
-        keyring_line = f"{KEYRING_PROBLEM_PREFIX} (watchdog sent NOTHING this cycle)"
-    all_problems = list(problems) + ([keyring_line] if keyring_line else [])
-    summary_problems = all_problems if keyring_rc != 2 else list(problems)
-    suppress = keyring_rc == 2 and not problems
-    return all_problems, summary_problems, suppress
-
-
 STALE_RESTART_COOLDOWN_S = 3600.0
 
 
-def _stale_grid_restart_wanted(grid_age: float, capture_active: bool, graphical: bool,
+def _stale_grid_restart_wanted(grid_age: float, capture_active: bool,
                                last_restart: float, now: float,
                                fresh_s: float = GRID_FRESH_S,
                                cooldown_s: float = STALE_RESTART_COOLDOWN_S) -> bool:
     """Pure decision: restart an ACTIVE capture unit whose GRID tape went stale.
 
-    Never outside the graphical session (a keyring-anchored unit would come
-    back locked and silently dark), never more than once per cooldown, and
-    only while the unit is active — an inactive unit is the DOWN branch's job.
+    Never more than once per cooldown, and only while the unit is active — an
+    inactive unit is the DOWN branch's job.
     """
     return (
         grid_age > fresh_s
         and capture_active
-        and graphical
         and now - last_restart > cooldown_s
     )
 
@@ -186,7 +125,6 @@ def _stale_grid_restart_wanted(grid_age: float, capture_active: bool, graphical:
 def _problems(prev: dict) -> tuple[list[str], dict]:
     problems: list[str] = []
     now = time.time()
-    graphical = _is_active("graphical-session.target")
     escalated: list[str] = []
     healed_at: dict[str, float] = {
         s: t for s, t in (prev.get("healed_at") or {}).items() if now - t < 24 * 3600
@@ -195,16 +133,10 @@ def _problems(prev: dict) -> tuple[list[str], dict]:
     for service in SERVICES:
         if _is_active(service):
             continue
-        if not graphical:
-            # Keyring-anchored units must NEVER be force-started outside the
-            # graphical session: they would run with a locked keyring and go
-            # silently GRID-dark (review F4). Alert; do not start.
-            problems.append(f"{service} down (no graphical session — log in at console)")
-            continue
         if service in prev_escalated:
-            # A triage agent owns this outage; don't race it with restarts
-            # or re-escalate every 5 minutes (review F5).
-            problems.append(f"{service} DOWN (escalated; triage in progress)")
+            # Already escalated to the operator; don't race them with
+            # restarts or re-escalate every 5 minutes.
+            problems.append(f"{service} DOWN (escalated; awaiting operator)")
             escalated.append(service)
             continue
         if _restart(service):
@@ -221,20 +153,17 @@ def _problems(prev: dict) -> tuple[list[str], dict]:
     grid_age = now - _newest_mtime(config.DATA_DIR / "grid")
     if grid_age > GRID_FRESH_S:
         problems.append(f"GRID data stale ({int(grid_age / 60)}m)")
-        # 2026-09-03: capture stayed ACTIVE (heartbeats every minute) while
-        # every GRID poll failed for ~6h — its in-process keyring read had
-        # wedged — and this check only alerted. A fresh process read the key
-        # in 0.1s. So: stale GRID data with the unit active is a restart
-        # case, once per hour, inside the graphical session only (a locked
-        # keyring makes the restarted unit fail fast -> the DOWN branch above
-        # escalates on the next pass).
+        # An ACTIVE unit whose tape has gone stale is wedged, not healthy
+        # (2026-09-03: heartbeats for ~6h while every GRID poll failed). A
+        # restart is the fix, at most once per cooldown; a unit that then
+        # fails to come up is the DOWN branch's job on the next pass.
         if _stale_grid_restart_wanted(
-            grid_age, _is_active("gridbot-capture.service"), graphical,
+            grid_age, _is_active("gridbot-capture.service"),
             healed_at.get("gridbot-capture.service:stale", 0), now,
         ):
             if _restart("gridbot-capture.service"):
                 _send(f"🩹 GRID data stale {int(grid_age / 60)}m with capture ACTIVE "
-                      "(wedged keyring read?) — capture restarted")
+                      "— capture restarted")
             else:
                 problems.append("capture restart after stale GRID data FAILED")
                 _escalate("gridbot-capture.service",
@@ -256,19 +185,10 @@ def main() -> None:
         except json.JSONDecodeError:
             pass
     problems, flags = _problems(prev)
-    # Keyring lock watchdog runs after the self-heal block, before the
-    # summary: its transition alerts ride Telegram. rc 2 = its own alert was
-    # delivered (suppress the duplicate summary ONLY if it is the sole
-    # problem); rc 3 = locked-path with nothing delivered — that must stay
-    # loud via the generic red summary (FIX-1/FIX-4).
-    keyring_rc = _watch_keyring()
-    problems, summary_problems, suppress_summary = _keyring_summary_decision(
-        keyring_rc, problems
-    )
     ok = not problems
     stamp = datetime.now(UTC).strftime("%H:%M UTC")
-    if not ok and prev.get("ok", True) and not suppress_summary:
-        _send("🔴 gridbot health: " + "; ".join(summary_problems) + f" ({stamp})")
+    if not ok and prev.get("ok", True):
+        _send("🔴 gridbot health: " + "; ".join(problems) + f" ({stamp})")
     elif ok and not prev.get("ok", True):
         _send(f"✅ gridbot health recovered ({stamp})")
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)

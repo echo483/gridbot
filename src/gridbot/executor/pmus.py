@@ -7,7 +7,7 @@ official `polymarket-us` SDK: Ed25519 key pair from polymarket.us/developer,
 market slugs, integer contract quantities, and — matching our frozen maker
 contract exactly — `participateDontInitiate` (exchange-enforced post-only).
 
-The client is built lazily, only after the arming gate has passed; keyring
+The client is built lazily, only after the arming gate has passed; secret
 values go straight into the constructor and are never logged. The wire call
 is one small function for joint review before the first live order.
 """
@@ -26,7 +26,7 @@ _client = None
 
 
 def _get_client():
-    """Build (once) the authenticated Polymarket US client from the keyring."""
+    """Build (once) the authenticated Polymarket US client from the secrets file."""
     global _client
     if _client is None:
         from polymarket_us import PolymarketUS

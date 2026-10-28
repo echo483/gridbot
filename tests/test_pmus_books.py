@@ -1,4 +1,4 @@
-"""Hermetic tests for the PMUS book recorder (no network, no keyring, no real data)."""
+"""Hermetic tests for the PMUS book recorder (no network, no secrets, no real data)."""
 
 from __future__ import annotations
 

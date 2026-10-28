@@ -41,8 +41,7 @@ class TestArmingGate:
         assert any("GRIDBOT_LIVE" in r for r in state.reasons)
 
     def test_env_alone_cannot_arm(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # GRIDBOT_LIVE=1 with an EMPTY keyring stays dry. The real keyring
-        # may hold live keys, so mock the secret lookup — the test must not
+        # GRIDBOT_LIVE=1 with no keys stays dry. Mock the secret lookup — the test must not
         # depend on machine state.
         from gridbot import config as cfg
 

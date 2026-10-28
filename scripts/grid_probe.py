@@ -1,4 +1,4 @@
-"""One-shot GRID probe: verify the gridbot keyring key works and map title scope.
+"""One-shot GRID probe: verify the GRID key in the secrets file works and map title scope.
 
 Prints a JSON summary (never any secret) and writes it to data/audit/.
 Budget: a handful of Central Data calls, well under 20/min.

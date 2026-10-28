@@ -1,6 +1,6 @@
 """Tests for the interval kernel: Wilson, percentiles, clustered bootstrap.
 
-Hermetic: no files, no network, no keyring. Everything here is pure math on
+Hermetic: no files, no network, no secrets. Everything here is pure math on
 literal fixtures.
 """
 

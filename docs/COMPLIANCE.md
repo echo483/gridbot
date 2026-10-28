@@ -19,5 +19,9 @@ Every entry is dated; the go-live gates reference this file.
   PASS; flipping live is the user's own act — never an automated process's;
   single account per platform; first live test sized at $1.
 
-Open items: Polymarket account credentials pending (user setting up desktop
-access; keys enter the OS keyring via `scripts/setup_secrets.py` only).
+Open items:
+- **Re-confirm eligibility for the operator's current location before the next
+  armed session.** The 2026-08-24 confirmation above was given for California;
+  the operator is now in Florida. The arming gate checks only for the
+  affirmation line, so this has to be re-checked by hand.
+- Venue keys enter the secrets file only (`SECURITY.md`), never the repo.

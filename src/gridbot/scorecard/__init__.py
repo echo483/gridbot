@@ -21,7 +21,7 @@ Layers
 * :mod:`gridbot.scorecard.risk`        — Kelly, barriers, Monte Carlo bankroll
 
 Status: kernel only. The registry bars remain the sole PASS/FAIL rule, and
-nothing here reads the corpus, the network, or the keyring. Rewiring
+nothing here reads the corpus, the network, or any secret. Rewiring
 ``scripts/`` onto this kernel is a separate, equivalence-tested change.
 """
 

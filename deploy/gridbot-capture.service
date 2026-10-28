@@ -3,22 +3,14 @@
 # READ-ONLY: collects data only. Places NO orders, never arms, has no trading
 # surface, makes no edge/ROI claim.
 #
-# KEYRING ANCHOR (pattern proven in cs2agent, 2026-08-24): GRID_API_KEY is read
-# from the OS keyring (SecretService/KWallet), which unlocks at graphical login.
-# Anchoring to graphical-session.target (NOT default.target) means the unit only
-# starts once the keyring is unlockable, and stops on logout. With linger enabled
-# a default.target anchor would start at boot, find the keyring locked, and
-# retry-loop forever. Do not "simplify" this back to default.target.
+# GRID_API_KEY comes from the secrets file (gridbot.config; SECURITY.md), so the
+# unit no longer depends on a desktop session: it starts at boot with linger.
 
 [Unit]
 Description=gridbot capture (READ-ONLY GRID + Polymarket data collection; no trading)
 Documentation=file:///home/ops/gridbot/SECURITY.md
-After=network-online.target graphical-session.target
+After=network-online.target
 Wants=network-online.target
-PartOf=graphical-session.target
-# Requisite: a direct start outside the graphical session FAILS FAST instead
-# of running with a locked keyring (silent GRID-dark — review F4).
-Requisite=graphical-session.target
 StartLimitIntervalSec=600
 StartLimitBurst=20
 
@@ -26,7 +18,7 @@ StartLimitBurst=20
 Type=simple
 WorkingDirectory=/home/ops/gridbot
 # Non-secret runtime knobs (e.g. GRIDBOT_EXTRA_TITLES after the title probe).
-# NEVER put a secret here — secrets live in the keyring only.
+# NEVER put a secret here — secrets live in the secrets file only.
 EnvironmentFile=-/home/ops/gridbot/deploy/capture.env
 # systemd-inhibit: while capture runs, block IDLE suspend (KDE's 2h AC
 # auto-suspend put the box to sleep 03:28–14:17 on 2026-08-25 and cost 10.8h
@@ -41,4 +33,4 @@ RestartSec=15
 NoNewPrivileges=true
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=default.target

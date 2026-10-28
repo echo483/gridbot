@@ -2,7 +2,7 @@
 
 The gate READS state; it never changes it. dry_run is the default and the
 only self-selectable mode — going live is the user's explicit act:
-GRIDBOT_LIVE=1 in the environment, keys in the keyring, compliance record
+GRIDBOT_LIVE=1 in the environment, keys in the secrets file, compliance record
 on disk. Any missing piece → dry_run with the reasons listed.
 """
 
@@ -71,9 +71,9 @@ def check_armed(env: dict[str, str] | None = None) -> ArmingState:
     if e.get("GRIDBOT_LIVE") != "1":
         reasons.append("GRIDBOT_LIVE!=1 (going live is the user's own act)")
     if not config._secret("POLYMARKET_US_KEY_ID"):
-        reasons.append("POLYMARKET_US_KEY_ID not available (keyring/env)")
+        reasons.append("POLYMARKET_US_KEY_ID not available (secrets file)")
     if not config._secret("POLYMARKET_US_SECRET_KEY"):
-        reasons.append("POLYMARKET_US_SECRET_KEY not available (keyring/env)")
+        reasons.append("POLYMARKET_US_SECRET_KEY not available (secrets file)")
     try:
         text = COMPLIANCE_FILE.read_text().lower()
         if COMPLIANCE_MARKER not in text:

@@ -10,9 +10,10 @@ within seconds.
 ## The gate (`gridbot.executor.limits.check_armed`)
 
 1. `GRIDBOT_LIVE=1` set in the engine's environment by the user.
-2. `POLYMARKET_US_KEY_ID` in the OS keyring (`scripts/setup_secrets.py`;
-   Ed25519 keypair from https://polymarket.us/developer).
-3. `POLYMARKET_US_SECRET_KEY` in the OS keyring.
+2. `POLYMARKET_US_KEY_ID` in the secrets file (`SECURITY.md`; Ed25519
+   keypair from https://polymarket.us/developer).
+3. `POLYMARKET_US_SECRET_KEY` in the secrets file. Deleting either line
+   disarms the engine on its next cycle.
 4. `docs/COMPLIANCE.md` present with the explicit affirmation line
    "eligibility confirmed: yes".
 
@@ -105,7 +106,7 @@ Two read-only scripts keep eyes on the session without touching it:
 
 - `watch -n 5 uv run python scripts/watch_night.py` — live status panel
   (placed orders, ledger, caps, gate state). Read-only.
-- `uv run python scripts/night_alerts.py` — Telegram alerter for placed /
+- `uv run python scripts/night_alerts.py` — alerter (via `gridbot.notify`) for placed /
   likely-fill / cancel-failure rows. Silent on dry_run and clean band-gate
   skips, so a quiet phone means nothing needed you.
 
