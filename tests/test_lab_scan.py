@@ -211,3 +211,12 @@ def test_config_hash_changes_when_the_claim_changes(tmp_path):
 def test_cluster_returns_groups_by_series():
     grouped = cluster_returns([("s1", 0.1), ("s1", 0.2), ("s2", -0.1)])
     assert grouped == {"s1": [0.1, 0.2], "s2": [-0.1]}
+
+
+def test_short_payoff_uses_our_side_price_and_outcome():
+    """A short at cost 0.55 whose team (the other one) won pays +0.45, not -0.55."""
+    con = duckdb.connect()
+    rows = [(f"s{s}", i, "short", 0.55, 1.0, True, 0.55, 0.0) for s in range(10) for i in range(10)]
+    _input(con, rows)
+    result = run_scan(con, _hyp(population="price <= 0.60"), reps=200)
+    assert result.filled.mean_pnl.value == pytest.approx(0.45)

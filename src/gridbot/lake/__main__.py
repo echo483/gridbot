@@ -8,7 +8,7 @@
 
 Point it at the T7 with `GRIDBOT_RAW_DIR=/mnt/gridbot/data` and keep the derived
 Parquet local with `GRIDBOT_LAKE_DIR=~/lake/gridbot`. Nothing here needs a GRID
-key, a network, or the OS keyring: it reads files and writes files.
+key, a network, or a secret: it reads files and writes files.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ def _cmd_rebuild(args: argparse.Namespace) -> int:
     new = [r for r in results if not r.skipped]
     for r in new:
         print(
-            f"  {r.raw.stream:<14} {r.raw.day}  rows={r.rows:<9} "
+            f"  {r.raw.stream:<18} {r.raw.day}  rows={r.rows:<9} "
             f"dropped={r.dropped}  {r.bytes:,}B"
         )
     print(f"{len(new)} file(s) ingested, {len(results) - len(new)} unchanged")
@@ -59,7 +59,8 @@ def _cmd_events(args: argparse.Namespace) -> int:
         return 0
     print(
         f"event tape rebuilt from {result.partitions_read} partition(s): "
-        f"{result.events:,} event rows, {result.results:,} resolutions"
+        f"{result.events:,} event rows, {result.results:,} round results, "
+        f"{result.map_results:,} map results"
     )
     return 0
 

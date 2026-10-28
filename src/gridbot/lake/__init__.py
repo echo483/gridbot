@@ -3,8 +3,10 @@
 Three layers, each a separate command so a failure in one cannot corrupt the
 one below it:
 
-1. ``raw``  — day-file JSONL copied to Parquet *faithfully* (no interpretation).
-2. ``events`` — raw Parquet → typed event tape + round-result oracle.
+1. ``raw`` (bronze) — each JSONL line stored losslessly as JSON text, plus the
+   envelope fields; streams are ``<source>.<stem>`` (``grid.series_state``).
+2. ``events`` (silver) — bronze → typed event tape, round results, and map
+   results from the one map-winner oracle (``gridbot.corpus.winners``).
 3. ``gates`` — SQL checks over both, emitting a machine-readable verdict.
 
 The raw layer is immutable evidence. Everything above it is derived and can be
@@ -20,9 +22,10 @@ from gridbot.lake.ingest import (
     discover,
     ingest_file,
     load_manifest,
+    manifest_path,
     rebuild_raw,
 )
-from gridbot.lake.paths import lake_dir, manifest_path, raw_root
+from gridbot.lake.paths import lake_dir, raw_root
 
 __all__ = [
     "IngestResult",

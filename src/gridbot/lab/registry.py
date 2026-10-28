@@ -5,9 +5,9 @@ The v1 registry (``docs/experiments/registry.jsonl``) stores three keys —
 the falsification bar all live inside that one paragraph of English. It is a
 faithful record of what was decided and why, and it is **not executable**: with
 no structured bar, nothing in the tree can check whether an instrument actually
-tested the registered thing. That is the real reason the search for edge
-stalled — the marginal cost of the Nth idea never fell, because idea N needed a
-bespoke script and a human reading a paragraph to grade it.
+tested the registered thing. It is also one reason the search was slow: the
+marginal cost of the Nth idea never fell, because idea N needed a bespoke
+script and a human reading a paragraph to grade it.
 
 v2 keeps the prose (it is the reasoning, and it must not be lost) and adds the
 four fields that make a hypothesis runnable:

@@ -58,11 +58,24 @@ def _team(
     }
 
 
-def _won_teams(teams: list[dict], winner: str | None) -> list[dict]:
+def _won_teams(
+    teams: list[dict], winner: str | None, *, keep_stats: bool = False
+) -> list[dict]:
+    """Team nodes with GRID's ``won`` flag. Segment nodes carry only name/side/won;
+    game nodes (``keep_stats``) keep score, money and players as well."""
+    if keep_stats:
+        return [{**t, "won": t["name"] == winner} for t in teams]
     return [
         {"__typename": "Cs2Team", "name": t["name"], "side": t["side"], "won": t["name"] == winner}
         for t in teams
     ]
+
+
+def _sides(swapped: bool) -> tuple[str, str]:
+    """(side of the series' first-half CT team, side of the other team)."""
+    if swapped:
+        return "terrorists", "counter-terrorists"
+    return "counter-terrorists", "terrorists"
 
 
 @dataclass
@@ -97,6 +110,9 @@ class Series:
     winners: list[str | None] = field(default_factory=list)
     #: One observation per *in-progress* round, in order.
     rounds: list[Round] = field(default_factory=list)
+    #: Resolved-round count after which the two teams swap sides (CS2 halftime
+    #: is 12). ``None`` keeps sides fixed.
+    halftime: int | None = None
 
     def state(self, upto: int | None = None) -> dict:
         """The seriesState after ``upto`` resolved rounds, round ``upto`` in progress.
@@ -109,8 +125,19 @@ class Series:
         obs = self.rounds[min(resolved, len(self.rounds) - 1)] if self.rounds else Round(
             self.ct_name, self.t_name, ct_score, t_score
         )
+        first_side, second_side = _sides(self.halftime is not None and resolved >= self.halftime)
+        # The map is over once a team has 13 and leads (regulation; the synthetic
+        # tape never goes to overtime). GRID then flags the game finished and
+        # marks the winning team node ``won``, which is what the oracle reads.
+        lead = max(ct_score, t_score)
+        map_over = resolved == len(self.winners) and lead >= 13 and ct_score != t_score
+        game_winner = (self.ct_name if ct_score > t_score else self.t_name) if map_over else None
         segs = []
+        def _seg_sides(round_no: int) -> tuple[str, str]:
+            return _sides(self.halftime is not None and round_no > self.halftime)
+
         for i, w in enumerate(self.winners[:resolved], start=1):
+            sa, sb = _seg_sides(i)
             segs.append(
                 {
                     "type": "round",
@@ -118,13 +145,14 @@ class Series:
                     "finished": True,
                     "teams": _won_teams(
                         [
-                            _team(self.ct_name, "counter-terrorists", 0, 5, 8000, 14_000),
-                            _team(self.t_name, "terrorists", 0, 5, 8000, 14_000),
+                            _team(self.ct_name, sa, 0, 5, 8000, 14_000),
+                            _team(self.t_name, sb, 0, 5, 8000, 14_000),
                         ],
                         w,
                     ),
                 }
             )
+        sa, sb = _seg_sides(resolved + 1)
         segs.append(
             {
                 "type": "round",
@@ -132,8 +160,8 @@ class Series:
                 "finished": False,
                 "teams": _won_teams(
                     [
-                        _team(self.ct_name, "counter-terrorists", 0, 5, 8000, 14_000),
-                        _team(self.t_name, "terrorists", 0, 5, 8000, 14_000),
+                        _team(self.ct_name, sa, 0, 5, 8000, 14_000),
+                        _team(self.t_name, sb, 0, 5, 8000, 14_000),
                     ],
                     None,
                 ),
@@ -146,13 +174,13 @@ class Series:
                 {
                     "sequenceNumber": 1,
                     "started": True,
-                    "finished": False,
+                    "finished": map_over,
                     "clock": {"currentSeconds": obs.seconds},
                     "segments": segs,
-                    "teams": [
+                    "teams": _won_teams([
                         _team(
                             self.ct_name,
-                            "counter-terrorists",
+                            first_side,
                             ct_score,
                             obs.ct_alive,
                             obs.ct_money,
@@ -161,14 +189,14 @@ class Series:
                         ),
                         _team(
                             self.t_name,
-                            "terrorists",
+                            second_side,
                             t_score,
                             obs.t_alive,
                             obs.t_money,
                             obs.t_loadout,
                             awp=obs.t_awp,
                         ),
-                    ],
+                    ], game_winner, keep_stats=True),
                 }
             ],
         }
@@ -234,7 +262,7 @@ def write_book_day(
     quotes: list[dict],
     *,
     day: str = "20261028",
-    stream: str = "pmus_bbo",
+    stream: str = "books",
 ) -> Path:
     """Write a PMUS BBO tape day file — the same shape ``capture/pmus_books.py`` writes.
 
@@ -251,8 +279,14 @@ def write_book_day(
     return path
 
 
-def won_map(series_id: str, *, winner: str = "AUR", rounds: int = 13) -> Series:
-    """A series whose map 1 finishes at ``rounds``-0 — a resolved map outcome."""
+def won_map(
+    series_id: str, *, winner: str = "AUR", rounds: int = 13, halftime: int | None = None
+) -> Series:
+    """A series whose map 1 finishes at ``rounds``-0 — a resolved map outcome.
+
+    ``halftime=12`` swaps sides after round 12, as CS2 does: the winner starts
+    CT and finishes T, so it changes tape slot mid-map.
+    """
     losers = "NAVI" if winner == "AUR" else "AUR"
     return Series(
         series_id=series_id,
@@ -260,4 +294,5 @@ def won_map(series_id: str, *, winner: str = "AUR", rounds: int = 13) -> Series:
         t_name=losers,
         winners=[winner] * rounds,
         rounds=[Round(winner, losers, s, 0) for s in range(rounds)],
+        halftime=halftime,
     )

@@ -23,9 +23,17 @@ Two populations, always reported separately
 The engine never reports a single "edge" number. It reports the **opportunity**
 population (every observation the registered predicate matched) and the **filled**
 population (only the ones an order would have got). The gap between them is the
-selection cost that this project measured at -6.5pt per contract and that killed
-the post-shock lane entirely. Reporting only the filled set hides it; reporting
-only the opportunity set is the dead-book artifact. Both, or neither.
+fill-selection cost this project measured at -6.5pt per contract on H-MAPENTRY1
+(NOTE6). Reporting only the filled set hides it; reporting only the opportunity
+set is how the post-shock lane's dead-book artifact looked like an edge. Both,
+or neither.
+
+**Rows are observations, not trades.** ``scan_input`` has one row per event
+snapshot, so a map with forty qualifying snapshots contributes forty correlated
+"trades". The intervals are series-clustered and stay honest; the point
+estimate, ``n``, the min detectable effect and the deflated Sharpe do not. An
+entry rule (e.g. first qualifying row per series/map/side) belongs in the
+population before any number from here is published.
 """
 
 from __future__ import annotations
@@ -52,9 +60,11 @@ REQUIRED_COLUMNS = ("series_id", "ts_ns", "side", "price", "outcome", "filled")
 OPTIONAL_COLUMNS = ("p_hat", "reference", "market_slug", "stake")
 
 #: PnL per contract for the side we took, against a 1.0 payout on a win.
-PAYOFF_SQL = (
-    "CASE WHEN lower(side) = 'long' THEN outcome - price ELSE (1.0 - outcome) - price END"
-)
+#: ``price`` and ``outcome`` are both already OUR side's (a short's price is
+#: 1 - bid and its outcome is 1 when the other team won), so the payoff is the
+#: same expression for both sides. Re-inverting the short here would flip the
+#: sign of every short trade: the same class of bug as H-MAPENTRY1-NOTE7.
+PAYOFF_SQL = "outcome - price"
 
 
 class Verdict(str, Enum):

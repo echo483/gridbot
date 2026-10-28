@@ -24,6 +24,3 @@ def lake_dir() -> Path:
     """Root of the derived lake. Overridable so derived data can live off the T7."""
     return Path(os.environ.get("GRIDBOT_LAKE_DIR", config.DATA_DIR / "lake"))
 
-
-def manifest_path() -> Path:
-    return lake_dir() / "manifest.json"

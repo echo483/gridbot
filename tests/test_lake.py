@@ -1,7 +1,7 @@
 """Lake tests: ingest reconciliation, the event tape, gates — all hermetic.
 
 Every test builds its own raw capture in ``tmp_path`` via ``synth_tape`` and
-points the lake env knobs at it. No network, no keyring, no corpus, no GRID key.
+points the lake env knobs at it. No network, no secrets, no corpus, no GRID key.
 """
 
 from __future__ import annotations
@@ -9,12 +9,13 @@ from __future__ import annotations
 import json
 
 import pytest
-from synth_tape import Round, Series, default_series, write_day
+from synth_tape import Round, Series, default_series, won_map, write_book_day, write_day
 
 from gridbot.lake import discover, rebuild_raw
 from gridbot.lake.catalog import lake_coverage, scan_raw
 from gridbot.lake.events import EVENT_COLUMNS, build_events, load_events
 from gridbot.lake.gates import run_gates
+from gridbot.lake.ingest import PMUS_BOOKS, SERIES_STATE, bronze_glob
 
 
 @pytest.fixture
@@ -30,7 +31,7 @@ def test_discover_finds_stream_and_day(raw_root):
     write_day(raw_root / "grid", [default_series()], day="20261027")
     write_day(raw_root / "grid", [default_series("7")], day="20261028")
     found = discover(raw_root)
-    assert [f.stream for f in found] == ["series_state", "series_state"]
+    assert [f.stream for f in found] == [SERIES_STATE, SERIES_STATE]
     assert [f.day for f in found] == ["2026-10-27", "2026-10-28"]
 
 
@@ -180,3 +181,81 @@ def test_gates_report_not_run_on_an_empty_lake(raw_root):
     report = run_gates()
     assert not report.ok
     assert all(g.passed is None for g in report.gates if g.name != "raw_reconciled")
+
+
+def test_same_stem_in_two_sources_are_two_streams(raw_root):
+    """pm/books and pmus/books share a file stem; they must not share a partition."""
+    import duckdb
+
+    (raw_root / "pm").mkdir(parents=True)
+    (raw_root / "pm" / "books-20261028.jsonl").write_text(
+        json.dumps({"type": "ws", "ts_ns": 1, "raw": {"event_type": "book"}}) + "\n"
+    )
+    write_book_day(raw_root / "pmus", [
+        {"slug": "s", "series_id": "1", "map_number": 1, "bid": 0.4, "ask": 0.44, "ts_ns": 2},
+    ])
+    results = rebuild_raw(root=raw_root)
+    assert sorted(r.raw.stream for r in results) == ["pm.books", PMUS_BOOKS]
+    con = duckdb.connect()
+    types = {
+        stream: [r[0] for r in con.execute(
+            f"SELECT type FROM read_parquet('{bronze_glob(stream)}')").fetchall()]
+        for stream in ("pm.books", PMUS_BOOKS)
+    }
+    assert types == {"pm.books": ["ws"], PMUS_BOOKS: ["pmus_bbo"]}
+
+
+def test_bronze_is_lossless_for_heterogeneous_rows(raw_root):
+    """Schema inference would drop a late key, truncate 1.5 and NULL a string.
+
+    Bronze keeps each line's JSON text, so every value survives exactly. The
+    tail rows sit after a long uniform prefix, past any inference sample.
+    """
+    import duckdb
+
+    directory = raw_root / "grid"
+    directory.mkdir(parents=True)
+    uniform = [{"type": "ss", "ts_ns": i, "n": 1, "data": {"a": {"x": 1}}} for i in range(25_000)]
+    tail = [
+        {"type": "ss", "ts_ns": 25_000, "n": 1.5, "data": {"a": {"x": 2, "late_key": "HERE"}}},
+        {"type": "ss", "ts_ns": 25_001, "n": 2, "data": {"a": {"x": "str"}}},
+    ]
+    with open(directory / "series_state-20261028.jsonl", "w") as fh:
+        fh.writelines(json.dumps(r) + "\n" for r in uniform + tail)
+    result = rebuild_raw(root=raw_root)[0]
+    assert result.rows == len(uniform) + len(tail)
+    con = duckdb.connect()
+    got = [
+        json.loads(r[0]) for r in con.execute(
+            f"SELECT raw FROM read_parquet('{bronze_glob(SERIES_STATE)}') "
+            "WHERE ts_ns >= 25000 ORDER BY ts_ns").fetchall()
+    ]
+    assert got == tail
+
+
+def test_map_results_come_from_the_one_oracle(raw_root):
+    write_day(raw_root / "grid", [won_map("999", winner="AUR")])
+    rebuild_raw(root=raw_root)
+    build_events()
+    con = load_events()
+    try:
+        rows = con.execute(
+            "SELECT series_id, map_number, winner_name, winner_score, loser_score "
+            "FROM map_results").fetchall()
+    finally:
+        con.close()
+    assert rows == [("999", 1, "AUR", 13, 0)]
+
+
+def test_halftime_swaps_slots_but_not_teams(raw_root):
+    """Slot a is whoever is CT. After halftime that is the other team."""
+    write_day(raw_root / "grid", [won_map("999", winner="AUR", halftime=12)])
+    rebuild_raw(root=raw_root)
+    build_events()
+    con = load_events()
+    try:
+        names = [r[0] for r in con.execute(
+            "SELECT a_name FROM events ORDER BY ts_ns").fetchall()]
+    finally:
+        con.close()
+    assert names[0] == "AUR" and names[-1] == "NAVI"

@@ -365,6 +365,12 @@ def deflated_sharpe(
     Returns a Score whose ``value`` is the deflated probability in ``[0, 1]``;
     the point estimate is only meaningful alongside the ``expected_max_sharpe``
     stored in ``meta``, so it is attached there rather than left implicit.
+
+    **Known optimism (open, USER to decide):** the formula's ``sqrt(T - 1)``
+    assumes ``T`` independent returns. Trades inside a series are correlated,
+    so the effective sample is smaller than ``T`` and this probability is too
+    high. ``meta["prob_if_series_independent"]`` recomputes it with
+    ``T = n_series``, the conservative bound; the truth lies between the two.
     """
     flat = np.asarray(_flatten(by_series), dtype=float)
     n_series = sum(1 for v in by_series.values() if list(v))
@@ -387,6 +393,7 @@ def deflated_sharpe(
     denom = math.sqrt(max(1e-12, 1.0 - sk * sr + ((ku - 1.0) / 4.0) * sr * sr))
     z = (sr - sr0) * math.sqrt(flat.size - 1) / denom
     prob = float(stats.norm.cdf(z))
+    z_series = (sr - sr0) * math.sqrt(max(n_series - 1, 0)) / denom
     score = _score(name, prob, None, int(flat.size), n_series, kind="fraction")
     score.meta.update(
         {
@@ -395,6 +402,7 @@ def deflated_sharpe(
             "n_trials": n_trials,
             "skew": sk,
             "kurtosis": ku,
+            "prob_if_series_independent": float(stats.norm.cdf(z_series)),
         }
     )
     return score
@@ -412,6 +420,11 @@ def minimum_detectable_effect(
     Two-sided test. Used to answer "is this n enough?" honestly: if the point
     estimate is smaller than this, the sample could not have resolved it either
     way, and no amount of narrative fixes that.
+
+    ``n`` must be the *effective* sample size. For trades clustered in series
+    that is ``n / (1 + (m - 1) * icc)`` (m trades per series, icc the
+    within-series correlation), not the trade count; passing raw ``n`` makes
+    the effect look more detectable than it is.
     """
     if n <= 0:
         return float("inf")

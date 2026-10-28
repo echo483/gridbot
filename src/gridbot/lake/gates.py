@@ -215,7 +215,7 @@ def run_gates(
                 f"SELECT * FROM read_parquet({_sql_str(str(results_path))})"
             )
         report = GateReport()
-        report.add(_gate_raw_reconciled(load_manifest()))
+        report.add(_gate_raw_reconciled(load_manifest(base)))
         report.add(_gate_round_coherence(con, has_events))
         report.add(_gate_results_unique(con, has_results))
         report.add(_gate_snapshot_gaps(con, has_events, max_gap_s))

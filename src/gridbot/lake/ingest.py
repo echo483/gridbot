@@ -1,27 +1,34 @@
-"""Raw capture day files → Parquet, faithfully and idempotently.
+"""Raw capture day files → bronze Parquet, losslessly and idempotently.
 
-Two rules make the raw layer safe to build on:
+Three rules make the raw layer safe to build on:
 
-**No interpretation at ingest.** Rows land as-is with the source file and ingest
-time attached. Typing happens in :mod:`gridbot.lake.events`, at query time. A
-schema mistake is then a rebuild of the derived layer, never a re-ingest of the
-corpus — and the corpus stays the thing every published number reproduces from.
+**Lossless.** Each line is stored as its own JSON text (``raw``), next to the
+few envelope fields every stream has (``type``, ``ts_ns``). Nothing is
+schema-inferred at ingest. That matters: DuckDB's struct inference over a
+heterogeneous file *silently* drops keys it did not sample, casts ``1.5`` into
+a ``BIGINT`` column, and turns a string in a numeric field into NULL — and a
+row-count reconciliation cannot see any of it, because the row survives.
+Typing happens in :mod:`gridbot.lake.events` (silver), where a mistake is a
+rebuild of a derived table, never a silently corrupted copy of the corpus.
 
-**A dropped row is a reported row.** DuckDB's ``ignore_errors`` silently
-discards malformed lines. This module counts the file's physical lines and
-reconciles them against the rows actually written, so a silent drop cannot
-quietly become a wrong denominator. Torn final lines are a known artefact of
-append-only capture; ``dropped`` is how many there were, per file, forever.
+**A dropped row is a reported row.** Torn lines (the tail of an append that
+was cut off) are counted per file in the manifest and never become rows.
+
+**A stream is ``<directory>.<stem>``.** ``pm/books-D.jsonl`` (Polymarket
+international CLOB) and ``pmus/books-D.jsonl`` (Polymarket US BBO) share a
+stem, so the stem alone is not an identity: ``pm.books`` and ``pmus.books``.
 
 Idempotency is by content hash in ``<lake>/manifest.json``. A file whose sha256
-and size are unchanged is skipped unless ``force`` is set; a file whose size
-changed (capture still appending) is re-ingested and the partition rewritten.
+and size are unchanged is skipped unless ``force`` is set; a file still being
+appended changes size and is re-ingested (capture v2 closes hourly files so
+only finished files are ingested — docs/specs/2026-10-28-capture-v2-homelab.md).
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,12 +36,18 @@ from pathlib import Path
 import duckdb
 
 from gridbot.lake.paths import lake_dir as _lake_dir
-from gridbot.lake.paths import manifest_path as _manifest_path
 from gridbot.lake.paths import raw_root as _raw_root
 
-# Stream = the day-file stem. These are the stems the capture supervisors write
-# (capture/supervisor.py, capture/pm_books.py, capture/pmus_books.py).
-KNOWN_STREAMS = ("series_state", "discovery", "books", "catalog", "pmus_bbo", "executor")
+# ``<dir>.<stem>`` of what the capture processes write today (v1 layout).
+SERIES_STATE = "grid.series_state"
+GRID_DISCOVERY = "grid.discovery"
+PM_BOOKS = "pm.books"
+PM_CATALOG = "pm.catalog"
+PMUS_BOOKS = "pmus.books"
+KNOWN_STREAMS = (SERIES_STATE, GRID_DISCOVERY, PM_BOOKS, PM_CATALOG, PMUS_BOOKS)
+
+# Bronze schema: the lake's own columns, then the lossless line.
+BRONZE_COLUMNS = ("type", "ts_ns", "raw", "_stream", "_day", "_src_file", "_ingested_at")
 
 
 def _sql_str(value: str) -> str:
@@ -69,12 +82,8 @@ class IngestResult:
     skipped: bool = False
 
 
-def _stream_of(path: Path) -> str:
-    """``series_state-20261028.jsonl`` → ``series_state``.
-
-    The stem may itself contain hyphens in principle, so split on the LAST
-    hyphen only when the suffix parses as 8 digits — otherwise keep the stem.
-    """
+def _stem_of(path: Path) -> str:
+    """``series_state-20261028.jsonl`` → ``series_state`` (date suffix removed)."""
     stem = path.stem
     head, _, tail = stem.rpartition("-")
     if head and len(tail) == 8 and tail.isdigit():
@@ -82,10 +91,22 @@ def _stream_of(path: Path) -> str:
     return stem
 
 
+def stream_of(path: Path, root: Path) -> str:
+    """``<root>/grid/series_state-20261028.jsonl`` → ``grid.series_state``.
+
+    A file directly under ``root`` has no source directory and keeps its bare
+    stem; capture never writes there, so in practice every stream is qualified.
+    """
+    stem = _stem_of(path)
+    parent = path.parent
+    if parent == root:
+        return stem
+    return f"{parent.name}.{stem}"
+
+
 def _day_of(path: Path) -> str:
     """``…-20261028.jsonl`` → ``2026-10-28``; falls back to the file's mtime."""
-    stem = path.stem
-    _, _, tail = stem.rpartition("-")
+    _, _, tail = path.stem.rpartition("-")
     if len(tail) == 8 and tail.isdigit():
         return f"{tail[0:4]}-{tail[4:6]}-{tail[6:8]}"
     return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).strftime("%Y-%m-%d")
@@ -96,19 +117,19 @@ def discover(
     *,
     streams: tuple[str, ...] | None = None,
 ) -> list[RawFile]:
-    """Every ``<stream>-YYYYMMDD.jsonl`` under ``root``, sorted by stream then day.
+    """Every ``<stem>-YYYYMMDD.jsonl`` under ``root``, sorted by stream then day.
 
-    Walks one level into per-stream subdirectories (``grid/``, ``pm/``,
-    ``pmus/``) and also accepts a flat directory. Unknown stems are kept when
-    ``streams`` is None — a new capture stream must not require a code change to
-    get into the lake, only a typing decision later.
+    Walks one level into the per-source directories (``grid/``, ``pm/``,
+    ``pmus/``). Unknown streams are kept when ``streams`` is None — a new
+    capture stream must not need a code change to reach the lake, only a
+    typing decision later.
     """
     base = root or _raw_root()
     if not base.exists():
         return []
     out: list[RawFile] = []
     for path in sorted(base.glob("*.jsonl")) + sorted(base.glob("*/*.jsonl")):
-        stream = _stream_of(path)
+        stream = stream_of(path, base)
         if streams is not None and stream not in streams:
             continue
         out.append(RawFile(stream=stream, day=_day_of(path), path=path))
@@ -123,8 +144,14 @@ def _sha256(path: Path, block: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
-def load_manifest() -> dict:
-    path = _manifest_path()
+def manifest_path(base: Path | None = None) -> Path:
+    return (base or _lake_dir()) / "manifest.json"
+
+
+def load_manifest(base: Path | None = None) -> dict:
+    """The ingest ledger. An unreadable manifest means "re-ingest everything",
+    which is slow but never wrong."""
+    path = manifest_path(base)
     if path.exists():
         try:
             return json.loads(path.read_text())
@@ -133,11 +160,14 @@ def load_manifest() -> dict:
     return {"files": {}}
 
 
-def save_manifest(manifest: dict) -> None:
-    path = _manifest_path()
+def save_manifest(manifest: dict, base: Path | None = None) -> None:
+    """Atomic: write a sibling temp file, then rename over the old one."""
+    path = manifest_path(base)
     path.parent.mkdir(parents=True, exist_ok=True)
     manifest["updated_at"] = datetime.now(UTC).isoformat()
-    path.write_text(json.dumps(manifest, indent=1, sort_keys=True))
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(manifest, indent=1, sort_keys=True))
+    os.replace(tmp, path)
 
 
 def parquet_path_for(raw: RawFile, base: Path | None = None) -> Path:
@@ -146,14 +176,7 @@ def parquet_path_for(raw: RawFile, base: Path | None = None) -> Path:
 
 
 def _parse_counts(path: Path) -> tuple[int, int]:
-    """``(non_blank_lines, parseable_lines)`` — the reconciliation truth.
-
-    DuckDB's ``ignore_errors`` keeps a malformed line's slot and emits an
-    all-NULL row for it, so the Parquet row count alone cannot tell a clean day
-    from a day that lost its torn tail. This pass parses every line with the
-    standard library and counts what is actually readable; the two numbers
-    travel in the manifest so a drop is always a reported drop.
-    """
+    """``(non_blank_lines, parseable_object_lines)`` — the reconciliation truth."""
     lines = parsed = 0
     with open(path, "rb") as fh:
         for line in fh:
@@ -161,20 +184,12 @@ def _parse_counts(path: Path) -> tuple[int, int]:
                 continue
             lines += 1
             try:
-                json.loads(line)
+                obj = json.loads(line)
             except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
                 continue
-            parsed += 1
+            if isinstance(obj, dict):
+                parsed += 1
     return lines, parsed
-
-
-def _original_columns(con: duckdb.DuckDBPyConnection, path: Path) -> list[str]:
-    """Column names the raw JSON produced, before the lake's ``_``-prefixed ones."""
-    rows = con.execute(
-        f"DESCRIBE SELECT * FROM read_json({_sql_str(str(path))}, "
-        "format='newline_delimited', ignore_errors=true, union_by_name=true)"
-    ).fetchall()
-    return [str(r[0]) for r in rows]
 
 
 def ingest_file(
@@ -184,17 +199,16 @@ def ingest_file(
     base: Path | None = None,
     force: bool = False,
 ) -> IngestResult:
-    """Copy one day file into its Parquet partition. Returns the reconciliation.
+    """Copy one day file into its bronze partition. Returns the reconciliation.
 
-    The Parquet write is atomic-by-rename: DuckDB writes a temp file in the same
-    partition directory and the final name is only used after a successful
-    ``COPY``. A crash mid-copy leaves a ``.tmp`` file that the next run clears —
-    never a half-written ``part.parquet`` that reads as a short day.
+    The Parquet write is atomic-by-rename: a crash mid-copy leaves a ``.tmp``
+    file that the next run clears, never a half-written ``part.parquet`` that
+    reads as a short day.
     """
     out = parquet_path_for(raw, base)
     stat = raw.path.stat()
     sha = _sha256(raw.path)
-    manifest = load_manifest()
+    manifest = load_manifest(base)
     key = str(raw.path)
     prev = manifest["files"].get(key)
     if (
@@ -220,25 +234,22 @@ def ingest_file(
     if tmp.exists():
         tmp.unlink()
 
-    # Drop the all-NULL rows a torn line produces, so the tape never carries a
-    # row that has no content. The predicate is generated from the file's own
-    # columns, so it holds for any stream without a per-stream rule.
-    cols = _original_columns(con, raw.path)
-    junk = " AND ".join(f"{c} IS NULL" for c in cols) if cols else "FALSE"
+    # read_ndjson_objects returns each line as JSON text; a torn line becomes a
+    # NULL row (dropped here, counted below) and blank lines are skipped. A line
+    # that parses but is not an object is not a capture record either.
     con.execute(
         f"""
         COPY (
             SELECT
-                *,
+                json_extract_string(json, '$.type')            AS type,
+                TRY_CAST(json_extract(json, '$.ts_ns') AS BIGINT) AS ts_ns,
+                json                                           AS raw,
                 {_sql_str(raw.stream)} AS _stream,
-                {_sql_str(raw.day)}   AS _day,
-                {_sql_str(key)}       AS _src_file,
-                now()                 AS _ingested_at
-            FROM read_json({_sql_str(str(raw.path))},
-                           format='newline_delimited',
-                           ignore_errors=true,
-                           union_by_name=true)
-            WHERE NOT ({junk})
+                {_sql_str(raw.day)}    AS _day,
+                {_sql_str(key)}        AS _src_file,
+                now()                  AS _ingested_at
+            FROM read_ndjson_objects({_sql_str(str(raw.path))}, ignore_errors=true)
+            WHERE json IS NOT NULL AND json_type(json) = 'OBJECT'
         ) TO {_sql_str(str(tmp))} (FORMAT PARQUET, COMPRESSION ZSTD)
         """
     )
@@ -265,13 +276,13 @@ def ingest_file(
         "rows": result.rows,
         "lines": result.lines,
         "dropped": result.dropped,
-        # rows must equal the lines that actually parsed; anything else means
-        # the loader and the counter disagree and the day is not trustworthy.
+        # rows must equal the object lines that parsed; anything else means the
+        # loader and the counter disagree and the day is not trustworthy.
         "reconciled": result.rows == parsed,
         "parquet": str(out),
         "ingested_at": datetime.now(UTC).isoformat(),
     }
-    save_manifest(manifest)
+    save_manifest(manifest, base)
     return result
 
 
@@ -291,3 +302,9 @@ def rebuild_raw(
         ]
     finally:
         con.close()
+
+
+def bronze_glob(stream: str, base: Path | None = None) -> str:
+    """The Parquet glob for one bronze stream (every day)."""
+    root = base or _lake_dir()
+    return str(root / "raw" / f"stream={stream}" / "dt=*" / "part.parquet")

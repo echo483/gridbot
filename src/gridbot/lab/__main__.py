@@ -9,7 +9,7 @@ Adding a hypothesis to the search costs a registry row, not a new script — whi
 is the entire point of the exercise.
 
 Nothing here places an order or reads a secret. It needs the lake and nothing
-else: no GRID key, no network, no keyring.
+else: no GRID key, no network, no secrets.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from pathlib import Path
 import duckdb
 
 from gridbot.lab.fills import DEFAULT_TTL_S, apply_touch_fill_model, fill_summary
-from gridbot.lab.joins import JoinSpec, build_scan_input
+from gridbot.lab.joins import MARKETS_DDL, JoinSpec, build_scan_input
 from gridbot.lab.registry import (
     import_legacy,
     load_registry,
@@ -61,13 +61,10 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         else:
             print(
                 "no --markets-sql: building an empty markets relation, so scan_input "
-                "will be empty (the slot mapping is venue semantics and must be supplied)",
+                "will be empty (which team a book names is venue semantics and must be supplied)",
                 file=sys.stderr,
             )
-            con.execute(
-                "CREATE OR REPLACE TABLE markets(slug VARCHAR, series_id VARCHAR, "
-                "map_number INTEGER, slot VARCHAR)"
-            )
+            con.execute(MARKETS_DDL)
         rows = build_scan_input(con, spec)
         print(f"scan_input: {rows:,} rows  (side={spec.side}, staleness={spec.staleness_s}s)")
         if args.fill_model:
@@ -115,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     p_scan = sub.add_parser("scan", help="run runnable hypotheses and write a report")
     p_scan.add_argument("--side", choices=["long", "short"], default="long")
     p_scan.add_argument("--staleness-s", type=float, default=30.0)
-    p_scan.add_argument("--markets-sql", help="SQL file creating the markets() relation")
+    p_scan.add_argument("--markets-sql", help="SQL file creating markets(slug, series_id, map_number, team)")
     p_scan.add_argument(
         "--fill-model",
         action="store_true",

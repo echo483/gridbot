@@ -13,6 +13,12 @@ GRID JSON again. Two tables come out:
     snapshot that observes the round resolved. A round whose resolution is never
     observed emits nothing — labels are never fabricated (corpus F6).
 
+``map_results``
+    Winner per (series, map) from ``gridbot.corpus.winners`` — the same
+    first-observation, MR12-validated oracle every instrument already resolves
+    against. It is not re-derived here: two map oracles would eventually
+    disagree, and then two published numbers would too.
+
 **Title-agnostic by design.** CS2 has CT/T sides that swap at halftime; Dota 2
 has Radiant/Dire. Fixed ``ct_``/``t_`` columns would either break on Dota or
 force a title check into every query. So teams go in two slots, ``a`` and ``b``,
@@ -38,6 +44,8 @@ from pathlib import Path
 
 import duckdb
 
+from gridbot.corpus.winners import process_lines
+from gridbot.lake.ingest import SERIES_STATE, bronze_glob
 from gridbot.lake.paths import lake_dir as _lake_dir
 
 # Stable Parquet schema. Append-only: new columns go on the end, never reorder or
@@ -72,6 +80,17 @@ EVENT_COLUMNS = (
     "time_remaining",
     "num_games",
     "num_segments",
+)
+
+MAP_RESULT_COLUMNS = (
+    "series_id",
+    "map_number",
+    "winner_name",
+    "loser_name",
+    "winner_score",
+    "loser_score",
+    "overtime",
+    "first_seen_ts_ns",
 )
 
 RESULT_COLUMNS = (
@@ -268,16 +287,12 @@ def _title_of(rec: dict) -> str:
     return str(rec.get("title") or "").strip().lower() or "unknown"
 
 
-def _raw_partitions(base: Path | None = None) -> list[Path]:
-    root = base or _lake_dir()
-    return sorted((root / "raw").glob("stream=*/dt=*/part.parquet"))
-
-
 @dataclass(frozen=True)
 class EventBuildResult:
     partitions_read: int
     events: int
     results: int
+    map_results: int = 0
     skipped: bool = False
 
 
@@ -285,25 +300,17 @@ def _has_events(out: Path) -> bool:
     return out.exists() and out.stat().st_size > 0
 
 
-def build_events(
-    *,
-    base: Path | None = None,
-    force: bool = False,
-    series_state_stream: str = "series_state",
-) -> EventBuildResult:
-    """Rewrite the event tape from every raw ``series_state`` partition.
+def build_events(*, base: Path | None = None, force: bool = False) -> EventBuildResult:
+    """Rewrite the silver tables from every bronze ``grid.series_state`` day.
 
-    The tape is a full rewrite, not an append: a day re-ingested after a torn
-    line was fixed must not leave the old rows behind. Partitions are read in
-    day order so ``round_results`` first-observation semantics hold across the
-    whole corpus.
+    A full rewrite, not an append: a day re-ingested after a torn line was fixed
+    must not leave old rows behind. Lines are read in capture order (day, then
+    receive time) so the first-observation oracles hold across the corpus.
     """
     root = base or _lake_dir()
-    out_events = root / "events" / "events.parquet"
-    out_results = root / "events" / "round_results.parquet"
-    parts = [
-        p for p in _raw_partitions(base) if f"stream={series_state_stream}" in str(p)
-    ]
+    out_dir = root / "events"
+    out_events = out_dir / "events.parquet"
+    parts = sorted((root / "raw" / f"stream={SERIES_STATE}").glob("dt=*/part.parquet"))
     if not parts:
         return EventBuildResult(partitions_read=0, events=0, results=0, skipped=True)
     if _has_events(out_events) and not force:
@@ -311,38 +318,49 @@ def build_events(
 
     con = duckdb.connect()
     try:
-        # Round results: first observation wins. Done in Python because "first"
-        # is per-key order-dependent and the raw rows carry the capture order.
+        lines = [
+            row[0]
+            for row in con.execute(
+                f"SELECT raw FROM read_parquet({_sql_str(bronze_glob(SERIES_STATE, base))}) "
+                "WHERE type = 'ss' ORDER BY _day, ts_ns"
+            ).fetchall()
+        ]
         seen: set[tuple[str, int, int]] = set()
         event_rows: list[dict] = []
         result_rows: list[dict] = []
-        for part in parts:
-            rows = con.execute(
-                "SELECT data, title, series_id, ts_ns, req_ns "
-                f"FROM read_parquet({_sql_str(str(part))})"
-            ).fetchall()
-            for data, title, series_id, ts_ns, req_ns in rows:
-                rec = {
-                    "type": "ss",
-                    "data": data if isinstance(data, dict) else {},
-                    "title": title,
-                    "series_id": series_id,
-                    "ts_ns": ts_ns,
-                    "req_ns": req_ns,
-                }
-                events, results = flatten_snapshot(rec, _title_of(rec))
-                event_rows.extend(events)
-                for r in results:
-                    key = (r["series_id"], r["map_number"], r["round_number"])
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    result_rows.append(r)
+        for line in lines:
+            rec = json.loads(line)
+            events, results = flatten_snapshot(rec, _title_of(rec))
+            event_rows.extend(events)
+            for r in results:
+                key = (r["series_id"], r["map_number"], r["round_number"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                result_rows.append(r)
+        winners = process_lines(lines)["winners"]
+        map_rows = [
+            {
+                "series_id": str(w["series_id"]),
+                "map_number": int(w["map_number"]),
+                "winner_name": w["winner"],
+                "loser_name": w["loser"],
+                "winner_score": w["winner_score"],
+                "loser_score": w["loser_score"],
+                "overtime": w["overtime"],
+                "first_seen_ts_ns": w["first_seen_ts_ns"],
+            }
+            for w in winners.values()
+        ]
 
         _write_rows(con, event_rows, EVENT_COLUMNS, out_events)
-        _write_rows(con, result_rows, RESULT_COLUMNS, out_results)
+        _write_rows(con, result_rows, RESULT_COLUMNS, out_dir / "round_results.parquet")
+        _write_rows(con, map_rows, MAP_RESULT_COLUMNS, out_dir / "map_results.parquet")
         return EventBuildResult(
-            partitions_read=len(parts), events=len(event_rows), results=len(result_rows)
+            partitions_read=len(parts),
+            events=len(event_rows),
+            results=len(result_rows),
+            map_results=len(map_rows),
         )
     finally:
         con.close()
@@ -390,7 +408,7 @@ def load_events(base: Path | None = None) -> duckdb.DuckDBPyConnection:
     """An in-memory DuckDB with ``events`` and ``round_results`` registered."""
     root = base or _lake_dir()
     con = duckdb.connect()
-    for name in ("events", "round_results"):
+    for name in ("events", "round_results", "map_results"):
         path = root / "events" / f"{name}.parquet"
         if path.exists():
             con.execute(

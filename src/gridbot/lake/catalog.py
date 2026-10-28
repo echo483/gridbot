@@ -62,14 +62,14 @@ def scan_raw(root: Path | None = None) -> list[RawStream]:
 def format_raw_scan(streams: list[RawStream]) -> str:
     if not streams:
         return "no capture day files found"
-    lines = [f"{'stream':<16}{'files':>6}{'first':>12}{'last':>12}{'bytes':>14}"]
+    lines = [f"{'stream':<20}{'files':>6}{'first':>12}{'last':>12}{'bytes':>14}"]
     for s in streams:
         lines.append(
-            f"{s.stream:<16}{s.files:>6}{s.first_day or '-':>12}"
+            f"{s.stream:<20}{s.files:>6}{s.first_day or '-':>12}"
             f"{s.last_day or '-':>12}{s.bytes:>14,}"
         )
     total = sum(s.bytes for s in streams)
-    lines.append(f"{'TOTAL':<16}{sum(s.files for s in streams):>6}{'':>24}{total:>14,}")
+    lines.append(f"{'TOTAL':<20}{sum(s.files for s in streams):>6}{'':>24}{total:>14,}")
     return "\n".join(lines)
 
 
@@ -151,10 +151,10 @@ def _sql_str(value: str) -> str:
 def format_coverage(cov: list[StreamCoverage]) -> str:
     if not cov:
         return "lake is empty — run `python -m gridbot.lake rebuild` first"
-    lines = [f"{'stream':<16}{'rows':>12}{'days':>6}{'first':>12}{'last':>12}{'gap days':>10}"]
+    lines = [f"{'stream':<20}{'rows':>12}{'days':>6}{'first':>12}{'last':>12}{'gap days':>10}"]
     for c in cov:
         lines.append(
-            f"{c.stream:<16}{c.rows:>12,}{c.days:>6}{c.first_day or '-':>12}"
+            f"{c.stream:<20}{c.rows:>12,}{c.days:>6}{c.first_day or '-':>12}"
             f"{c.last_day or '-':>12}{len(c.missing_days):>10}"
         )
         if c.missing_days:
