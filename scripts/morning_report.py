@@ -174,16 +174,9 @@ def _unit_result(unit: str) -> str:
 
 
 def ops_lines(data_dir: Path) -> list[str]:
-    """Ops section: unit Results, backup delta, and open watchdog escalations."""
-    units = ["gridbot-ingest.service", "gridbot-backup.service", "gridbot-health.service"]
+    """Ops section: oneshot unit Results and open watchdog escalations."""
+    units = ["gridbot-health.service", "gridbot-timing-chain.service"]
     parts = [f"{u.split('.')[0].removeprefix('gridbot-')}={_unit_result(u)}" for u in units]
-    try:
-        state = json.loads((data_dir / ".backup_state.json").read_text())
-        uploaded = state.get("uploaded") if isinstance(state, dict) else None
-        delta = len(uploaded) if isinstance(uploaded, list) else "n/a"
-    except (OSError, json.JSONDecodeError):
-        delta = "n/a"
-    parts.append(f"backup {delta} uploaded")
     try:
         health = json.loads((data_dir / ".health_state.json").read_text())
         escalated = health.get("escalated") if isinstance(health, dict) else None

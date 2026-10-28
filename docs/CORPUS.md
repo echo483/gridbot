@@ -1,34 +1,37 @@
-# Corpus pipeline (verified 2026-08-24)
-
-The durable corpus lives in the Supabase project `cs2agent`
-(`pbwchzjwukxngeptmuju.supabase.co`, Postgres 17). Verified with the new
-`sb_secret` key (legacy JWT keys are disabled): **training_rounds = 22,273 rows,
-events = 153,460** as of tonight. The write key sits in the OS keyring under
-service `gridbot`, entry `SUPABASE_SERVICE_ROLE_KEY`.
+# Corpus pipeline
 
 ## Two layers, deliberately different
 
-- **Local raw captures** (`data/pm/*.jsonl`, `data/grid/*.jsonl`): verbatim,
-  append-only, never interpreted at capture time. Ground truth for replay,
-  latency measurement, and instrument verdicts.
-- **Supabase corpus** (`public.training_rounds`): derived, provenance-tagged
-  training rows — one row per `(series, map, round[, bin])`, idempotent UPSERT on
-  `row_key` (`series:map:round[:b<n>]`), `features` jsonb + `label`. RLS:
-  service-role writes, anon reads. `public.events` is the observability stream.
+- **Raw capture** (`data/grid/*.jsonl`, `data/pm/*.jsonl`, `data/pmus/*.jsonl`):
+  verbatim, append-only, never interpreted at capture time. **This is the
+  source of truth**: replay, latency measurement, instrument verdicts and the
+  analytical lake are all derived from it and can be rebuilt from it.
+- **Derived training rows** (`data/corpus/training_rounds-YYYYMMDD.jsonl`):
+  one row per `(series, map, round[, bin])` with a `features` object and a
+  `label`, keyed by `row_key` (`series:map:round[:b<n>]`) and tagged with
+  `source_file` / `source_sha256` / `captured_at` / `ingested_at`. The round
+  model trains on these.
 
-They are *supposed* to be different: raw is evidence, corpus is features.
+Raw is evidence and the derived layer is features. Keep them separate.
 
-## gridbot ingest (BUILT 2026-08-24, e2e-verified)
+## Building training rows
 
-`gridbot.corpus.ingest`: walks finished CS2 series in `data/grid/series_state-*.jsonl`,
-builds training rows (spec-faithful port of cs2agent's semantics: winner oracle with
-first-observation-wins labels, n_bins=4, full-buy cut pinned at 13,400; same `row_key`
-convention so the two corpora merge seamlessly), UPSERTs with `on_conflict=row_key`,
-tags `source_file`/`source_sha256`/`captured_at`/`ingested_at`. Idempotent per series
-(`data/corpus/.ingested.json`); local audit copy under `data/corpus/`. Runs hourly via
-`gridbot-ingest.timer`. GRID test fixtures (series 2/28/99) are never ingested. Never
-DDL from the app. Dota rows wait until the generic query captures enough shape to
-define features honestly.
+`uv run python -m gridbot.corpus.ingest [--days N] [--dry-run] [--series ID]`
+walks finished CS2 series in `data/grid/series_state-*.jsonl` and builds rows
+with `gridbot.corpus.build`. Semantics: the winner oracle labels by first
+observation, n_bins=4, and the full-buy cut is pinned at 13,400. Ingest is
+idempotent per series (`data/corpus/.ingested.json`). It runs by hand for
+now; the hourly timer left with the Supabase sink, and scheduling returns with
+the homelab deploy (spec M1). GRID test fixtures
+(series 2/28/99) are never ingested. Dota rows wait until the generic query
+captures enough shape to define features honestly.
+
+**History.** Until 2026-10 the rows were also UPSERTed hourly to a Supabase
+Postgres project (shared with the predecessor `cs2agent`, 22,273 historical
+rows on 2026-08-24), and raw day files were backed up there nightly. Both were
+removed. The planned Parquet/DuckDB lake takes over the research role, and the
+corpus has one home plus a backup that is a copy of it, not a second database.
+The removed sink, pull and backup scripts remain at tag `evidence-2026-10`.
 
 ## Leak filter (BINDING — corpus-inference-v1 F1, verified 2026-08-24)
 

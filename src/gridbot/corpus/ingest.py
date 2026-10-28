@@ -1,8 +1,8 @@
-"""Walk captured GRID day files → corpus rows for finished CS2 series → Supabase.
+"""Walk captured GRID day files → training rows for finished CS2 series.
 
-Idempotent per series via ``data/corpus/.ingested.json``; the DB UPSERT on
-row_key makes re-sends no-ops regardless. Rows are also appended to a local
-day-partitioned jsonl (the derived-layer audit trail). Test fixtures
+Rows are appended to ``data/corpus/training_rounds-YYYYMMDD.jsonl``, the local
+derived layer the round model trains on (docs/CORPUS.md). Idempotent per
+series via ``data/corpus/.ingested.json``. Test fixtures
 (config.GRID_TEST_SERIES_IDS) are never ingested.
 
 Run: uv run python -m gridbot.corpus.ingest [--days N] [--dry-run] [--series ID]
@@ -18,7 +18,6 @@ from pathlib import Path
 
 from gridbot import config
 from gridbot.corpus.build import build_series_rows
-from gridbot.corpus.sink import upsert_rows
 from gridbot.jsonl import iter_jsonl
 
 CORPUS_DIR = config.DATA_DIR / "corpus"
@@ -109,7 +108,7 @@ def main() -> None:
         print(f"  series {sid}: {len(entry['states'])} snapshots → {len(rows)} rows")
         if args.dry_run:
             continue
-        written = upsert_rows(rows)
+        written = len(rows)
         CORPUS_DIR.mkdir(parents=True, exist_ok=True)
         if rows:
             local = CORPUS_DIR / f"training_rounds-{datetime.now(UTC):%Y%m%d}.jsonl"
@@ -120,7 +119,7 @@ def main() -> None:
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         STATE_FILE.write_text(json.dumps(state, indent=1, sort_keys=True))
         total += written
-    print("dry run — nothing written" if args.dry_run else f"upserted {total} rows to Supabase")
+    print("dry run — nothing written" if args.dry_run else f"wrote {total} rows to {CORPUS_DIR}")
 
 
 if __name__ == "__main__":
