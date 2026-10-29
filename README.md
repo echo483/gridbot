@@ -1,57 +1,62 @@
 # gridbot
 
-A tick-level research and execution system for esports prediction markets.
-It captures GRID live CS2 game state and Polymarket US order books, tests
-each hypothesis against held-out capture under a pre-registered bar, and
-trades only through a deterministic, capped, post-only executor that never
-arms itself.
+A research and execution system for esports prediction markets. It captures
+live CS2 game state from GRID and Polymarket US order books at tick level,
+tests trading hypotheses against held-out data under pre-registered pass/fail
+criteria, and trades only through a capped, post-only executor that starts in
+dry-run and never arms itself.
 
-**The mechanism:** GRID reports round outcomes before the venue reprices.
-Measured lead p50 +13.1 s (lower bound) on 293 book moves over 682 round ends.
+**The question it asks:** GRID reports round outcomes before the market
+reprices (median lead ≥ 13.1 s, n = 293 book moves over 682 round ends). Is
+there a tradeable edge in that gap after realistic fills, or only a timing fact?
 
-## What is here
+## Layout
 
-| layer | location | what it is |
+| layer | path | what it does |
 |---|---|---|
-| capture | `src/gridbot/capture/` | GRID series state + Polymarket US book capture into day-file JSONL — the corpus, and the source of truth |
-| corpus | `src/gridbot/corpus/` | raw day files → derived training rows, under a binding leak filter |
-| scorecard | `src/gridbot/scorecard/` | the statistical kernel: one implementation each of Wilson, series-clustered bootstrap, Brier / ECE / Murphy decomposition, executable-edge pricing, Kelly + barrier + Monte-Carlo risk |
+| capture | `src/gridbot/capture/` | GRID series state + Polymarket US books → append-only JSONL day files (the source of truth) |
+| lake | `src/gridbot/lake/` | JSONL → lossless Parquet → typed event / result tables → data-quality gates (DuckDB) |
+| lab | `src/gridbot/lab/` | hypotheses as data, one scan engine, fill model, clustered and deflated metrics, HTML report |
+| scorecard | `src/gridbot/scorecard/` | statistics kernel: Wilson intervals, series-clustered bootstrap, Brier / ECE, executable-edge pricing, Kelly and risk |
+| model | `src/gridbot/model/` | LightGBM round-win model, calibrated |
 | instruments | `src/gridbot/instruments/` | pre-registered hypothesis lanes and the verdict engine |
 | executor | `src/gridbot/executor/` | order lifecycle, gates, caps, ledger, venue reconciliation |
-| lake | `src/gridbot/lake/` | raw JSONL → lossless Parquet → typed event/result tables → quality gates (DuckDB) |
-| lab | `src/gridbot/lab/` | hypotheses as data, one scan engine, fill model, clustered + deflated metrics, HTML report |
-| model | `src/gridbot/model/` | LightGBM round-win model (`q`), calibrated live |
-| sizing | `src/gridbot/sizing/` | fractional-Kelly stake sizing |
-| evidence | `scripts/`, `docs/analysis/` | measurement instruments and the dated reports they produced |
+| corpus | `src/gridbot/corpus/` | derived training rows and the map-winner oracle |
 
 ## Status
 
-Pre-PASS. `H-MAPENTRY1` is the only lane with a rendered holdout verdict:
-**not falsified** (the model beats the book mid and is calibrated), with
-clause (iii) under-powered at 39/60. **No lane has a pre-registered PASS**, so
-`dry_run=True` stays the default, and arming is the operator's own act
-(`docs/LIVE_FIRE.md`). Twelve ideas that looked good in-sample were killed by
-more honest measurement; they are recorded in `docs/FALSIFICATION.md`.
+Research stage. No hypothesis has passed its pre-registered bar, so live
+trading stays off. The strongest lane (`H-MAPENTRY1`) survived its holdout but
+is under-powered. Ideas that looked good in-sample and failed honest
+measurement are recorded with the test that killed them in
+[`docs/FALSIFICATION.md`](docs/FALSIFICATION.md).
 
-Next: an always-on capture host, a Parquet/DuckDB analytical lake, an
-execution-realistic backtester, and a C++ decision core shared by backtest
-and live, with a published latency budget
-(`docs/specs/2026-10-28-buildout-spec.md`).
+In progress: an always-on capture host, an execution-realistic backtester, and
+a C++ decision core shared by backtest and live, with measured tail latency.
 
-### Verified baseline (clean tree, 2026-10-28)
+## Run
 
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync
+uv run ruff check .
+uv run pytest            # hermetic: no network, no credentials, no data
 ```
-uv run ruff check .   # All checks passed
-uv run pytest         # 778 passed, 1 skipped
+
+With capture data on disk:
+
+```bash
+uv run python -m gridbot.lake all        # build the Parquet lake and run quality gates
+uv run python -m gridbot.lab registry    # list registered hypotheses
 ```
 
-The suite is hermetic: no network, no secrets, no capture data needed.
+Credentials, when needed, live in one permission-checked file and nowhere
+else; see [`SECURITY.md`](SECURITY.md).
 
-## Read in this order
+## Docs
 
-1. `docs/ENGINEERING.md` — the binding rules
-2. `docs/STATE.md` — what is proven, what runs
-3. `docs/FALSIFICATION.md` — what was tried, what killed it, what survived
-4. `docs/WORKBLOCKS.md` — the plan, ownership, and open decisions
-5. `docs/experiments/registry.jsonl` — every frozen hypothesis (append-only)
-6. `docs/MAP.md` — the codebase floor plan
+- [`docs/ENGINEERING.md`](docs/ENGINEERING.md): the rules the code follows
+- [`docs/STATE.md`](docs/STATE.md): what is measured, what runs
+- [`docs/MAP.md`](docs/MAP.md): codebase map
+- [`docs/experiments/registry.jsonl`](docs/experiments/registry.jsonl): every pre-registered hypothesis (append-only)
